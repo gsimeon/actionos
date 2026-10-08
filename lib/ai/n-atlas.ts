@@ -122,61 +122,72 @@ export class DeterministicDemoAIProvider implements NAtlasProvider {
 }
 
 /**
- * Official N-ATLAS Provider Adapter (Extensible Hook Point)
- * Ready for integration once official challenge API credentials and OpenAPI contracts
- * are provided by the organizers. Seamlessly falls back to Deterministic engine.
+ * Official N-ATLAS Integration Boundary Contract.
+ * ActionOS is completely decoupled from whether the official competition N-ATLAS model
+ * uses a REST endpoint, an SDK, an OpenAI-compatible /chat completions API, or gRPC.
+ */
+export interface INAtlasAdapter {
+  name?: string;
+  understand(input: NAtlasInput): Promise<NAtlasUnderstanding>;
+}
+
+let customNAtlasAdapter: INAtlasAdapter | null = null;
+
+/**
+ * Register a production N-ATLAS integration adapter when official challenge SDK / API contract is provided.
+ */
+export function registerNAtlasAdapter(adapter: INAtlasAdapter | null): void {
+  customNAtlasAdapter = adapter;
+}
+
+/**
+ * Official N-ATLAS Provider Adapter (Pure Integration Boundary)
+ * Holds the official integration boundary contract for ActionOS.
+ * Delegates to a registered INAtlasAdapter (e.g. official SDK or verified API client)
+ * when available. In the absence of an official driver, safely bridges to the benchmark
+ * understanding engine without fabricating unverified HTTP endpoints.
  */
 export class OfficialNAtlasProvider implements NAtlasProvider {
-  public readonly name = "Official N-ATLAS Adapter (Awaiting Challenge Specification)";
+  public readonly name = "Official N-ATLAS Integration Boundary";
 
   constructor(
-    private apiUrl: string,
-    private apiKey: string
+    private customAdapter?: INAtlasAdapter
   ) {}
 
   async understand(input: NAtlasInput): Promise<NAtlasUnderstanding> {
-    // If official endpoints are configured at runtime, attempt integration with graceful fallback
-    try {
-      if (this.apiUrl && this.apiKey) {
-        const response = await fetch(this.apiUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${this.apiKey}`,
-          },
-          body: JSON.stringify(input),
-        });
+    const activeAdapter = this.customAdapter || customNAtlasAdapter;
 
-        if (response.ok) {
-          const data = await response.json();
-          return {
-            intent: data.intent || "unknown",
-            confidence: data.confidence ?? 0.9,
-            entities: data.entities || {},
-            normalizedText: data.normalizedText || input.text || "",
-          };
-        }
-      }
-    } catch {
-      // Intentional silent fallback to deterministic engine
+    if (activeAdapter) {
+      return await activeAdapter.understand(input);
     }
 
-    // Fallback to deterministic engine
-    const fallback = new DeterministicDemoAIProvider();
-    return await fallback.understand(input);
+    // Explicit boundary behavior:
+    // We intentionally DO NOT assume /v1/understand, /v1/chat, or any unverified wire protocol.
+    // If official credentials (N_ATLAS_API_KEY) are set without an official driver,
+    // we process via the benchmark engine while annotating the understanding metadata.
+    const benchmarkEngine = new DeterministicDemoAIProvider();
+    const result = await benchmarkEngine.understand(input);
+
+    return {
+      ...result,
+      entities: {
+        ...result.entities,
+        _nAtlasBoundary: "Awaiting official N-ATLAS competition SDK/contract; bridged via benchmark engine",
+      },
+    };
   }
 }
 
 /**
- * Factory creating either official N-ATLAS provider or deterministic demo provider.
+ * Factory creating either official N-ATLAS boundary provider or deterministic demo provider.
  */
 export function createNAtlasProvider(): NAtlasProvider {
-  const apiUrl = process.env.N_ATLAS_API_URL;
-  const apiKey = process.env.N_ATLAS_API_KEY;
+  const isDemo = process.env.DEMO_MODE === "true";
 
-  if (apiUrl && apiKey && process.env.DEMO_MODE !== "true") {
-    return new OfficialNAtlasProvider(apiUrl, apiKey);
+  if (isDemo) {
+    return new DeterministicDemoAIProvider();
   }
 
-  return new DeterministicDemoAIProvider();
+  return new OfficialNAtlasProvider();
 }
+

@@ -94,6 +94,20 @@ export async function POST(
       data: result,
     });
   } catch (err: unknown) {
+    const { AuthContextError } = await import("@/lib/security/auth-context");
+    if (err instanceof AuthContextError) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: err.code,
+            message: err.message,
+          },
+        },
+        { status: err.code === "UNAUTHORIZED" ? 401 : 403 }
+      );
+    }
+
     const message = err instanceof Error ? err.message : "Authorization processing failed";
     return NextResponse.json(
       {

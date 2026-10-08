@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { orchestrator } from "@/lib/actionos/orchestrator";
 import { createActionSchema } from "@/lib/validations";
-import { resolveExecutionContext } from "@/lib/security/auth-context";
+import { resolveExecutionContext, AuthContextError } from "@/lib/security/auth-context";
 
 export async function POST(req: Request) {
   try {
@@ -32,6 +32,16 @@ export async function POST(req: Request) {
       language: validated.data.language,
       customerId: context.customerId || (context.isDemo ? validated.data.customerId : undefined),
       organizationId: context.organizationId,
+      userId: context.userId,
+      userRole: context.role,
+      executionContext: {
+        sessionId: "",
+        organizationId: context.organizationId,
+        customerId: context.customerId,
+        userId: context.userId,
+        userRole: context.role,
+        isSimulated: context.isDemo,
+      },
     });
 
     return NextResponse.json({
@@ -39,6 +49,19 @@ export async function POST(req: Request) {
       data: result,
     });
   } catch (err: unknown) {
+    if (err instanceof AuthContextError) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: err.code,
+            message: err.message,
+          },
+        },
+        { status: err.code === "UNAUTHORIZED" ? 401 : 403 }
+      );
+    }
+
     const message = err instanceof Error ? err.message : "Internal server error";
     return NextResponse.json(
       {

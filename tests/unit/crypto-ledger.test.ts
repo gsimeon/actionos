@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   computeEventHash,
   signEventHash,
+  verifyEventSignature,
   verifyLedgerIntegrity,
   GENESIS_LEDGER_HASH,
 } from "@/lib/actionos/crypto-ledger";
@@ -32,7 +33,8 @@ describe("ActionOS Cryptographic Action Ledger (Tamper-Evidence & Integrity)", (
     const sig2 = signEventHash(hash);
 
     assert.equal(sig1, sig2);
-    assert.ok(sig1.length >= 32);
+    assert.equal(sig1.length, 128, "Ed25519 signature in hex format must be 128 hex characters (64 bytes)");
+    assert.equal(verifyEventSignature(hash, sig1), true, "Ed25519 signature must verify successfully");
   });
 
   it("should verify valid hash-chained sequential ledger events", () => {

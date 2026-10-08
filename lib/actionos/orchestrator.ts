@@ -29,6 +29,8 @@ export interface StartWorkflowInput {
   customerId?: string;
   organizationId?: string;
   userId?: string;
+  userRole?: ExecutionContext["userRole"];
+  executionContext?: Partial<ExecutionContext>;
 }
 
 export interface WorkflowStepResult {
@@ -94,8 +96,10 @@ export class ActionOSOrchestrator {
   async startWorkflow(input: StartWorkflowInput): Promise<WorkflowStepResult> {
     const repos = getRepositoryContainer();
     const sessionId = `act_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    const orgId = input.organizationId || "a0000000-0000-0000-0000-000000000001";
-    const customerId = input.customerId || "f0000000-0000-0000-0000-000000000001";
+    const orgId = input.executionContext?.organizationId || input.organizationId || "a0000000-0000-0000-0000-000000000001";
+    const customerId = input.executionContext?.customerId || input.customerId || "f0000000-0000-0000-0000-000000000001";
+    const userId = input.executionContext?.userId || input.userId;
+    const userRole = input.executionContext?.userRole || input.userRole || "customer";
 
     const sm = new ActionStateMachine("received");
     const events: ActionLedgerEvent[] = [];
@@ -190,11 +194,11 @@ export class ActionOSOrchestrator {
       planId: plan.id,
       organizationId: orgId,
       customerId,
-      userId: input.userId,
-      userRole: "customer",
+      userId,
+      userRole,
       channel: input.channel,
       language: input.language,
-      isSimulated: true,
+      isSimulated: input.executionContext?.isSimulated ?? true,
     };
 
     let activeCustomer: Customer | undefined;
@@ -366,7 +370,7 @@ export class ActionOSOrchestrator {
   async authorizeAndExecute(
     sessionId: string,
     authorized: boolean,
-    userRole: string = "customer",
+    userRoleOrContext: string | ExecutionContext = "customer",
     options?: {
       selectedUnderwriter?: string;
       customAmount?: number;
@@ -463,15 +467,19 @@ export class ActionOSOrchestrator {
       metadata: { authMethod: options?.authMethod || "pin", selectedUnderwriter: options?.selectedUnderwriter },
     });
 
+    const userRole = (typeof userRoleOrContext === "object" ? userRoleOrContext.userRole : userRoleOrContext) || "customer";
+    const userId = typeof userRoleOrContext === "object" ? userRoleOrContext.userId : undefined;
+
     const execContext: ExecutionContext = {
       sessionId,
       planId: plan.id,
       organizationId: session.organization_id,
       customerId: session.customer_id || "f0000000-0000-0000-0000-000000000001",
+      userId,
       userRole: userRole as ExecutionContext["userRole"],
       channel: session.channel,
       language: session.language,
-      isSimulated: true,
+      isSimulated: typeof userRoleOrContext === "object" ? (userRoleOrContext.isSimulated ?? true) : true,
     };
 
     let paymentReference = "";

@@ -3,13 +3,67 @@ import type { ActionLedgerEvent } from "@/types/actionos";
 
 export const GENESIS_LEDGER_HASH = "0000000000000000000000000000000000000000000000000000000000000000";
 
-function getSigningKey(explicitKey?: string): string {
-  return (
-    explicitKey ||
-    process.env.ACTION_LEDGER_SIGNING_KEY ||
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    "actionos-sovereign-audit-key-2026"
-  );
+// RFC 8410 PKCS#8 DER header prefix for Ed25519 private keys:
+// 30 2e 02 01 00 30 05 06 03 2b 65 70 04 22 04 20 [32-byte-seed]
+const ED25519_PKCS8_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
+
+export interface LedgerKeyInfo {
+  keyId: string;
+  algorithm: "Ed25519";
+  publicKeyPem: string;
+}
+
+/**
+ * Derives or imports genuine Ed25519 KeyObjects from PEM, environment secret, or test seed.
+ * Production mode strictly enforces that ACTION_LEDGER_SIGNING_KEY is configured in the environment.
+ */
+function resolveEd25519KeyPair(explicitKey?: string): {
+  privateKey: crypto.KeyObject;
+  publicKey: crypto.KeyObject;
+  keyId: string;
+} {
+  const isProduction = process.env.NODE_ENV === "production" && process.env.DEMO_MODE !== "true";
+  const rawKey = explicitKey || process.env.ACTION_LEDGER_SIGNING_KEY;
+  const keyId = process.env.ACTION_LEDGER_KEY_VERSION || "v1-2026";
+
+  if (!rawKey) {
+    if (isProduction) {
+      throw new Error(
+        "ACTION_LEDGER_SIGNING_KEY is required in production environment for non-repudiation and cryptographic signing."
+      );
+    }
+    // Deterministic sandbox seed strictly for offline demo / unit testing
+    const demoSeed = crypto.createHash("sha256").update("actionos-demo-sandbox-ed25519-seed").digest();
+    const der = Buffer.concat([ED25519_PKCS8_PREFIX, demoSeed]);
+    const privateKey = crypto.createPrivateKey({ key: der, format: "der", type: "pkcs8" });
+    const publicKey = crypto.createPublicKey(privateKey);
+    return { privateKey, publicKey, keyId: "demo-sandbox-v1" };
+  }
+
+  let privateKey: crypto.KeyObject;
+  if (rawKey.includes("BEGIN PRIVATE KEY")) {
+    privateKey = crypto.createPrivateKey(rawKey);
+  } else {
+    // Treat as secret string / seed and derive Ed25519 keypair via standard RFC 8410 DER
+    const seed = crypto.createHash("sha256").update(rawKey).digest();
+    const der = Buffer.concat([ED25519_PKCS8_PREFIX, seed]);
+    privateKey = crypto.createPrivateKey({ key: der, format: "der", type: "pkcs8" });
+  }
+
+  const publicKey = crypto.createPublicKey(privateKey);
+  return { privateKey, publicKey, keyId };
+}
+
+/**
+ * Returns public metadata about the active signing key for external verifiers and auditors.
+ */
+export function getLedgerKeyInfo(): LedgerKeyInfo {
+  const { publicKey, keyId } = resolveEd25519KeyPair();
+  return {
+    keyId,
+    algorithm: "Ed25519",
+    publicKeyPem: publicKey.export({ type: "spki", format: "pem" }).toString(),
+  };
 }
 
 /**
@@ -45,36 +99,41 @@ export function computeEventHash(
 }
 
 /**
- * Generate cryptographic signature for non-repudiation using server-configured key
+ * Generate genuine Ed25519 cryptographic digital signature for non-repudiation
  */
 export function signEventHash(
   hash: string,
   privateKeySeed?: string
 ): string {
-  const secret = getSigningKey(privateKeySeed);
-  return crypto
-    .createHmac("sha256", secret)
-    .update(hash)
-    .digest("hex")
-    .substring(0, 32);
+  const { privateKey } = resolveEd25519KeyPair(privateKeySeed);
+  const signature = crypto.sign(null, Buffer.from(hash, "utf-8"), privateKey);
+  return signature.toString("hex");
 }
 
 /**
- * Verify cryptographic signature of an event hash
+ * Verify genuine Ed25519 cryptographic signature of an event hash
  */
 export function verifyEventSignature(
   hash: string,
   signature: string,
-  privateKeySeed?: string
+  publicKeyOrSeed?: string
 ): boolean {
-  const expected = signEventHash(hash, privateKeySeed);
-  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+  try {
+    const { publicKey } = resolveEd25519KeyPair(publicKeyOrSeed);
+    const sigBuffer = Buffer.from(signature, "hex");
+    return crypto.verify(null, Buffer.from(hash, "utf-8"), publicKey, sigBuffer);
+  } catch {
+    return false;
+  }
 }
 
 /**
  * Verify complete cryptographic hash chain integrity of the Action Ledger
  */
-export function verifyLedgerIntegrity(events: ActionLedgerEvent[]): {
+export function verifyLedgerIntegrity(
+  events: ActionLedgerEvent[],
+  options?: { verifySignatures?: boolean }
+): {
   valid: boolean;
   tamperedIndex?: number;
   reason?: string;
@@ -107,6 +166,19 @@ export function verifyLedgerIntegrity(events: ActionLedgerEvent[]): {
           reason: `Invalid event hash at index ${i}: computed ${computed.substring(0, 8)}... but got ${ev.hash.substring(0, 8)}...`,
         };
       }
+
+      // Optionally verify digital signature
+      if (options?.verifySignatures && ev.signature) {
+        const sigValid = verifyEventSignature(ev.hash, ev.signature);
+        if (!sigValid) {
+          return {
+            valid: false,
+            tamperedIndex: i,
+            reason: `Invalid Ed25519 signature at index ${i}: signature does not match event hash`,
+          };
+        }
+      }
+
       expectedPrevHash = ev.hash;
     }
   }

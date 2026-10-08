@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
-import { getStore } from "@/lib/actionos/mock-store";
+import { getRepositoryContainer } from "@/lib/repositories";
 import type { PaymentWebhookPayload } from "@/types/api";
 
 export async function POST(req: Request) {
   try {
     const payload = (await req.json()) as PaymentWebhookPayload;
-    const store = getStore();
+    const repos = getRepositoryContainer();
 
     if (!payload?.event || !payload?.data?.reference) {
       return NextResponse.json(
@@ -14,11 +14,8 @@ export async function POST(req: Request) {
       );
     }
 
-    const tx = store.transactions.find((t) => t.reference === payload.data.reference);
-    if (tx) {
-      tx.status = payload.event === "charge.success" ? "succeeded" : "failed";
-      tx.updated_at = new Date().toISOString();
-    }
+    const txStatus = payload.event === "charge.success" ? "succeeded" : "failed";
+    await repos.transactions.updateStatus(payload.data.reference, txStatus).catch(() => {});
 
     return NextResponse.json({
       success: true,

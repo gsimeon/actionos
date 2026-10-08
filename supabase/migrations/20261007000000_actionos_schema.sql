@@ -167,7 +167,7 @@ CREATE TABLE IF NOT EXISTS renewals (
   status renewal_status NOT NULL DEFAULT 'scheduled',
   quote_amount NUMERIC(14, 2),
   currency TEXT NOT NULL DEFAULT 'NGN',
-  payment_status TEXT NOT NULL DEFAULT 'unpaid' CHECK (payment_status IN ('unpaid', 'processing', 'paid', 'failed')),
+  payment_status TEXT NOT NULL DEFAULT 'pending' CHECK (payment_status IN ('not_required', 'pending', 'authorized', 'processing', 'succeeded', 'failed', 'refunded', 'unpaid', 'paid')),
   renewed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

@@ -28,6 +28,11 @@ import type { ActionLedgerEvent } from "@/types/actionos";
 import { getStore } from "@/lib/actionos/mock-store";
 
 export class DemoCustomerRepository implements ICustomerRepository {
+  async findAll(): Promise<Customer[]> {
+    const store = getStore();
+    return [...store.customers];
+  }
+
   async findById(id: string): Promise<Customer | null> {
     const store = getStore();
     return store.customers.find((c) => c.id === id) || null;
@@ -71,6 +76,14 @@ export class DemoCustomerRepository implements ICustomerRepository {
 }
 
 export class DemoPolicyRepository implements IPolicyRepository {
+  async findAll(options?: { status?: string }): Promise<Policy[]> {
+    const store = getStore();
+    if (options?.status && options.status !== "all") {
+      return store.policies.filter((p) => p.status === options.status);
+    }
+    return [...store.policies];
+  }
+
   async findById(id: string): Promise<Policy | null> {
     const store = getStore();
     return store.policies.find((p) => p.id === id) || null;
@@ -90,6 +103,28 @@ export class DemoPolicyRepository implements IPolicyRepository {
     return store.policies.filter((p) => p.customer_id === customerId);
   }
 
+  async create(data: Partial<Policy> & { customer_id: string; provider_id: string; policy_type_id: string; policy_number: string; start_date: string; expiry_date: string; premium: number }): Promise<Policy> {
+    const store = getStore();
+    const policy: Policy = {
+      id: data.id || `demo_pol_${Date.now()}`,
+      customer_id: data.customer_id,
+      asset_id: data.asset_id || null,
+      provider_id: data.provider_id,
+      policy_type_id: data.policy_type_id,
+      policy_number: data.policy_number,
+      start_date: data.start_date,
+      expiry_date: data.expiry_date,
+      premium: data.premium,
+      currency: data.currency || "NGN",
+      status: data.status || "active",
+      metadata: data.metadata || {},
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    store.policies.unshift(policy);
+    return policy;
+  }
+
   async updateStatusAndExpiry(id: string, status: Policy["status"], newExpiryDate: string): Promise<Policy> {
     const store = getStore();
     const policy = store.policies.find((p) => p.id === id);
@@ -104,6 +139,14 @@ export class DemoPolicyRepository implements IPolicyRepository {
 }
 
 export class DemoRenewalRepository implements IRenewalRepository {
+  async findAll(options?: { status?: string }): Promise<Renewal[]> {
+    const store = getStore();
+    if (options?.status && options.status !== "all") {
+      return store.renewals.filter((r) => r.status === options.status);
+    }
+    return [...store.renewals];
+  }
+
   async findById(id: string): Promise<Renewal | null> {
     const store = getStore();
     return store.renewals.find((r) => r.id === id) || null;
@@ -125,7 +168,7 @@ export class DemoRenewalRepository implements IRenewalRepository {
       status: data.status || "scheduled",
       quote_amount: data.quote_amount ?? null,
       currency: data.currency || "NGN",
-      payment_status: data.payment_status || "unpaid",
+      payment_status: data.payment_status || "pending",
       renewed_at: data.renewed_at || null,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),

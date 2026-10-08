@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
-import { getStore } from "@/lib/actionos/mock-store";
+import { getRepositoryContainer } from "@/lib/repositories";
 import { createCustomerSchema } from "@/lib/validations";
-import type { Customer } from "@/types/database";
 
 export async function GET() {
-  const store = getStore();
+  const repos = getRepositoryContainer();
+  const customers = await repos.customers.findAll();
   return NextResponse.json({
     success: true,
-    data: store.customers,
+    data: customers,
   });
 }
 
@@ -29,12 +29,11 @@ export async function POST(req: Request) {
       );
     }
 
-    const store = getStore();
-    const newCustomer: Customer = {
-      id: `f0000000-0000-0000-0000-${Date.now().toString().slice(-12)}`,
-      organization_id: store.customers[0]?.organization_id || "a0000000-0000-0000-0000-000000000001",
-      profile_id: null,
-      customer_number: `CUS-${String(store.customers.length + 1).padStart(6, "0")}`,
+    const repos = getRepositoryContainer();
+    const customerNumber = `CUS-${Date.now().toString().slice(-6)}`;
+    const newCustomer = await repos.customers.create({
+      organization_id: "a0000000-0000-0000-0000-000000000001",
+      customer_number: customerNumber,
       full_name: validated.data.full_name,
       phone: validated.data.phone,
       email: validated.data.email,
@@ -43,11 +42,7 @@ export async function POST(req: Request) {
       country: validated.data.country || "Nigeria",
       status: "active",
       metadata: {},
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-
-    store.customers.unshift(newCustomer);
+    });
 
     return NextResponse.json({
       success: true,

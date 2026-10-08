@@ -62,7 +62,7 @@ export class RenewPolicyTool implements IActionOSTool<RenewPolicyInput, RenewPol
     const renewal = await repos.renewals.findByPolicyId(policy.id);
     if (renewal) {
       await repos.renewals.updateStatus(renewal.id, "completed", new Date().toISOString());
-      await repos.renewals.updatePaymentStatus(renewal.id, "paid");
+      await repos.renewals.updatePaymentStatus(renewal.id, "succeeded");
     }
 
     return {

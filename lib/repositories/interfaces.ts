@@ -13,6 +13,7 @@ import type {
 import type { ActionLedgerEvent } from "@/types/actionos";
 
 export interface ICustomerRepository {
+  findAll(): Promise<Customer[]>;
   findById(id: string): Promise<Customer | null>;
   findByNumber(customerNumber: string): Promise<Customer | null>;
   findByOrganization(orgId: string): Promise<Customer[]>;
@@ -20,13 +21,16 @@ export interface ICustomerRepository {
 }
 
 export interface IPolicyRepository {
+  findAll(options?: { status?: string }): Promise<Policy[]>;
   findById(id: string): Promise<Policy | null>;
   findByNumber(policyNumber: string): Promise<Policy | null>;
   findByCustomerId(customerId: string): Promise<Policy[]>;
+  create(data: Partial<Policy> & { customer_id: string; provider_id: string; policy_type_id: string; policy_number: string; start_date: string; expiry_date: string; premium: number }): Promise<Policy>;
   updateStatusAndExpiry(id: string, status: Policy["status"], newExpiryDate: string): Promise<Policy>;
 }
 
 export interface IRenewalRepository {
+  findAll(options?: { status?: string }): Promise<Renewal[]>;
   findById(id: string): Promise<Renewal | null>;
   findByPolicyId(policyId: string): Promise<Renewal | null>;
   create(data: Partial<Renewal> & { policy_id: string; customer_id: string; scheduled_for: string }): Promise<Renewal>;

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getStore } from "@/lib/actionos/mock-store";
+import { getRepositoryContainer } from "@/lib/repositories";
 import type { AuthorizationDetails } from "@/types/actionos";
 
 export async function GET(
@@ -8,8 +8,8 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
-    const store = getStore();
-    const session = store.sessions.find((s) => s.id === id);
+    const repos = getRepositoryContainer();
+    const session = await repos.sessions.findById(id);
 
     if (!session) {
       return NextResponse.json(
@@ -21,9 +21,9 @@ export async function GET(
       );
     }
 
-    const plan = store.plans.find((p) => p.session_id === id);
-    const steps = store.steps.filter((s) => s.action_plan_id === plan?.id);
-    const events = store.ledgerEvents[id] || [];
+    const plan = await repos.plans.findBySessionId(id);
+    const steps = plan ? await repos.steps.findByPlanId(plan.id) : [];
+    const events = (await repos.ledger.getEventsBySessionId(id)) || [];
     const authDetails = (session.metadata?.authorizationDetails as AuthorizationDetails) || null;
 
     return NextResponse.json({

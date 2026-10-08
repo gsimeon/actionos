@@ -192,6 +192,17 @@ export interface Policy {
   policy_type?: PolicyType;
 }
 
+export type CanonicalPaymentStatus =
+  | "not_required"
+  | "pending"
+  | "authorized"
+  | "processing"
+  | "succeeded"
+  | "failed"
+  | "refunded";
+
+export type PaymentStatus = CanonicalPaymentStatus | "unpaid" | "paid";
+
 export interface Renewal {
   id: string;
   policy_id: string;
@@ -201,7 +212,7 @@ export interface Renewal {
   status: RenewalStatus;
   quote_amount: number | null;
   currency: string;
-  payment_status: "unpaid" | "processing" | "paid" | "failed";
+  payment_status: PaymentStatus;
   renewed_at: string | null;
   created_at: string;
   updated_at: string;

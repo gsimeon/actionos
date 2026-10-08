@@ -44,6 +44,15 @@ function getSupabaseClient(): SupabaseClient<any> {
 export class SupabaseCustomerRepository implements ICustomerRepository {
   private client = getSupabaseClient();
 
+  async findAll(): Promise<Customer[]> {
+    const { data, error } = await this.client
+      .from("customers")
+      .select("*")
+      .order("created_at", { ascending: false });
+    if (error || !data) return [];
+    return data as Customer[];
+  }
+
   async findById(id: string): Promise<Customer | null> {
     const { data, error } = await this.client
       .from("customers")
@@ -98,6 +107,16 @@ export class SupabaseCustomerRepository implements ICustomerRepository {
 export class SupabasePolicyRepository implements IPolicyRepository {
   private client = getSupabaseClient();
 
+  async findAll(options?: { status?: string }): Promise<Policy[]> {
+    let query = this.client.from("policies").select("*");
+    if (options?.status && options.status !== "all") {
+      query = query.eq("status", options.status);
+    }
+    const { data, error } = await query.order("created_at", { ascending: false });
+    if (error || !data) return [];
+    return data as Policy[];
+  }
+
   async findById(id: string): Promise<Policy | null> {
     const { data, error } = await this.client
       .from("policies")
@@ -127,6 +146,28 @@ export class SupabasePolicyRepository implements IPolicyRepository {
     return data as Policy[];
   }
 
+  async create(data: Partial<Policy> & { customer_id: string; provider_id: string; policy_type_id: string; policy_number: string; start_date: string; expiry_date: string; premium: number }): Promise<Policy> {
+    const { data: created, error } = await this.client
+      .from("policies")
+      .insert({
+        customer_id: data.customer_id,
+        asset_id: data.asset_id ?? null,
+        provider_id: data.provider_id,
+        policy_type_id: data.policy_type_id,
+        policy_number: data.policy_number,
+        start_date: data.start_date,
+        expiry_date: data.expiry_date,
+        premium: data.premium,
+        currency: data.currency ?? "NGN",
+        status: data.status ?? "active",
+        metadata: data.metadata ?? {},
+      })
+      .select("*")
+      .single();
+    if (error || !created) throw new Error(`Failed to create policy: ${error?.message}`);
+    return created as Policy;
+  }
+
   async updateStatusAndExpiry(id: string, status: Policy["status"], newExpiryDate: string): Promise<Policy> {
     const { data, error } = await this.client
       .from("policies")
@@ -145,6 +186,16 @@ export class SupabasePolicyRepository implements IPolicyRepository {
 
 export class SupabaseRenewalRepository implements IRenewalRepository {
   private client = getSupabaseClient();
+
+  async findAll(options?: { status?: string }): Promise<Renewal[]> {
+    let query = this.client.from("renewals").select("*");
+    if (options?.status && options.status !== "all") {
+      query = query.eq("status", options.status);
+    }
+    const { data, error } = await query.order("created_at", { ascending: false });
+    if (error || !data) return [];
+    return data as Renewal[];
+  }
 
   async findById(id: string): Promise<Renewal | null> {
     const { data, error } = await this.client
@@ -177,7 +228,7 @@ export class SupabaseRenewalRepository implements IRenewalRepository {
         status: data.status ?? "scheduled",
         quote_amount: data.quote_amount ?? null,
         currency: data.currency ?? "NGN",
-        payment_status: data.payment_status ?? "unpaid",
+        payment_status: data.payment_status ?? "pending",
       })
       .select("*")
       .single();
