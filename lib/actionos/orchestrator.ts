@@ -409,9 +409,19 @@ export class ActionOSOrchestrator {
       let quoteCustId = activeCustomer?.id || customerId;
       if (!quoteCustId) {
         if (isProductionMode()) {
-          throw new Error(
-            "Identity enforcement violation: customer identity is strictly required for quote generation in production."
-          );
+          sm.transition("failed", "Missing customer identity in production mode");
+          session.status = "failed";
+          await repos.sessions.updateStatus(sessionId, "failed", undefined, tenantContext);
+          return {
+            sessionId,
+            status: "failed",
+            intent: understanding.intent,
+            confidence: understanding.confidence,
+            message: "ActionOS halted: Customer identity could not be resolved. Production quote generation requires verified customer identity. Failing closed.",
+            authorizationRequired: false,
+            authorizationDetails: null,
+            events,
+          };
         }
         quoteCustId = "f0000000-0000-0000-0000-000000000001";
       }
@@ -428,9 +438,9 @@ export class ActionOSOrchestrator {
         expiresAt: quoteExpiry,
       });
 
+      // Persist primary quote - let repository generate canonical database ID
       const createdQuote = await repos.quotes.create(
         {
-          id: matchedQuote.id,
           session_id: sessionId,
           organization_id: orgId,
           customer_id: quoteCustId,
@@ -454,8 +464,10 @@ export class ActionOSOrchestrator {
       // Persist explicit mapping between provider quote IDs and ActionOS database IDs
       const providerToCanonicalQuoteMap: Record<string, string> = {
         [matchedQuote.id]: createdQuote.id,
+        [createdQuote.id]: createdQuote.id,
       };
 
+      // Build customer-facing list strictly from returned database records
       const canonicalQuotes: UnderwriterQuote[] = [
         {
           ...matchedQuote,
@@ -464,7 +476,7 @@ export class ActionOSOrchestrator {
         },
       ];
 
-      // Also persist alternative marketplace quotes
+      // Also persist alternative marketplace quotes into database
       for (const alt of availableQuotes) {
         if (alt.id !== matchedQuote.id) {
           const altProvider = alt.underwriter || providerName;
@@ -481,7 +493,6 @@ export class ActionOSOrchestrator {
           });
           const createdAltQuote = await repos.quotes.create(
             {
-              id: alt.id,
               session_id: sessionId,
               organization_id: orgId,
               customer_id: quoteCustId,
@@ -502,6 +513,7 @@ export class ActionOSOrchestrator {
           );
 
           providerToCanonicalQuoteMap[alt.id] = createdAltQuote.id;
+          providerToCanonicalQuoteMap[createdAltQuote.id] = createdAltQuote.id;
           canonicalQuotes.push({
             ...alt,
             id: createdAltQuote.id, // Canonical ActionOS database ID
@@ -681,8 +693,13 @@ export class ActionOSOrchestrator {
     }
 
     const targetCustomerId = session.customer_id || callerCustomerId;
-    if (!targetCustomerId && role === "customer") {
-      throw new Error("Identity enforcement violation: customerId is required to execute workflow.");
+    if (!targetCustomerId) {
+      if (isProductionMode()) {
+        throw new Error("Identity enforcement violation: customer identity is strictly required to execute workflow in production.");
+      }
+      if (role === "customer") {
+        throw new Error("Identity enforcement violation: customerId is required to execute workflow.");
+      }
     }
 
     const sm = new ActionStateMachine(session.status);

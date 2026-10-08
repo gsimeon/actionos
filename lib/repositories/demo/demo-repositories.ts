@@ -749,7 +749,7 @@ export class DemoLedgerRepository implements ILedgerRepository {
       const session = store.sessions.find((s) => s.id === sessionId);
       if (!session) return [];
       if (tenant.organizationId && session.organization_id !== tenant.organizationId) return [];
-      if (tenant.customerId && session.customer_id && session.customer_id !== tenant.customerId) return [];
+      if (tenant.customerId && session.customer_id !== tenant.customerId) return [];
     }
     return [...(store.ledgerEvents[sessionId] || [])];
   }

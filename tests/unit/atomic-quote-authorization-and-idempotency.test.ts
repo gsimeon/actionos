@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { orchestrator } from "@/lib/actionos/orchestrator";
 import { resetStore, getStore } from "@/lib/actionos/mock-store";
-import { DEMO_CONTEXT } from "@/lib/security/auth-context";
+import { DEMO_CONTEXT, type AuthenticatedExecutionContext } from "@/lib/security/auth-context";
 import { getRepositoryContainer } from "@/lib/repositories";
 import { mockPaymentProvider } from "@/lib/payments/mock";
 import { POST as paymentWebhookHandler } from "@/app/api/webhooks/payment/route";
@@ -601,4 +601,91 @@ describe("Atomic Quote Authorization, Idempotency & Financial Execution Integrit
     assert.equal(result.valid, false);
     assert.match(result.reason || "", /Broken sequence continuity/);
   });
+
+  it("should fail closed on ledger event queries when parent session does not exist or cross-tenant context is provided", async () => {
+    resetStore();
+    const repos = getRepositoryContainer();
+
+    // 1. Session does not exist: must return empty list (fail-closed)
+    const nonExistentEvents = await repos.ledger.getEventsBySessionId("sess_non_existent", {
+      organizationId: "org-a",
+      customerId: "cus-a",
+    });
+    assert.deepEqual(nonExistentEvents, []);
+
+    // 2. Cross-tenant query: session belongs to org-a, queried with org-b tenant context
+    const step1 = await orchestrator.startWorkflow({
+      inputText: "Check my car insurance and renew it",
+      channel: "web",
+      language: "en-NG",
+      executionContext: DEMO_CONTEXT,
+    });
+
+    const crossTenantEvents = await repos.ledger.getEventsBySessionId(step1.sessionId, {
+      organizationId: "foreign-org-id",
+      customerId: "foreign-cust-id",
+    });
+    assert.deepEqual(crossTenantEvents, [], "Cross-tenant query must return no events");
+  });
+
+  it("should fail closed in production mode when customer identity cannot be resolved", async () => {
+    resetStore();
+    const originalMode = process.env.ACTIONOS_RUNTIME_MODE;
+    const originalKey = process.env.ACTIONOS_QUOTE_SIGNING_KEY;
+    const originalLedgerKey = process.env.ACTION_LEDGER_SIGNING_KEY;
+    const originalWebhookKey = process.env.ACTIONOS_WEBHOOK_SIGNING_SECRET;
+    process.env.ACTIONOS_RUNTIME_MODE = "production";
+    process.env.ACTIONOS_QUOTE_SIGNING_KEY = "test_prod_key_2026_xyz";
+    process.env.ACTION_LEDGER_SIGNING_KEY = "test_prod_ledger_key_2026";
+    process.env.ACTIONOS_WEBHOOK_SIGNING_SECRET = "test_webhook_secret_2026";
+
+    try {
+      // 1. Customer role without customerId must reject
+      const prodContextCustomer: AuthenticatedExecutionContext = {
+        userId: "user_without_customer",
+        profileId: "prof_test_customer",
+        organizationId: "a0000000-0000-0000-0000-000000000001",
+        role: "customer",
+        isDemo: false,
+      };
+
+      await assert.rejects(
+        async () => {
+          await orchestrator.startWorkflow({
+            inputText: "Renew my insurance policy AUTO-2026-00182",
+            channel: "web",
+            executionContext: prodContextCustomer,
+          });
+        },
+        /Identity enforcement violation: customerId is required for customer role/
+      );
+
+      // 2. Agent role without customer resolution must halt without authorization
+      const prodContextAgent: AuthenticatedExecutionContext = {
+        userId: "agent_without_customer",
+        profileId: "prof_test_agent",
+        organizationId: "a0000000-0000-0000-0000-000000000001",
+        role: "agent",
+        isDemo: false,
+      };
+
+      const result = await orchestrator.startWorkflow({
+        inputText: "Renew my insurance policy AUTO-2026-00182",
+        channel: "web",
+        executionContext: prodContextAgent,
+      });
+
+      assert.equal(result.authorizationRequired, false);
+      assert.ok(result.status === "escalated" || result.status === "failed");
+    } finally {
+      process.env.ACTIONOS_RUNTIME_MODE = originalMode;
+      if (originalKey) process.env.ACTIONOS_QUOTE_SIGNING_KEY = originalKey;
+      else delete process.env.ACTIONOS_QUOTE_SIGNING_KEY;
+      if (originalLedgerKey) process.env.ACTION_LEDGER_SIGNING_KEY = originalLedgerKey;
+      else delete process.env.ACTION_LEDGER_SIGNING_KEY;
+      if (originalWebhookKey) process.env.ACTIONOS_WEBHOOK_SIGNING_SECRET = originalWebhookKey;
+      else delete process.env.ACTIONOS_WEBHOOK_SIGNING_SECRET;
+    }
+  });
 });
+

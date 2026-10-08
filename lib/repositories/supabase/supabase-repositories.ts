@@ -593,6 +593,21 @@ export class SupabaseActionSessionRepository implements IActionSessionRepository
           quote: rpcResult.quote as Quote,
         };
       }
+
+      if (rpcError) {
+        const msg = rpcError.message || "";
+        const code = rpcError.code || "";
+        // If the error was a deliberate failure in status/lock during atomic execution:
+        if (msg.includes("QUOTE_ACCEPTANCE_FAILED") || msg.includes("SESSION_CLAIM_FAILED")) {
+          return null;
+        }
+        // If RPC function is not installed/defined, allow CAS fallback; otherwise fail closed
+        if (code !== "PGRST202" && code !== "42883" && !msg.includes("Could not find the function")) {
+          return null;
+        }
+      } else if (rpcResult && !rpcResult.success) {
+        return null;
+      }
     } catch {
       // Fallback to application-level transactional CAS if RPC is not available in environment
     }
@@ -1097,19 +1112,21 @@ export class SupabaseLedgerRepository implements ILedgerRepository {
 
   async getEventsBySessionId(sessionId: string, tenant?: TenantContext): Promise<ActionLedgerEvent[]> {
     if (tenant?.organizationId || tenant?.customerId) {
-      const { data: session } = await this.client
+      const { data: session, error: sessionError } = await this.client
         .from("action_sessions")
         .select("organization_id, customer_id")
         .eq("id", sessionId)
         .maybeSingle();
 
-      if (session) {
-        if (tenant.organizationId && session.organization_id !== tenant.organizationId) {
-          return [];
-        }
-        if (tenant.customerId && session.customer_id !== tenant.customerId) {
-          return [];
-        }
+      if (sessionError || !session) {
+        return [];
+      }
+
+      if (tenant.organizationId && session.organization_id !== tenant.organizationId) {
+        return [];
+      }
+      if (tenant.customerId && session.customer_id !== tenant.customerId) {
+        return [];
       }
     }
 
@@ -1179,7 +1196,7 @@ export class SupabaseQuoteRepository implements IQuoteRepository {
       provider_reference: data.provider_reference ?? null,
       metadata: data.metadata ?? {},
     };
-    if (data.id) {
+    if (data.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(data.id)) {
       insertPayload.id = data.id;
     }
 

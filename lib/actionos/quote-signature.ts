@@ -103,19 +103,24 @@ export function verifyQuoteSignature(quote: {
     const expected = Buffer.from(expectedQuoteHash, "hex");
 
     if (actual.length !== expected.length) {
-      // In demo/test mode only: check legacy unkeyed SHA-256 for backward compatibility with mock fixtures
-      if (!isProduction) {
-        const legacyPayload = `${quote.session_id}:${quote.organization_id}:${quote.customer_id}:${quote.policy_id}:${quote.provider_name}:${quote.amount}:${quote.currency}:${quote.expires_at}`;
-        const legacyHash = crypto.createHash("sha256").update(legacyPayload).digest("hex");
-        const legacyBuffer = Buffer.from(legacyHash, "hex");
-        if (actual.length === legacyBuffer.length && crypto.timingSafeEqual(actual, legacyBuffer)) {
-          return true;
-        }
-      }
       return false;
     }
 
-    return crypto.timingSafeEqual(actual, expected);
+    if (crypto.timingSafeEqual(actual, expected)) {
+      return true;
+    }
+
+    // In demo/test mode only: check legacy unkeyed SHA-256 for backward compatibility with mock fixtures
+    if (!isProduction) {
+      const legacyPayload = `${quote.session_id}:${quote.organization_id}:${quote.customer_id}:${quote.policy_id}:${quote.provider_name}:${quote.amount}:${quote.currency}:${quote.expires_at}`;
+      const legacyHash = crypto.createHash("sha256").update(legacyPayload).digest("hex");
+      const legacyBuffer = Buffer.from(legacyHash, "hex");
+      if (actual.length === legacyBuffer.length && crypto.timingSafeEqual(actual, legacyBuffer)) {
+        return true;
+      }
+    }
+
+    return false;
   } catch {
     return false;
   }
