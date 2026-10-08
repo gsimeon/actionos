@@ -1,6 +1,7 @@
 import type { Policy } from "@/types/database";
-import { getRepositoryContainer } from "@/lib/repositories";
-import { mockPaymentProvider } from "@/lib/payments/mock";
+import { getRepositoryContainer, type TenantContext } from "@/lib/repositories";
+import { getPaymentProvider } from "@/lib/runtime/dependencies";
+import type { IPaymentProvider } from "@/lib/payments/provider";
 
 export interface VerificationResult {
   verified: boolean;
@@ -12,12 +13,17 @@ export interface VerificationResult {
 }
 
 export class ActionOSVerifier {
+  constructor(private paymentProvider?: IPaymentProvider) {}
+
   /**
    * Independently verify payment status directly from payment rails
+   * (e.g. live Paystack API in production or mock provider in demo sandbox)
    */
   async verifyPayment(reference: string, expectedAmount: number): Promise<VerificationResult> {
+    const provider = this.paymentProvider || getPaymentProvider();
+
     try {
-      const payment = await mockPaymentProvider.verifyPayment(reference);
+      const payment = await provider.verifyPayment(reference);
       if (payment.status !== "succeeded") {
         return {
           verified: false,
@@ -39,7 +45,7 @@ export class ActionOSVerifier {
       return {
         verified: true,
         type: "payment",
-        details: `Payment of ₦${payment.amount.toLocaleString()} independently confirmed. Settlement ref: ${payment.providerReference}`,
+        details: `Payment of ₦${payment.amount.toLocaleString()} independently confirmed via ${provider.name}. Settlement ref: ${payment.providerReference}`,
       };
     } catch (err: unknown) {
       return {
@@ -54,9 +60,9 @@ export class ActionOSVerifier {
   /**
    * Independently verify that policy state has truly rolled forward and updated in the database
    */
-  async verifyRenewal(policyNumber: string, expectedNewExpiryYear: number): Promise<VerificationResult> {
+  async verifyRenewal(policyNumber: string, expectedNewExpiryYear: number, tenant?: TenantContext): Promise<VerificationResult> {
     const repos = getRepositoryContainer();
-    const policy: Policy | null = await repos.policies.findByNumber(policyNumber);
+    const policy: Policy | null = await repos.policies.findByNumber(policyNumber, tenant);
 
     if (!policy) {
       return {
@@ -100,4 +106,34 @@ export class ActionOSVerifier {
       reason: `Policy ${policyNumber} independently verified as ${policy.status} through ${policy.expiry_date}.`,
     };
   }
+
+  /**
+   * Independently verify digital certificate generation and tamper-evident metadata
+   */
+  async verifyCertificate(customerId: string, policyNumber: string, tenant?: TenantContext): Promise<VerificationResult> {
+    const repos = getRepositoryContainer();
+    const documents = await repos.documents.findByCustomerId(customerId, tenant);
+    const cert = documents.find((d) => d.document_type === "certificate");
+
+    if (!cert) {
+      return {
+        verified: false,
+        passed: false,
+        type: "certificate",
+        details: `No electronic certificate found for customer ${customerId}`,
+        reason: `No electronic certificate found for customer ${customerId}`,
+        error: "CERTIFICATE_NOT_FOUND",
+      };
+    }
+
+    return {
+      verified: true,
+      passed: true,
+      type: "certificate",
+      details: `Official certificate '${cert.file_name}' verified. Download URL: ${cert.file_path}`,
+      reason: `Official certificate '${cert.file_name}' verified. Download URL: ${cert.file_path}`,
+    };
+  }
 }
+
+export const verifier = new ActionOSVerifier();

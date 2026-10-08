@@ -26,10 +26,15 @@ export class GetPolicyTool implements IActionOSTool<GetPolicyInput, Policy> {
 
   async execute(input: GetPolicyInput, context: ExecutionContext): Promise<ToolResult<Policy>> {
     const repos = getRepositoryContainer();
+    const tenantContext = {
+      organizationId: context.organizationId,
+      customerId: context.customerId,
+      role: context.userRole,
+    };
 
     // 1. Try matching policyNumber directly
     if (input.policyNumber) {
-      const match = await repos.policies.findByNumber(input.policyNumber);
+      const match = await repos.policies.findByNumber(input.policyNumber, tenantContext);
       if (match) {
         return { success: true, data: match };
       }
@@ -39,12 +44,12 @@ export class GetPolicyTool implements IActionOSTool<GetPolicyInput, Policy> {
     const customerId = input.customerId || context.customerId;
     let customerPolicies: Policy[] = [];
     if (customerId) {
-      customerPolicies = await repos.policies.findByCustomerId(customerId);
+      customerPolicies = await repos.policies.findByCustomerId(customerId, tenantContext);
     }
 
-    // Fall back to benchmark policy if empty
-    if (customerPolicies.length === 0) {
-      const benchmark = await repos.policies.findByNumber("AUTO-2026-00182");
+    // Fall back to benchmark policy if empty only in simulated/demo mode
+    if (customerPolicies.length === 0 && context.isSimulated) {
+      const benchmark = await repos.policies.findByNumber("AUTO-2026-00182", tenantContext);
       if (benchmark) {
         return { success: true, data: benchmark };
       }

@@ -208,6 +208,74 @@ describe("Repository Abstraction Layer", () => {
     assert.equal(events[1].previousHash, "hash_1");
   });
 
+  it("should enforce tenant context boundaries and prevent cross-tenant data leakage", async () => {
+    const repos = getRepositoryContainer();
+    const correctOrg = "a0000000-0000-0000-0000-000000000001";
+    const foreignOrg = "a0000000-0000-0000-0000-999999999999";
+    const customerId = "f0000000-0000-0000-0000-000000000001";
+    const foreignCustomer = "f0000000-0000-0000-0000-999999999999";
+
+    // 1. Customer Isolation
+    const customer = await repos.customers.findById(customerId, { organizationId: correctOrg });
+    assert.ok(customer);
+
+    const crossTenantCustomer = await repos.customers.findById(customerId, { organizationId: foreignOrg });
+    assert.equal(crossTenantCustomer, null, "Cross-tenant customer query must return null");
+
+    // 2. Policy Isolation
+    const policy = await repos.policies.findByNumber("AUTO-2026-00182", { customerId });
+    assert.ok(policy);
+
+    const crossCustomerPolicy = await repos.policies.findByNumber("AUTO-2026-00182", { customerId: foreignCustomer });
+    assert.equal(crossCustomerPolicy, null, "Cross-customer policy query must return null");
+
+    // 3. Action Session Isolation
+    const testSession = await repos.sessions.create({
+      id: "sess_tenant_test",
+      customer_id: customerId,
+      organization_id: correctOrg,
+      channel: "web",
+    });
+    assert.ok(testSession);
+
+    const authorizedSession = await repos.sessions.findById("sess_tenant_test", { organizationId: correctOrg });
+    assert.ok(authorizedSession);
+
+    const forbiddenSession = await repos.sessions.findById("sess_tenant_test", { organizationId: foreignOrg });
+    assert.equal(forbiddenSession, null, "Session query from foreign organization must return null");
+  });
+
+  it("should correctly classify and throw structured DatabaseError", async () => {
+    const { DatabaseError } = await import("@/lib/repositories/errors");
+    const err = new DatabaseError("Connection terminated", "ECONNRESET", { host: "db.supabase.co" });
+    assert.equal(err.name, "DatabaseError");
+    assert.equal(err.code, "ECONNRESET");
+    assert.equal(err.message, "Connection terminated");
+    assert.deepEqual(err.originalError, { host: "db.supabase.co" });
+  });
+
+  it("should respect ACTIONOS_RUNTIME_MODE for environment isolation", async () => {
+    const { getRuntimeMode, isProductionMode, isDemoMode } = await import("@/lib/runtime/mode");
+
+    const originalMode = process.env.ACTIONOS_RUNTIME_MODE;
+    const originalDemo = process.env.DEMO_MODE;
+
+    try {
+      process.env.ACTIONOS_RUNTIME_MODE = "production";
+      assert.equal(getRuntimeMode(), "production");
+      assert.equal(isProductionMode(), true);
+      assert.equal(isDemoMode(), false);
+
+      process.env.ACTIONOS_RUNTIME_MODE = "demo";
+      assert.equal(getRuntimeMode(), "demo");
+      assert.equal(isProductionMode(), false);
+      assert.equal(isDemoMode(), true);
+    } finally {
+      process.env.ACTIONOS_RUNTIME_MODE = originalMode;
+      process.env.DEMO_MODE = originalDemo;
+    }
+  });
+
   it("should allow dependency injection container override via setRepositoryContainer", () => {
     const customContainer = new DemoRepositoryContainer();
     setRepositoryContainer(customContainer);

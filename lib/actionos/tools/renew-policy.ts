@@ -35,9 +35,14 @@ export class RenewPolicyTool implements IActionOSTool<RenewPolicyInput, RenewPol
     return { valid: true, data };
   }
 
-  async execute(input: RenewPolicyInput, _context: ExecutionContext): Promise<ToolResult<RenewPolicyOutput>> {
+  async execute(input: RenewPolicyInput, context: ExecutionContext): Promise<ToolResult<RenewPolicyOutput>> {
     const repos = getRepositoryContainer();
-    const policy = await repos.policies.findByNumber(input.policyNumber);
+    const tenantContext = {
+      organizationId: context.organizationId,
+      customerId: context.customerId,
+      role: context.userRole,
+    };
+    const policy = await repos.policies.findByNumber(input.policyNumber, tenantContext);
 
     if (!policy) {
       return {
@@ -55,14 +60,14 @@ export class RenewPolicyTool implements IActionOSTool<RenewPolicyInput, RenewPol
     newDate.setFullYear(prevDate.getFullYear() + 1);
     const newExpiry = newDate.toISOString().split("T")[0]; // e.g. 2027-10-14
 
-    // Mutate policy state via repository
-    const updatedPolicy = await repos.policies.updateStatusAndExpiry(policy.id, "renewed", newExpiry);
+    // Mutate policy state via repository with tenant guard
+    const updatedPolicy = await repos.policies.updateStatusAndExpiry(policy.id, "renewed", newExpiry, tenantContext);
 
     // Update renewal record if present
-    const renewal = await repos.renewals.findByPolicyId(policy.id);
+    const renewal = await repos.renewals.findByPolicyId(policy.id, tenantContext);
     if (renewal) {
-      await repos.renewals.updateStatus(renewal.id, "completed", new Date().toISOString());
-      await repos.renewals.updatePaymentStatus(renewal.id, "succeeded");
+      await repos.renewals.updateStatus(renewal.id, "completed", new Date().toISOString(), tenantContext);
+      await repos.renewals.updatePaymentStatus(renewal.id, "succeeded", tenantContext);
     }
 
     return {

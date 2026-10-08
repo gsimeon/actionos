@@ -104,6 +104,7 @@ export interface ActionLedgerEvent {
   signature?: string;
   signingKeyVersion?: string;
   isCompensating?: boolean;
+  eventClass?: "informational" | "consequential" | "critical";
 }
 
 // Multi-Insurer Marketplace Quote

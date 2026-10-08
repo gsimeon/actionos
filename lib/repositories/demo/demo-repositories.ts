@@ -11,6 +11,7 @@ import type {
   IAuditRepository,
   ILedgerRepository,
   RepositoryContainer,
+  TenantContext,
 } from "../interfaces";
 import type {
   Customer,
@@ -28,23 +29,33 @@ import type { ActionLedgerEvent } from "@/types/actionos";
 import { getStore } from "@/lib/actionos/mock-store";
 
 export class DemoCustomerRepository implements ICustomerRepository {
-  async findAll(): Promise<Customer[]> {
+  async findAll(tenant?: TenantContext): Promise<Customer[]> {
     const store = getStore();
-    return [...store.customers];
+    return store.customers.filter((c) => {
+      if (tenant?.organizationId && c.organization_id !== tenant.organizationId) return false;
+      if (tenant?.customerId && c.id !== tenant.customerId) return false;
+      return true;
+    });
   }
 
-  async findById(id: string): Promise<Customer | null> {
+  async findById(id: string, tenant?: TenantContext): Promise<Customer | null> {
     const store = getStore();
-    return store.customers.find((c) => c.id === id) || null;
+    const customer = store.customers.find((c) => c.id === id);
+    if (!customer) return null;
+    if (tenant?.organizationId && customer.organization_id !== tenant.organizationId) return null;
+    if (tenant?.customerId && customer.id !== tenant.customerId) return null;
+    return customer;
   }
 
-  async findByNumber(customerNumber: string): Promise<Customer | null> {
+  async findByNumber(customerNumber: string, tenant?: TenantContext): Promise<Customer | null> {
     const store = getStore();
-    return (
-      store.customers.find(
-        (c) => c.customer_number.toLowerCase() === customerNumber.toLowerCase()
-      ) || null
+    const customer = store.customers.find(
+      (c) => c.customer_number.toLowerCase() === customerNumber.toLowerCase()
     );
+    if (!customer) return null;
+    if (tenant?.organizationId && customer.organization_id !== tenant.organizationId) return null;
+    if (tenant?.customerId && customer.id !== tenant.customerId) return null;
+    return customer;
   }
 
   async findByOrganization(orgId: string): Promise<Customer[]> {
@@ -76,30 +87,36 @@ export class DemoCustomerRepository implements ICustomerRepository {
 }
 
 export class DemoPolicyRepository implements IPolicyRepository {
-  async findAll(options?: { status?: string }): Promise<Policy[]> {
+  async findAll(options?: { status?: string; tenant?: TenantContext }): Promise<Policy[]> {
     const store = getStore();
-    if (options?.status && options.status !== "all") {
-      return store.policies.filter((p) => p.status === options.status);
-    }
-    return [...store.policies];
+    return store.policies.filter((p) => {
+      if (options?.status && options.status !== "all" && p.status !== options.status) return false;
+      if (options?.tenant?.customerId && p.customer_id !== options.tenant.customerId) return false;
+      return true;
+    });
   }
 
-  async findById(id: string): Promise<Policy | null> {
+  async findById(id: string, tenant?: TenantContext): Promise<Policy | null> {
     const store = getStore();
-    return store.policies.find((p) => p.id === id) || null;
+    const policy = store.policies.find((p) => p.id === id);
+    if (!policy) return null;
+    if (tenant?.customerId && policy.customer_id !== tenant.customerId) return null;
+    return policy;
   }
 
-  async findByNumber(policyNumber: string): Promise<Policy | null> {
+  async findByNumber(policyNumber: string, tenant?: TenantContext): Promise<Policy | null> {
     const store = getStore();
-    return (
-      store.policies.find(
-        (p) => p.policy_number.toLowerCase() === policyNumber.toLowerCase()
-      ) || null
+    const policy = store.policies.find(
+      (p) => p.policy_number.toLowerCase() === policyNumber.toLowerCase()
     );
+    if (!policy) return null;
+    if (tenant?.customerId && policy.customer_id !== tenant.customerId) return null;
+    return policy;
   }
 
-  async findByCustomerId(customerId: string): Promise<Policy[]> {
+  async findByCustomerId(customerId: string, tenant?: TenantContext): Promise<Policy[]> {
     const store = getStore();
+    if (tenant?.customerId && customerId !== tenant.customerId) return [];
     return store.policies.filter((p) => p.customer_id === customerId);
   }
 
@@ -139,22 +156,29 @@ export class DemoPolicyRepository implements IPolicyRepository {
 }
 
 export class DemoRenewalRepository implements IRenewalRepository {
-  async findAll(options?: { status?: string }): Promise<Renewal[]> {
+  async findAll(options?: { status?: string; tenant?: TenantContext }): Promise<Renewal[]> {
     const store = getStore();
-    if (options?.status && options.status !== "all") {
-      return store.renewals.filter((r) => r.status === options.status);
-    }
-    return [...store.renewals];
+    return store.renewals.filter((r) => {
+      if (options?.status && options.status !== "all" && r.status !== options.status) return false;
+      if (options?.tenant?.customerId && r.customer_id !== options.tenant.customerId) return false;
+      return true;
+    });
   }
 
-  async findById(id: string): Promise<Renewal | null> {
+  async findById(id: string, tenant?: TenantContext): Promise<Renewal | null> {
     const store = getStore();
-    return store.renewals.find((r) => r.id === id) || null;
+    const renewal = store.renewals.find((r) => r.id === id);
+    if (!renewal) return null;
+    if (tenant?.customerId && renewal.customer_id !== tenant.customerId) return null;
+    return renewal;
   }
 
-  async findByPolicyId(policyId: string): Promise<Renewal | null> {
+  async findByPolicyId(policyId: string, tenant?: TenantContext): Promise<Renewal | null> {
     const store = getStore();
-    return store.renewals.find((r) => r.policy_id === policyId) || null;
+    const renewal = store.renewals.find((r) => r.policy_id === policyId);
+    if (!renewal) return null;
+    if (tenant?.customerId && renewal.customer_id !== tenant.customerId) return null;
+    return renewal;
   }
 
   async create(data: Partial<Renewal> & { policy_id: string; customer_id: string; scheduled_for: string }): Promise<Renewal> {
@@ -177,11 +201,14 @@ export class DemoRenewalRepository implements IRenewalRepository {
     return renewal;
   }
 
-  async updateStatus(id: string, status: Renewal["status"], renewedAt?: string): Promise<Renewal> {
+  async updateStatus(id: string, status: Renewal["status"], renewedAt?: string, tenant?: TenantContext): Promise<Renewal> {
     const store = getStore();
     const renewal = store.renewals.find((r) => r.id === id);
     if (!renewal) {
       throw new Error(`Renewal not found: ${id}`);
+    }
+    if (tenant?.customerId && renewal.customer_id !== tenant.customerId) {
+      throw new Error(`Tenant authorization violation for renewal ${id}`);
     }
     renewal.status = status;
     if (renewedAt) renewal.renewed_at = renewedAt;
@@ -189,11 +216,14 @@ export class DemoRenewalRepository implements IRenewalRepository {
     return renewal;
   }
 
-  async updatePaymentStatus(id: string, paymentStatus: Renewal["payment_status"]): Promise<Renewal> {
+  async updatePaymentStatus(id: string, paymentStatus: Renewal["payment_status"], tenant?: TenantContext): Promise<Renewal> {
     const store = getStore();
     const renewal = store.renewals.find((r) => r.id === id);
     if (!renewal) {
       throw new Error(`Renewal not found: ${id}`);
+    }
+    if (tenant?.customerId && renewal.customer_id !== tenant.customerId) {
+      throw new Error(`Tenant authorization violation for renewal ${id}`);
     }
     renewal.payment_status = paymentStatus;
     renewal.updated_at = new Date().toISOString();
@@ -202,9 +232,13 @@ export class DemoRenewalRepository implements IRenewalRepository {
 }
 
 export class DemoActionSessionRepository implements IActionSessionRepository {
-  async findById(id: string): Promise<ActionSession | null> {
+  async findById(id: string, tenant?: TenantContext): Promise<ActionSession | null> {
     const store = getStore();
-    return store.sessions.find((s) => s.id === id) || null;
+    const session = store.sessions.find((s) => s.id === id);
+    if (!session) return null;
+    if (tenant?.organizationId && session.organization_id !== tenant.organizationId) return null;
+    if (tenant?.customerId && session.customer_id && session.customer_id !== tenant.customerId) return null;
+    return session;
   }
 
   async create(data: Partial<ActionSession> & { organization_id: string; channel: ActionSession["channel"] }): Promise<ActionSession> {

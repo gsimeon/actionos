@@ -39,9 +39,17 @@ export class SendNotificationTool implements IActionOSTool<SendNotificationInput
     return { valid: true, data };
   }
 
-  async execute(input: SendNotificationInput, _context: ExecutionContext): Promise<ToolResult<NotificationOutput>> {
+  async execute(input: SendNotificationInput, context: ExecutionContext): Promise<ToolResult<NotificationOutput>> {
     const repos = getRepositoryContainer();
-    const customer = (await repos.customers.findById(input.customerId)) || (await repos.customers.findByNumber("CUS-000001"));
+    const tenantContext = {
+      organizationId: context.organizationId,
+      customerId: context.customerId,
+      role: context.userRole,
+    };
+    let customer = await repos.customers.findById(input.customerId, tenantContext);
+    if (!customer && context.isSimulated) {
+      customer = await repos.customers.findByNumber("CUS-000001", tenantContext);
+    }
 
     const formattedAmount = formatNaira(input.amount);
     const formattedExpiry = formatDate(input.newExpiry);

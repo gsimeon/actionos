@@ -4,7 +4,7 @@ import { ActionOSPlanner } from "./planner";
 import { ActionOSExecutor } from "./executor";
 import { ActionOSVerifier } from "./verifier";
 import { ActionOSGuardrails } from "./guardrails";
-import { getRepositoryContainer } from "@/lib/repositories";
+import { getRepositoryContainer, type TenantContext } from "@/lib/repositories";
 import { toolRegistry } from "./tool-registry";
 import { computeEventHash, signEventHash, GENESIS_LEDGER_HASH } from "./crypto-ledger";
 import { webhookDispatcher } from "./webhook-dispatcher";
@@ -55,11 +55,12 @@ export class ActionOSOrchestrator {
 
   /**
    * Cryptographically append an event to the Action Ledger using SHA-256 hash chaining
+   * Consequential and critical events are synchronously persisted and confirmed.
    */
-  private appendLedgerEvent(
+  private async appendLedgerEvent(
     events: ActionLedgerEvent[],
     ev: Omit<ActionLedgerEvent, "previousHash" | "hash" | "signature">
-  ): ActionLedgerEvent {
+  ): Promise<ActionLedgerEvent> {
     const previousHash =
       events.length > 0 && events[events.length - 1].hash
         ? events[events.length - 1].hash!
@@ -68,22 +69,38 @@ export class ActionOSOrchestrator {
     const hash = computeEventHash(ev, previousHash);
     const signature = signEventHash(hash);
 
+    const eventClass =
+      ev.eventClass ||
+      (ev.action.includes("payment") ||
+      ev.action.includes("renewal") ||
+      ev.action.includes("refund") ||
+      ev.isCompensating
+        ? "critical"
+        : ev.action.includes("authorization") || ev.action.includes("certificate")
+        ? "consequential"
+        : "informational");
+
     const completeEvent: ActionLedgerEvent = {
       ...ev,
       sequenceNumber: events.length + 1,
       previousHash,
       hash,
       signature,
-      signingKeyVersion: "v1",
+      signingKeyVersion: "v1-2026",
+      eventClass,
     };
 
     events.push(completeEvent);
 
-    // Asynchronously persist to ledger repository
-    try {
-      const repos = getRepositoryContainer();
-      repos.ledger.appendEvent(completeEvent).catch(() => {});
-    } catch {}
+    // Synchronously confirm critical and consequential events to prevent un-audited state mutation
+    const repos = getRepositoryContainer();
+    if (eventClass === "critical" || eventClass === "consequential") {
+      await repos.ledger.appendEvent(completeEvent);
+    } else {
+      repos.ledger.appendEvent(completeEvent).catch((err) => {
+        console.warn(`[ActionLedger] Telemetry delayed: ${err.message}`);
+      });
+    }
 
     return completeEvent;
   }
@@ -99,7 +116,7 @@ export class ActionOSOrchestrator {
     const orgId = input.executionContext?.organizationId || input.organizationId || "a0000000-0000-0000-0000-000000000001";
     const customerId = input.executionContext?.customerId || input.customerId || "f0000000-0000-0000-0000-000000000001";
     const userId = input.executionContext?.userId || input.userId;
-    const userRole = input.executionContext?.userRole || input.userRole || "customer";
+    const userRole = ((input.executionContext as Record<string, unknown>)?.role as ExecutionContext["userRole"]) || input.executionContext?.userRole || input.userRole || "customer";
 
     const sm = new ActionStateMachine("received");
     const events: ActionLedgerEvent[] = [];
@@ -130,7 +147,7 @@ export class ActionOSOrchestrator {
     session.status = "understanding";
     await repos.sessions.updateStatus(sessionId, "understanding");
 
-    this.appendLedgerEvent(events, {
+    await this.appendLedgerEvent(events, {
       id: `ev_${Date.now()}_rec`,
       sessionId,
       timestamp: new Date().toISOString(),
@@ -148,7 +165,7 @@ export class ActionOSOrchestrator {
 
     session.intent = understanding.intent;
 
-    this.appendLedgerEvent(events, {
+    await this.appendLedgerEvent(events, {
       id: `ev_${Date.now()}_natlas`,
       sessionId,
       timestamp: new Date().toISOString(),
@@ -174,7 +191,7 @@ export class ActionOSOrchestrator {
     await repos.plans.create(plan);
     await repos.steps.createMany(steps);
 
-    this.appendLedgerEvent(events, {
+    await this.appendLedgerEvent(events, {
       id: `ev_${Date.now()}_plan`,
       sessionId,
       timestamp: new Date().toISOString(),
@@ -237,7 +254,7 @@ export class ActionOSOrchestrator {
       );
 
       // Append with cryptographic hash chain
-      this.appendLedgerEvent(events, ledgerEvent);
+      await this.appendLedgerEvent(events, ledgerEvent);
 
       if (!result.success) {
         // Escalate or Fail
@@ -307,7 +324,7 @@ export class ActionOSOrchestrator {
       await repos.sessions.updateStatus(sessionId, "awaiting_authorization");
       await repos.sessions.updateMetadata(sessionId, session.metadata);
 
-      this.appendLedgerEvent(events, {
+      await this.appendLedgerEvent(events, {
         id: `ev_${Date.now()}_auth_gate`,
         sessionId,
         timestamp: new Date().toISOString(),
@@ -370,7 +387,7 @@ export class ActionOSOrchestrator {
   async authorizeAndExecute(
     sessionId: string,
     authorized: boolean,
-    userRoleOrContext: string | ExecutionContext = "customer",
+    userRoleOrContext: string | ExecutionContext | import("@/lib/security/auth-context").ExecutionContext = "customer",
     options?: {
       selectedUnderwriter?: string;
       customAmount?: number;
@@ -378,11 +395,25 @@ export class ActionOSOrchestrator {
       authMethod?: "pin" | "biometric_webauthn" | "passkey" | "whatsapp_otp";
     }
   ): Promise<WorkflowStepResult> {
+    const ctxObj =
+      typeof userRoleOrContext === "object" && userRoleOrContext !== null
+        ? (userRoleOrContext as unknown as Record<string, unknown>)
+        : null;
+
+    const userRole = (ctxObj ? (ctxObj.role || ctxObj.userRole) : userRoleOrContext) || "customer";
+    const userId = ctxObj ? (ctxObj.userId as string | undefined) : undefined;
+    const callerOrgId = ctxObj ? (ctxObj.organizationId as string | undefined) : undefined;
+    const callerCustomerId = ctxObj ? (ctxObj.customerId as string | undefined) : undefined;
+
+    const tenantContext: TenantContext | undefined = callerOrgId
+      ? { organizationId: callerOrgId, customerId: callerCustomerId, role: userRole as string }
+      : undefined;
+
     const repos = getRepositoryContainer();
-    const session = await repos.sessions.findById(sessionId);
+    const session = await repos.sessions.findById(sessionId, tenantContext);
     const plan = await repos.plans.findBySessionId(sessionId);
     const steps = plan ? await repos.steps.findByPlanId(plan.id) : [];
-    const events = (await repos.ledger.getEventsBySessionId(sessionId)) || [];
+    const events = (await repos.ledger.getEventsBySessionId(sessionId, tenantContext)) || [];
 
     if (!session || !plan) {
       throw new Error(`Session '${sessionId}' not found.`);
@@ -395,7 +426,7 @@ export class ActionOSOrchestrator {
       session.status = "cancelled";
       await repos.sessions.updateStatus(sessionId, "cancelled");
 
-      this.appendLedgerEvent(events, {
+      await this.appendLedgerEvent(events, {
         id: `ev_${Date.now()}_cancelled`,
         sessionId,
         timestamp: new Date().toISOString(),
@@ -456,7 +487,7 @@ export class ActionOSOrchestrator {
       ? `WebAuthn Biometric Passkey authorization confirmed for ${formatNaira(quoteAmount)}.`
       : `Explicit authorization confirmed for ${formatNaira(quoteAmount)}. Proceeding with execution.`;
 
-    this.appendLedgerEvent(events, {
+    await this.appendLedgerEvent(events, {
       id: `ev_${Date.now()}_auth_ok`,
       sessionId,
       timestamp: new Date().toISOString(),
@@ -467,19 +498,22 @@ export class ActionOSOrchestrator {
       metadata: { authMethod: options?.authMethod || "pin", selectedUnderwriter: options?.selectedUnderwriter },
     });
 
-    const userRole = (typeof userRoleOrContext === "object" ? userRoleOrContext.userRole : userRoleOrContext) || "customer";
-    const userId = typeof userRoleOrContext === "object" ? userRoleOrContext.userId : undefined;
+    const orgId = callerOrgId || session.organization_id;
+    const customerId = callerCustomerId || session.customer_id || "f0000000-0000-0000-0000-000000000001";
+    const isSimulated = ctxObj
+      ? ((ctxObj.isSimulated as boolean | undefined) ?? (ctxObj.isDemo as boolean | undefined) ?? true)
+      : true;
 
     const execContext: ExecutionContext = {
       sessionId,
       planId: plan.id,
-      organizationId: session.organization_id,
-      customerId: session.customer_id || "f0000000-0000-0000-0000-000000000001",
+      organizationId: orgId,
+      customerId,
       userId,
       userRole: userRole as ExecutionContext["userRole"],
       channel: session.channel,
       language: session.language,
-      isSimulated: typeof userRoleOrContext === "object" ? (userRoleOrContext.isSimulated ?? true) : true,
+      isSimulated,
     };
 
     let paymentReference = "";
@@ -509,7 +543,7 @@ export class ActionOSOrchestrator {
             execContext
           );
 
-          this.appendLedgerEvent(events, {
+          await this.appendLedgerEvent(events, {
             id: `ev_${Date.now()}_saga_rollback`,
             sessionId,
             timestamp: new Date().toISOString(),
@@ -581,7 +615,7 @@ export class ActionOSOrchestrator {
         stepOverride
       );
 
-      this.appendLedgerEvent(events, ledgerEvent);
+      await this.appendLedgerEvent(events, ledgerEvent);
 
       if (!result.success) {
         // Rollback via Saga if payment occurred
@@ -598,7 +632,7 @@ export class ActionOSOrchestrator {
               execContext
             );
 
-            this.appendLedgerEvent(events, {
+            await this.appendLedgerEvent(events, {
               id: `ev_${Date.now()}_saga_rollback`,
               sessionId,
               timestamp: new Date().toISOString(),
@@ -646,7 +680,7 @@ export class ActionOSOrchestrator {
       2027
     );
 
-    this.appendLedgerEvent(events, {
+    await this.appendLedgerEvent(events, {
       id: `ev_${Date.now()}_ver`,
       sessionId,
       timestamp: new Date().toISOString(),

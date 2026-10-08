@@ -27,10 +27,17 @@ export async function POST(
       );
     }
 
-    const repos = getRepositoryContainer();
-    const session = await repos.sessions.findById(id);
+    // 1. Resolve authenticated identity & verified RBAC role server-side
+    const context = await resolveExecutionContext(req);
 
-    // 1. Session exists check
+    // 2. Query session with defense-in-depth tenant boundary
+    const repos = getRepositoryContainer();
+    const session = await repos.sessions.findById(id, {
+      organizationId: context.organizationId,
+      customerId: context.customerId,
+      role: context.role,
+    });
+
     if (!session) {
       return NextResponse.json(
         {
@@ -41,7 +48,7 @@ export async function POST(
       );
     }
 
-    // 2. Action is awaiting authorization check
+    // 3. Action is awaiting authorization check
     if (session.status !== "awaiting_authorization") {
       return NextResponse.json(
         {
@@ -55,7 +62,7 @@ export async function POST(
       );
     }
 
-    // 3. Quote has not expired check
+    // 4. Quote has not expired check
     const authDetails = session.metadata?.authorizationDetails as AuthorizationDetails | undefined;
     if (authDetails?.expiresAt) {
       const expiresAtTime = new Date(authDetails.expiresAt).getTime();
@@ -73,14 +80,11 @@ export async function POST(
       }
     }
 
-    // 4. Resolve authenticated identity & verified RBAC role server-side
-    const context = await resolveExecutionContext(req);
-
-    // 5. Execute the remainder of the workflow with validated caller role
+    // 5. Execute the remainder of the workflow with validated caller execution context
     const result = await orchestrator.authorizeAndExecute(
       id,
       validated.data.authorized,
-      context.role,
+      context,
       {
         selectedUnderwriter: validated.data.selectedUnderwriter,
         customAmount: validated.data.customAmount,

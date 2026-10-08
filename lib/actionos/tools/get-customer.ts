@@ -28,18 +28,23 @@ export class GetCustomerTool implements IActionOSTool<GetCustomerInput, Customer
   async execute(input: GetCustomerInput, context: ExecutionContext): Promise<ToolResult<Customer>> {
     const repos = getRepositoryContainer();
     const targetId = input.customerId || context.customerId;
+    const tenantContext = {
+      organizationId: context.organizationId,
+      customerId: context.customerId,
+      role: context.userRole,
+    };
 
     let customer: Customer | null = null;
     if (targetId) {
-      customer = await repos.customers.findById(targetId);
+      customer = await repos.customers.findById(targetId, tenantContext);
     }
     if (!customer && input.customerNumber) {
-      customer = await repos.customers.findByNumber(input.customerNumber);
+      customer = await repos.customers.findByNumber(input.customerNumber, tenantContext);
     }
 
-    // Default to benchmark demo customer if not specified or found
-    if (!customer) {
-      customer = await repos.customers.findByNumber("CUS-000001");
+    // Default to benchmark demo customer only in demo/sandbox simulation mode
+    if (!customer && context.isSimulated) {
+      customer = await repos.customers.findByNumber("CUS-000001", tenantContext);
     }
 
     if (!customer) {

@@ -6,6 +6,8 @@ export * from "./interfaces";
 export { DemoRepositoryContainer } from "./demo/demo-repositories";
 export { SupabaseRepositoryContainer } from "./supabase/supabase-repositories";
 
+import { isDemoMode } from "@/lib/runtime/mode";
+
 let cachedContainer: RepositoryContainer | null = null;
 
 export function getRepositoryContainer(forceDemo?: boolean): RepositoryContainer {
@@ -17,11 +19,7 @@ export function getRepositoryContainer(forceDemo?: boolean): RepositoryContainer
     return cachedContainer;
   }
 
-  const isExplicitDemo = process.env.DEMO_MODE === "true";
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const isDemoUrl = !supabaseUrl || supabaseUrl.includes("demo.supabase.co");
-
-  if (isExplicitDemo || isDemoUrl) {
+  if (isDemoMode()) {
     cachedContainer = new DemoRepositoryContainer();
   } else {
     cachedContainer = new SupabaseRepositoryContainer();

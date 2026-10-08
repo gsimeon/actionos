@@ -12,37 +12,47 @@ import type {
 } from "@/types/database";
 import type { ActionLedgerEvent } from "@/types/actionos";
 
+/**
+ * TenantContext enables defense-in-depth tenant boundary enforcement
+ * even when queries are executed with elevated service-role credentials.
+ */
+export interface TenantContext {
+  organizationId?: string;
+  customerId?: string;
+  role?: string;
+}
+
 export interface ICustomerRepository {
-  findAll(): Promise<Customer[]>;
-  findById(id: string): Promise<Customer | null>;
-  findByNumber(customerNumber: string): Promise<Customer | null>;
+  findAll(tenant?: TenantContext): Promise<Customer[]>;
+  findById(id: string, tenant?: TenantContext): Promise<Customer | null>;
+  findByNumber(customerNumber: string, tenant?: TenantContext): Promise<Customer | null>;
   findByOrganization(orgId: string): Promise<Customer[]>;
   create(data: Partial<Customer> & { customer_number: string; full_name: string; phone: string; email: string; organization_id: string }): Promise<Customer>;
 }
 
 export interface IPolicyRepository {
-  findAll(options?: { status?: string }): Promise<Policy[]>;
-  findById(id: string): Promise<Policy | null>;
-  findByNumber(policyNumber: string): Promise<Policy | null>;
-  findByCustomerId(customerId: string): Promise<Policy[]>;
+  findAll(options?: { status?: string; tenant?: TenantContext }): Promise<Policy[]>;
+  findById(id: string, tenant?: TenantContext): Promise<Policy | null>;
+  findByNumber(policyNumber: string, tenant?: TenantContext): Promise<Policy | null>;
+  findByCustomerId(customerId: string, tenant?: TenantContext): Promise<Policy[]>;
   create(data: Partial<Policy> & { customer_id: string; provider_id: string; policy_type_id: string; policy_number: string; start_date: string; expiry_date: string; premium: number }): Promise<Policy>;
-  updateStatusAndExpiry(id: string, status: Policy["status"], newExpiryDate: string): Promise<Policy>;
+  updateStatusAndExpiry(id: string, status: Policy["status"], newExpiryDate: string, tenant?: TenantContext): Promise<Policy>;
 }
 
 export interface IRenewalRepository {
-  findAll(options?: { status?: string }): Promise<Renewal[]>;
-  findById(id: string): Promise<Renewal | null>;
-  findByPolicyId(policyId: string): Promise<Renewal | null>;
+  findAll(options?: { status?: string; tenant?: TenantContext }): Promise<Renewal[]>;
+  findById(id: string, tenant?: TenantContext): Promise<Renewal | null>;
+  findByPolicyId(policyId: string, tenant?: TenantContext): Promise<Renewal | null>;
   create(data: Partial<Renewal> & { policy_id: string; customer_id: string; scheduled_for: string }): Promise<Renewal>;
-  updateStatus(id: string, status: Renewal["status"], renewedAt?: string): Promise<Renewal>;
-  updatePaymentStatus(id: string, paymentStatus: Renewal["payment_status"]): Promise<Renewal>;
+  updateStatus(id: string, status: Renewal["status"], renewedAt?: string, tenant?: TenantContext): Promise<Renewal>;
+  updatePaymentStatus(id: string, paymentStatus: Renewal["payment_status"], tenant?: TenantContext): Promise<Renewal>;
 }
 
 export interface IActionSessionRepository {
-  findById(id: string): Promise<ActionSession | null>;
+  findById(id: string, tenant?: TenantContext): Promise<ActionSession | null>;
   create(data: Partial<ActionSession> & { organization_id: string; channel: ActionSession["channel"] }): Promise<ActionSession>;
-  updateStatus(id: string, status: ActionSession["status"], completedAt?: string): Promise<ActionSession>;
-  updateMetadata(id: string, metadata: Record<string, unknown>): Promise<ActionSession>;
+  updateStatus(id: string, status: ActionSession["status"], completedAt?: string, tenant?: TenantContext): Promise<ActionSession>;
+  updateMetadata(id: string, metadata: Record<string, unknown>, tenant?: TenantContext): Promise<ActionSession>;
 }
 
 export interface IActionPlanRepository {
@@ -59,19 +69,19 @@ export interface IActionStepRepository {
 
 export interface ITransactionRepository {
   create(data: Partial<Transaction> & { customer_id: string; amount: number; reference: string }): Promise<Transaction>;
-  findByReference(reference: string): Promise<Transaction | null>;
+  findByReference(reference: string, tenant?: TenantContext): Promise<Transaction | null>;
   updateStatus(id: string, status: Transaction["status"]): Promise<Transaction>;
 }
 
 export interface IDocumentRepository {
   create(data: Partial<Document> & { customer_id: string; document_type: Document["document_type"]; file_path: string; file_name: string }): Promise<Document>;
-  findByCustomerId(customerId: string): Promise<Document[]>;
-  findByRenewalId(renewalId: string): Promise<Document[]>;
+  findByCustomerId(customerId: string, tenant?: TenantContext): Promise<Document[]>;
+  findByRenewalId(renewalId: string, tenant?: TenantContext): Promise<Document[]>;
 }
 
 export interface INotificationRepository {
   create(data: Partial<NotificationRecord> & { customer_id: string; type: NotificationRecord["type"]; channel: NotificationRecord["channel"]; title: string; message: string; scheduled_for: string }): Promise<NotificationRecord>;
-  findByCustomerId(customerId: string): Promise<NotificationRecord[]>;
+  findByCustomerId(customerId: string, tenant?: TenantContext): Promise<NotificationRecord[]>;
 }
 
 export interface IAuditRepository {
@@ -80,7 +90,7 @@ export interface IAuditRepository {
 
 export interface ILedgerRepository {
   appendEvent(event: ActionLedgerEvent): Promise<ActionLedgerEvent>;
-  getEventsBySessionId(sessionId: string): Promise<ActionLedgerEvent[]>;
+  getEventsBySessionId(sessionId: string, tenant?: TenantContext): Promise<ActionLedgerEvent[]>;
 }
 
 export interface RepositoryContainer {
