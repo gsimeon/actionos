@@ -55,6 +55,11 @@ export interface IActionSessionRepository {
   updateStatus(id: string, status: ActionSession["status"], completedAt?: string, tenant?: TenantContext): Promise<ActionSession>;
   updateMetadata(id: string, metadata: Record<string, unknown>, tenant?: TenantContext): Promise<ActionSession>;
   claimAuthorization(sessionId: string, tenant?: TenantContext): Promise<ActionSession | null>;
+  claimAuthorizationAndAcceptQuote(
+    sessionId: string,
+    quoteId: string,
+    tenant?: TenantContext
+  ): Promise<{ session: ActionSession; quote: Quote } | null>;
 }
 
 export interface IActionPlanRepository {

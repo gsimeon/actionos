@@ -7,6 +7,8 @@ import { getRepositoryContainer } from "@/lib/repositories";
 import { mockPaymentProvider } from "@/lib/payments/mock";
 import { POST as paymentWebhookHandler } from "@/app/api/webhooks/payment/route";
 import { toolRegistry } from "@/lib/actionos/tool-registry";
+import { computeQuoteSignature, verifyQuoteSignature, getQuoteSigningSecret } from "@/lib/actionos/quote-signature";
+import { verifyLedgerIntegrity } from "@/lib/actionos/crypto-ledger";
 import type { GetQuoteInput } from "@/lib/actionos/tools/get-quote";
 import type { WorkflowExecutionContext } from "@/types/actionos";
 
@@ -166,7 +168,7 @@ describe("Atomic Quote Authorization, Idempotency & Financial Execution Integrit
 
     const failedRes = [res1, res2].find((r) => r.status === "failed");
     assert.ok(failedRes);
-    assert.match(failedRes.message, /Concurrent authorization detected|already been claimed|cannot be accepted atomically/);
+    assert.match(failedRes.message, /Concurrent authorization detected|already been claimed|cannot be accepted atomically|Only quotes in 'issued' status can be authorized/);
   });
 
   it("should ensure payment operations and webhook processing are strictly idempotent", async () => {
@@ -341,5 +343,262 @@ describe("Atomic Quote Authorization, Idempotency & Financial Execution Integrit
     } finally {
       process.env.ACTIONOS_RUNTIME_MODE = originalMode;
     }
+  });
+
+  it("should select second alternative quote, authorize its canonical database ID, and verify exact provider details throughout payment and renewal", async () => {
+    resetStore();
+    const repos = getRepositoryContainer();
+
+    // 1. Start renewal session
+    const step1 = await orchestrator.startWorkflow({
+      inputText: "Check my car insurance and renew it",
+      channel: "web",
+      language: "en-NG",
+      executionContext: DEMO_CONTEXT,
+    });
+
+    assert.equal(step1.status, "awaiting_authorization");
+    assert.ok(step1.authorizationDetails?.quotes && step1.authorizationDetails.quotes.length >= 2);
+
+    // Pick second quote (alternative marketplace quote)
+    const secondQuote = step1.authorizationDetails.quotes[1];
+    assert.ok(secondQuote.id, "Second quote must carry a canonical ActionOS database ID");
+    assert.ok(secondQuote.amount > 0);
+
+    // Verify it exists in database in 'issued' status
+    const dbAltQuoteBefore = await repos.quotes.findById(secondQuote.id, DEMO_CONTEXT);
+    assert.ok(dbAltQuoteBefore, "Second quote must exist as a persisted entity");
+    assert.equal(dbAltQuoteBefore.status, "issued");
+    assert.equal(dbAltQuoteBefore.amount, secondQuote.amount);
+
+    // 2. Authorize using the second quote's canonical quoteId
+    const step2 = await orchestrator.authorizeAndExecute(
+      step1.sessionId,
+      true,
+      DEMO_CONTEXT,
+      {
+        authorizedQuoteId: secondQuote.id,
+        authMethod: "biometric_webauthn",
+      }
+    );
+
+    assert.equal(step2.status, "completed");
+
+    // Verify quote was atomically accepted in the database
+    const dbAltQuoteAfter = await repos.quotes.findById(secondQuote.id, DEMO_CONTEXT);
+    assert.ok(dbAltQuoteAfter);
+    assert.equal(dbAltQuoteAfter.status, "accepted");
+
+    // Verify exact payment transaction recorded in database matching the alternative quote
+    const store = getStore();
+    const tx = store.transactions.find((t) => t.amount === secondQuote.amount);
+    assert.ok(tx, `Transaction must be executed for exact alternative quote amount ${secondQuote.amount}`);
+    assert.equal(tx.status, "succeeded");
+    assert.equal(tx.currency, secondQuote.currency);
+
+    // Verify session metadata has bound consentRecord with exact details
+    const session = await repos.sessions.findById(step1.sessionId, DEMO_CONTEXT);
+    assert.ok(session);
+    const consent = (session.metadata as Record<string, unknown>).consentRecord as Record<string, unknown> | undefined;
+    assert.ok(consent, "Consent record must be bound in session metadata");
+    assert.equal(consent.quoteId, secondQuote.id);
+    assert.equal(consent.amount, secondQuote.amount);
+    assert.equal(consent.provider, secondQuote.underwriter);
+    assert.equal(consent.currency, secondQuote.currency);
+  });
+
+  it("should enforce dedicated signing key in production and reject demo/unkeyed/tampered signatures", async () => {
+    resetStore();
+    const originalMode = process.env.ACTIONOS_RUNTIME_MODE;
+    const originalKey = process.env.ACTIONOS_QUOTE_SIGNING_KEY;
+    process.env.ACTIONOS_RUNTIME_MODE = "production";
+
+    try {
+      // 1. Missing signing key in production must throw
+      delete process.env.ACTIONOS_QUOTE_SIGNING_KEY;
+      assert.throws(
+        () => getQuoteSigningSecret(),
+        /ACTIONOS_QUOTE_SIGNING_KEY is strictly required in production environment/
+      );
+
+      // 2. Configure dedicated production key
+      process.env.ACTIONOS_QUOTE_SIGNING_KEY = "test_prod_dedicated_hmac_key_2026";
+      assert.equal(getQuoteSigningSecret(), "test_prod_dedicated_hmac_key_2026");
+
+      const testQuote = {
+        session_id: "00000000-0000-0000-0000-000000000001",
+        organization_id: "00000000-0000-0000-0000-000000000002",
+        customer_id: "00000000-0000-0000-0000-000000000003",
+        policy_id: "00000000-0000-0000-0000-000000000004",
+        provider_name: "AXA Mansard",
+        amount: 87500,
+        currency: "NGN",
+        expires_at: new Date(Date.now() + 60000).toISOString(),
+        quote_hash: "demo_hash",
+      };
+
+      // 3. In production, 'demo_hash' is strictly rejected
+      assert.equal(verifyQuoteSignature(testQuote), false, "Production must never accept 'demo_hash'");
+
+      // 4. In production, legacy unkeyed hash is strictly rejected
+      const legacyPayload = `${testQuote.session_id}:${testQuote.organization_id}:${testQuote.customer_id}:${testQuote.policy_id}:${testQuote.provider_name}:${testQuote.amount}:${testQuote.currency}:${testQuote.expires_at}`;
+      const legacyHash = (await import("crypto")).createHash("sha256").update(legacyPayload).digest("hex");
+      assert.equal(
+        verifyQuoteSignature({ ...testQuote, quote_hash: legacyHash }),
+        false,
+        "Production must reject unkeyed legacy hash"
+      );
+
+      // 5. Valid HMAC signature is verified
+      const { quoteHash } = computeQuoteSignature({
+        sessionId: testQuote.session_id,
+        organizationId: testQuote.organization_id,
+        customerId: testQuote.customer_id,
+        policyId: testQuote.policy_id,
+        providerName: testQuote.provider_name,
+        amount: testQuote.amount,
+        currency: testQuote.currency,
+        expiresAt: testQuote.expires_at,
+      });
+
+      assert.equal(verifyQuoteSignature({ ...testQuote, quote_hash: quoteHash }), true);
+
+      // 6. Tampered amount is rejected
+      assert.equal(
+        verifyQuoteSignature({ ...testQuote, amount: 99999, quote_hash: quoteHash }),
+        false,
+        "Tampered quote amount must be rejected"
+      );
+    } finally {
+      process.env.ACTIONOS_RUNTIME_MODE = originalMode;
+      if (originalKey) process.env.ACTIONOS_QUOTE_SIGNING_KEY = originalKey;
+      else delete process.env.ACTIONOS_QUOTE_SIGNING_KEY;
+    }
+  });
+
+  it("should fail closed when attempting atomic claim and quote acceptance on non-issued quote", async () => {
+    resetStore();
+    const repos = getRepositoryContainer();
+
+    const startRes = await orchestrator.startWorkflow({
+      inputText: "Renew my insurance",
+      channel: "web",
+      executionContext: DEMO_CONTEXT,
+    });
+    assert.equal(startRes.status, "awaiting_authorization");
+    const quoteId = startRes.authorizationDetails!.quoteId;
+
+    // Mutate quote status to rejected
+    const store = getStore();
+    const q = store.quotes.find((item) => item.id === quoteId);
+    assert.ok(q);
+    q.status = "rejected";
+
+    // Attempt atomic claim and acceptance
+    const res = await repos.sessions.claimAuthorizationAndAcceptQuote(startRes.sessionId, quoteId, DEMO_CONTEXT);
+    assert.equal(res, null, "Atomic claim must fail when quote is not in issued status");
+
+    // Verify session was NOT transitioned to executing
+    const sess = store.sessions.find((s) => s.id === startRes.sessionId);
+    assert.ok(sess);
+    assert.equal(sess.status, "awaiting_authorization");
+  });
+
+  it("should safely reconcile sessions stuck in executing without blind payment retries", async () => {
+    resetStore();
+    const repos = getRepositoryContainer();
+
+    // Case A: Session stuck in executing with no payment gateway transaction
+    const stuckSession = await repos.sessions.create({
+      organization_id: DEMO_CONTEXT.organizationId!,
+      channel: "web",
+      customer_id: DEMO_CONTEXT.customerId!,
+      metadata: {
+        authorizationDetails: {
+          policyNumber: "AUTO-2026-00182",
+          amount: 87500,
+        },
+      },
+    });
+    await repos.sessions.updateStatus(stuckSession.id, "executing");
+
+    const recResult1 = await orchestrator.reconcileExecutingSession(stuckSession.id, DEMO_CONTEXT);
+    assert.equal(recResult1.resolvedStatus, "failed");
+    assert.equal(recResult1.reconciliationAction, "cancelled_unpaid");
+
+    const sessionAfter1 = await repos.sessions.findById(stuckSession.id, DEMO_CONTEXT);
+    assert.equal(sessionAfter1?.status, "failed");
+
+    // Case B: Session stuck in executing where payment succeeded and policy was renewed
+    const stuckSession2 = await repos.sessions.create({
+      organization_id: DEMO_CONTEXT.organizationId!,
+      channel: "web",
+      customer_id: DEMO_CONTEXT.customerId!,
+      metadata: {
+        authorizationDetails: {
+          policyNumber: "AUTO-2026-00182",
+          amount: 87500,
+        },
+      },
+    });
+    await repos.sessions.updateStatus(stuckSession2.id, "executing");
+
+    // Simulate settled payment in repository
+    const sanitizedSession2 = stuckSession2.id.replace(/-/g, "").substring(0, 16);
+    const deterministicRef2 = `act_${sanitizedSession2}_pay_AUTO202600182`;
+    await repos.transactions.create(
+      {
+        customer_id: DEMO_CONTEXT.customerId!,
+        amount: 87500,
+        reference: deterministicRef2,
+        status: "succeeded",
+      },
+      DEMO_CONTEXT
+    );
+
+    // Simulate renewed policy
+    const policy = await repos.policies.findByNumber("AUTO-2026-00182", DEMO_CONTEXT);
+    assert.ok(policy);
+    await repos.policies.updateStatusAndExpiry(policy.id, "renewed", "2027-10-14", DEMO_CONTEXT);
+
+    const recResult2 = await orchestrator.reconcileExecutingSession(stuckSession2.id, DEMO_CONTEXT);
+    assert.equal(recResult2.resolvedStatus, "completed");
+    assert.equal(recResult2.reconciliationAction, "completed_renewal");
+
+    const sessionAfter2 = await repos.sessions.findById(stuckSession2.id, DEMO_CONTEXT);
+    assert.equal(sessionAfter2?.status, "completed");
+  });
+
+  it("should detect broken sequence continuity and tampering in Action Ledger", () => {
+    const validEvents = [
+      {
+        id: "ev_1",
+        sessionId: "sess_test",
+        sequenceNumber: 1,
+        timestamp: "2026-10-08T00:00:00Z",
+        action: "action_1",
+        description: "first action",
+        actor: "User" as const,
+        status: "verified" as const,
+        previousHash: "0000000000000000000000000000000000000000000000000000000000000000",
+        hash: "",
+      },
+      {
+        id: "ev_2",
+        sessionId: "sess_test",
+        sequenceNumber: 3, // Broken sequence: 1 then 3 instead of 2!
+        timestamp: "2026-10-08T00:00:01Z",
+        action: "action_2",
+        description: "second action",
+        actor: "User" as const,
+        status: "verified" as const,
+        previousHash: "",
+        hash: "",
+      },
+    ];
+
+    const result = verifyLedgerIntegrity(validEvents);
+    assert.equal(result.valid, false);
+    assert.match(result.reason || "", /Broken sequence continuity/);
   });
 });

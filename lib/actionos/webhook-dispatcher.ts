@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { isProductionMode } from "@/lib/runtime/mode";
 
 export interface OutboundWebhookPayload<T = Record<string, unknown>> {
   id: string;
@@ -10,12 +11,6 @@ export interface OutboundWebhookPayload<T = Record<string, unknown>> {
 
 export class ActionOSWebhookDispatcher {
   private static instance: ActionOSWebhookDispatcher;
-  private subscribers: Array<{ url: string; secret: string }> = [
-    {
-      url: "https://api.partner-insurance.ng/v1/webhooks/actionos",
-      secret: "whsec_demo_actionos_nitda2026",
-    },
-  ];
 
   public static getInstance(): ActionOSWebhookDispatcher {
     if (!ActionOSWebhookDispatcher.instance) {
@@ -24,8 +19,21 @@ export class ActionOSWebhookDispatcher {
     return ActionOSWebhookDispatcher.instance;
   }
 
+  private getWebhookSecret(): string {
+    const isProd = isProductionMode();
+    const envSecret = process.env.ACTIONOS_WEBHOOK_SIGNING_SECRET;
+    if (isProd) {
+      if (!envSecret || envSecret.trim().length === 0) {
+        throw new Error("ACTIONOS_WEBHOOK_SIGNING_SECRET is strictly required in production environment.");
+      }
+      return envSecret;
+    }
+    return envSecret || "whsec_demo_actionos_nitda2026";
+  }
+
   /**
-   * Broadcast an HMAC-SHA256 signed event to configured partner webhook endpoints
+   * Broadcast an HMAC-SHA256 signed event to configured partner webhook endpoints.
+   * Minimal, non-PII payloads are strictly enforced to preserve customer privacy.
    */
   public async broadcast<T extends Record<string, unknown>>(
     event: OutboundWebhookPayload["event"],
@@ -41,7 +49,7 @@ export class ActionOSWebhookDispatcher {
     // Sign payload with HMAC-SHA256
     const payloadString = JSON.stringify(payload);
     payload.signature = crypto
-      .createHmac("sha256", "whsec_demo_actionos_nitda2026")
+      .createHmac("sha256", this.getWebhookSecret())
       .update(payloadString)
       .digest("hex");
 

@@ -120,6 +120,7 @@ export interface ActionLedgerEvent {
 // Multi-Insurer Marketplace Quote
 export interface UnderwriterQuote {
   id: string;
+  provider_reference?: string;
   underwriter: string;
   tier: "comprehensive" | "third_party" | "executive";
   tierLabel: string;

@@ -1,13 +1,28 @@
 import crypto from "crypto";
+import { isProductionMode } from "@/lib/runtime/mode";
 
 export const QUOTE_SIGNATURE_VERSION = "v1";
 
-function getQuoteSigningSecret(): string {
-  return (
-    process.env.ACTIONOS_QUOTE_SIGNING_KEY ||
-    process.env.NEXTAUTH_SECRET ||
-    "actionos_hmac_quote_signing_key_2026_nitda"
-  );
+/**
+ * Resolves the server-managed quote signing secret.
+ * In production mode, strictly requires ACTIONOS_QUOTE_SIGNING_KEY; fails closed immediately if missing.
+ * Never silently reuses unrelated authentication secrets (such as NEXTAUTH_SECRET) in production.
+ */
+export function getQuoteSigningSecret(): string {
+  const isProduction = isProductionMode();
+  const dedicatedKey = process.env.ACTIONOS_QUOTE_SIGNING_KEY;
+
+  if (isProduction) {
+    if (!dedicatedKey || dedicatedKey.trim().length === 0) {
+      throw new Error(
+        "ACTIONOS_QUOTE_SIGNING_KEY is strictly required in production environment for HMAC quote signature verification."
+      );
+    }
+    return dedicatedKey;
+  }
+
+  // Isolated sandbox signing key strictly for offline demo and unit testing
+  return dedicatedKey || "actionos_sandbox_quote_signing_key_demo";
 }
 
 export interface QuoteSignaturePayload {
@@ -40,6 +55,7 @@ export function computeQuoteSignature(payload: QuoteSignaturePayload): {
 
 /**
  * Cryptographically verifies a persisted quote's signature using timing-safe comparison.
+ * In production mode, demo hashes and legacy unkeyed hashes are strictly rejected.
  */
 export function verifyQuoteSignature(quote: {
   session_id: string;
@@ -53,33 +69,53 @@ export function verifyQuoteSignature(quote: {
   quote_hash: string;
 }): boolean {
   if (!quote.quote_hash) return false;
-  if (quote.quote_hash === "demo_hash") return true;
 
-  const { quoteHash } = computeQuoteSignature({
-    sessionId: quote.session_id,
-    organizationId: quote.organization_id,
-    customerId: quote.customer_id,
-    policyId: quote.policy_id,
-    providerName: quote.provider_name,
-    amount: quote.amount,
-    currency: quote.currency,
-    expiresAt: quote.expires_at,
-  });
+  const isProduction = isProductionMode();
+
+  // In production, strictly disallow any demo bypasses or fallback hashes
+  if (quote.quote_hash === "demo_hash") {
+    if (isProduction) {
+      return false;
+    }
+    return true;
+  }
+
+  let expectedQuoteHash: string;
+  try {
+    const { quoteHash } = computeQuoteSignature({
+      sessionId: quote.session_id,
+      organizationId: quote.organization_id,
+      customerId: quote.customer_id,
+      policyId: quote.policy_id,
+      providerName: quote.provider_name,
+      amount: quote.amount,
+      currency: quote.currency,
+      expiresAt: quote.expires_at,
+    });
+    expectedQuoteHash = quoteHash;
+  } catch {
+    // If key is missing or invalid in production, fail closed immediately
+    return false;
+  }
 
   try {
-    const a = Buffer.from(quote.quote_hash, "hex");
-    const b = Buffer.from(quoteHash, "hex");
-    if (a.length !== b.length) {
-      // Check legacy unkeyed SHA-256 for backward compatibility with existing tests
-      const legacyPayload = `${quote.session_id}:${quote.organization_id}:${quote.customer_id}:${quote.policy_id}:${quote.provider_name}:${quote.amount}:${quote.currency}:${quote.expires_at}`;
-      const legacyHash = crypto.createHash("sha256").update(legacyPayload).digest("hex");
-      const c = Buffer.from(legacyHash, "hex");
-      if (a.length === c.length && crypto.timingSafeEqual(a, c)) {
-        return true;
+    const actual = Buffer.from(quote.quote_hash, "hex");
+    const expected = Buffer.from(expectedQuoteHash, "hex");
+
+    if (actual.length !== expected.length) {
+      // In demo/test mode only: check legacy unkeyed SHA-256 for backward compatibility with mock fixtures
+      if (!isProduction) {
+        const legacyPayload = `${quote.session_id}:${quote.organization_id}:${quote.customer_id}:${quote.policy_id}:${quote.provider_name}:${quote.amount}:${quote.currency}:${quote.expires_at}`;
+        const legacyHash = crypto.createHash("sha256").update(legacyPayload).digest("hex");
+        const legacyBuffer = Buffer.from(legacyHash, "hex");
+        if (actual.length === legacyBuffer.length && crypto.timingSafeEqual(actual, legacyBuffer)) {
+          return true;
+        }
       }
       return false;
     }
-    return crypto.timingSafeEqual(a, b);
+
+    return crypto.timingSafeEqual(actual, expected);
   } catch {
     return false;
   }

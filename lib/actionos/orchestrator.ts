@@ -171,11 +171,13 @@ export class ActionOSOrchestrator {
       metadata: { aiProvider: this.nAtlas.name },
     });
 
-    // Outbound webhook dispatch
+    // Outbound webhook dispatch with minimal non-PII payload
     webhookDispatcher.broadcast("action.started", {
       sessionId,
       channel: input.channel,
-      inputText: input.inputText,
+      hasInputText: Boolean(input.inputText),
+      intent: input.inputText ? "insurance_renewal" : "unknown",
+      timestamp: new Date().toISOString(),
     });
 
     // 1. Move to UNDERSTANDING
@@ -404,7 +406,16 @@ export class ActionOSOrchestrator {
       }
 
       const quoteExpiry = new Date(Date.now() + 15 * 60 * 1000).toISOString();
-      const quoteCustId = activeCustomer?.id || customerId || "f0000000-0000-0000-0000-000000000001";
+      let quoteCustId = activeCustomer?.id || customerId;
+      if (!quoteCustId) {
+        if (isProductionMode()) {
+          throw new Error(
+            "Identity enforcement violation: customer identity is strictly required for quote generation in production."
+          );
+        }
+        quoteCustId = "f0000000-0000-0000-0000-000000000001";
+      }
+
       const quoteProvider = matchedQuote.underwriter || providerName;
       const { quoteHash } = computeQuoteSignature({
         sessionId,
@@ -440,6 +451,19 @@ export class ActionOSOrchestrator {
         tenantContext
       );
 
+      // Persist explicit mapping between provider quote IDs and ActionOS database IDs
+      const providerToCanonicalQuoteMap: Record<string, string> = {
+        [matchedQuote.id]: createdQuote.id,
+      };
+
+      const canonicalQuotes: UnderwriterQuote[] = [
+        {
+          ...matchedQuote,
+          id: createdQuote.id, // Prefer ActionOS database ID as canonical quoteId
+          provider_reference: matchedQuote.id,
+        },
+      ];
+
       // Also persist alternative marketplace quotes
       for (const alt of availableQuotes) {
         if (alt.id !== matchedQuote.id) {
@@ -455,7 +479,7 @@ export class ActionOSOrchestrator {
             currency: altCurrency,
             expiresAt: quoteExpiry,
           });
-          await repos.quotes.create(
+          const createdAltQuote = await repos.quotes.create(
             {
               id: alt.id,
               session_id: sessionId,
@@ -476,6 +500,13 @@ export class ActionOSOrchestrator {
             },
             tenantContext
           );
+
+          providerToCanonicalQuoteMap[alt.id] = createdAltQuote.id;
+          canonicalQuotes.push({
+            ...alt,
+            id: createdAltQuote.id, // Canonical ActionOS database ID
+            provider_reference: alt.id,
+          });
         }
       }
 
@@ -496,7 +527,7 @@ export class ActionOSOrchestrator {
         newExpiry: nextYearDate.toISOString().split("T")[0],
         requiresExplicitConsent: true,
         expiresAt: quoteExpiry,
-        quotes: availableQuotes,
+        quotes: canonicalQuotes,
       };
 
       session.metadata = {
@@ -514,6 +545,14 @@ export class ActionOSOrchestrator {
           quoteHash: createdQuote.quote_hash,
         },
         quoteAmount,
+        presentedQuoteOptions: canonicalQuotes.map((q) => ({
+          quoteId: q.id,
+          providerReference: q.provider_reference || q.id,
+          underwriter: q.underwriter,
+          amount: q.amount,
+          currency: q.currency,
+        })),
+        providerToCanonicalQuoteMap,
       };
 
       await repos.sessions.updateStatus(sessionId, "awaiting_authorization");
@@ -709,6 +748,12 @@ export class ActionOSOrchestrator {
     const requestedQuoteId = options?.authorizedQuoteId || options?.quoteId;
     let targetQuoteId = requestedQuoteId || authDetails.quoteId;
 
+    // Check if client passed a provider reference (e.g. from an underwriter catalog) and map to canonical ActionOS quoteId
+    const quoteMap = session.metadata?.providerToCanonicalQuoteMap as Record<string, string> | undefined;
+    if (quoteMap && quoteMap[targetQuoteId]) {
+      targetQuoteId = quoteMap[targetQuoteId];
+    }
+
     if (options?.selectedUnderwriter && !requestedQuoteId) {
       const match = authDetails.quotes?.find(
         (q) => q.underwriter.toLowerCase() === options.selectedUnderwriter!.toLowerCase()
@@ -739,8 +784,12 @@ export class ActionOSOrchestrator {
 
     // Verify targetQuoteId was among valid options presented to customer
     const presentedQuotes = authDetails.quotes || [];
-    const validQuoteIds = new Set<string>([authDetails.quoteId, ...presentedQuotes.map((q) => q.id)]);
-    if (!validQuoteIds.has(targetQuoteId)) {
+    const validQuoteIds = new Set<string>([
+      authDetails.quoteId,
+      ...presentedQuotes.map((q) => q.id),
+      ...presentedQuotes.map((q) => q.provider_reference).filter(Boolean) as string[],
+    ]);
+    if (!validQuoteIds.has(requestedQuoteId || targetQuoteId)) {
       sm.transition("failed", "Requested quoteId was not among options presented to customer");
       session.status = "failed";
       await repos.sessions.updateStatus(sessionId, "failed", undefined, tenantContext);
@@ -749,7 +798,7 @@ export class ActionOSOrchestrator {
         status: "failed",
         intent: plan.intent,
         confidence: plan.confidence,
-        message: `Guardrail Failure: Quote integrity violation. Quote '${targetQuoteId}' was not among the verified options presented to the customer. Authorization must bind to a verified, persisted quote record.`,
+        message: `Guardrail Failure: Quote integrity violation. Quote '${requestedQuoteId || targetQuoteId}' was not among the verified options presented to the customer. Authorization must bind to a verified, persisted quote record.`,
         authorizationRequired: false,
         authorizationDetails: null,
         events,
@@ -911,38 +960,29 @@ export class ActionOSOrchestrator {
       };
     }
 
-    // 1. Atomically claim session from awaiting_authorization -> executing
-    const claimedSession = await repos.sessions.claimAuthorization(sessionId, tenantContext);
-    if (!claimedSession) {
-      sm.transition("failed", "Concurrent authorization claim conflict");
+    // 1. Atomically claim session AND accept quote in a single atomic transaction/operation
+    const atomicClaim = await repos.sessions.claimAuthorizationAndAcceptQuote(
+      sessionId,
+      dbQuote.id,
+      tenantContext
+    );
+
+    if (!atomicClaim) {
+      sm.transition("failed", "Atomic authorization claim or quote acceptance failed");
       return {
         sessionId,
         status: "failed",
         intent: plan.intent,
         confidence: plan.confidence,
-        message: "Guardrail Failure: Concurrent authorization detected. Session has already been claimed or is executing.",
+        message: `Guardrail Failure: Atomic authorization conflict. Session or quote '${dbQuote.id}' could not be claimed and accepted atomically. Current status may not be 'issued' or session is already executing.`,
         authorizationRequired: false,
         authorizationDetails: null,
         events,
       };
     }
 
-    // 2. Atomically accept quote from issued -> accepted
-    const acceptedQuote = await repos.quotes.acceptQuote(dbQuote.id, sessionId, tenantContext);
-    if (!acceptedQuote) {
-      await repos.sessions.updateStatus(sessionId, "failed", undefined, tenantContext);
-      sm.transition("failed", "Quote could not be atomically accepted; status must be issued");
-      return {
-        sessionId,
-        status: "failed",
-        intent: plan.intent,
-        confidence: plan.confidence,
-        message: `Guardrail Failure: Quote ${dbQuote.id} could not be accepted atomically. Current status is '${dbQuote.status}'. Only 'issued' quotes can be accepted.`,
-        authorizationRequired: false,
-        authorizationDetails: null,
-        events,
-      };
-    }
+    const _claimedSession = atomicClaim.session;
+    const _acceptedQuote = atomicClaim.quote;
 
     sm.transition("executing", "Customer authorization confirmed; executing secure payment and renewal");
     session.status = "executing";
@@ -950,6 +990,24 @@ export class ActionOSOrchestrator {
     const authDesc = options?.authMethod === "biometric_webauthn"
       ? `WebAuthn Biometric Passkey authorization confirmed for ${formatNaira(quoteAmount)}.`
       : `Explicit authorization confirmed for ${formatNaira(quoteAmount)}. Proceeding with execution.`;
+
+    const consentRecord = {
+      quoteId: dbQuote.id,
+      amount: dbQuote.amount,
+      currency: dbQuote.currency,
+      provider: dbQuote.provider_name,
+      policyNumber: authDetails.policyNumber,
+      policyId: dbQuote.policy_id,
+      authorizedAt: new Date().toISOString(),
+      authenticatedActor: auth.userId || callerCustomerId || "User",
+      authMethod: options?.authMethod || "pin",
+    };
+
+    session.metadata = {
+      ...session.metadata,
+      consentRecord,
+    };
+    await repos.sessions.updateMetadata(sessionId, session.metadata, tenantContext);
 
     await this.appendLedgerEvent(events, {
       id: `ev_${Date.now()}_auth_ok`,
@@ -959,7 +1017,11 @@ export class ActionOSOrchestrator {
       description: authDesc,
       status: "verified",
       actor: "User",
-      metadata: { authMethod: options?.authMethod || "pin", selectedUnderwriter: options?.selectedUnderwriter },
+      referenceId: dbQuote.id,
+      metadata: {
+        ...consentRecord,
+        selectedUnderwriter: dbQuote.provider_name,
+      },
     });
 
     const execContext = createWorkflowExecutionContext(auth, {
@@ -1047,15 +1109,16 @@ export class ActionOSOrchestrator {
 
       if (step.tool_name === "request_payment") {
         stepOverride.customerId = targetCustomerId;
-        stepOverride.amount = quoteAmount;
-        stepOverride.currency = "NGN";
+        stepOverride.amount = dbQuote.amount;
+        stepOverride.currency = dbQuote.currency || "NGN";
         stepOverride.policyNumber = policyNumber;
       } else if (step.tool_name === "verify_payment") {
         stepOverride.reference = paymentReference;
-        stepOverride.expectedAmount = quoteAmount;
+        stepOverride.expectedAmount = dbQuote.amount;
       } else if (step.tool_name === "renew_policy") {
         stepOverride.policyNumber = policyNumber;
         stepOverride.paymentReference = paymentReference;
+        stepOverride.underwriter = dbQuote.provider_name;
       } else if (step.tool_name === "generate_certificate") {
         stepOverride.customerId = targetCustomerId;
         stepOverride.policyNumber = policyNumber;
@@ -1063,12 +1126,14 @@ export class ActionOSOrchestrator {
           stepOverride.previousExpiry = currentExpiry;
         }
         stepOverride.newExpiry = renewalOutput.newExpiry || targetNewExpiry;
-        stepOverride.amount = quoteAmount;
+        stepOverride.amount = dbQuote.amount;
+        stepOverride.underwriter = dbQuote.provider_name;
       } else if (step.tool_name === "send_notification") {
         stepOverride.customerId = targetCustomerId;
         stepOverride.policyNumber = policyNumber;
         stepOverride.newExpiry = renewalOutput.newExpiry || targetNewExpiry;
-        stepOverride.amount = quoteAmount;
+        stepOverride.amount = dbQuote.amount;
+        stepOverride.underwriter = dbQuote.provider_name;
       } else if (step.tool_name === "schedule_reminder") {
         stepOverride.customerId = targetCustomerId;
         stepOverride.policyNumber = policyNumber;
@@ -1194,7 +1259,7 @@ export class ActionOSOrchestrator {
       ? `${authDetails.assetName}${authDetails.assetIdentifier ? ` (${authDetails.assetIdentifier})` : ""}`
       : policyNumber;
 
-    return {
+      return {
       sessionId,
       status: "completed",
       intent: plan.intent,
@@ -1203,6 +1268,107 @@ export class ActionOSOrchestrator {
       authorizationRequired: false,
       authorizationDetails: null,
       events,
+    };
+  }
+
+  /**
+   * Safe recovery and reconciliation process for sessions stuck in 'executing' state.
+   * Reconciles against actual payment provider transactions before taking any action.
+   * Never blindly retries payment on timeout.
+   */
+  async reconcileExecutingSession(
+    sessionId: string,
+    tenantContext?: TenantContext
+  ): Promise<{
+    sessionId: string;
+    resolvedStatus: ActionSession["status"];
+    reconciliationAction: "completed_renewal" | "refunded_uncompleted" | "cancelled_unpaid" | "escalated";
+    message: string;
+  }> {
+    const repos = getRepositoryContainer();
+    const session = await repos.sessions.findById(sessionId, tenantContext);
+    if (!session) {
+      throw new Error(`Session not found for reconciliation: ${sessionId}`);
+    }
+
+    if (session.status !== "executing") {
+      return {
+        sessionId,
+        resolvedStatus: session.status,
+        reconciliationAction: "escalated",
+        message: `Session is in '${session.status}', not 'executing'. No reconciliation needed.`,
+      };
+    }
+
+    const authDetails = session.metadata?.authorizationDetails as AuthorizationDetails | undefined;
+    const policyNumber = authDetails?.policyNumber;
+    const sanitizedSession = sessionId.replace(/-/g, "").substring(0, 16);
+    const sanitizedPolicy = policyNumber ? policyNumber.replace(/[^a-zA-Z0-9]/g, "") : "unknown";
+    const deterministicRef = `act_${sanitizedSession}_pay_${sanitizedPolicy}`;
+
+    // Inspect payment provider transactions
+    const tx = await repos.transactions.findByReference(deterministicRef, tenantContext);
+
+    if (tx && tx.status === "succeeded") {
+      // Payment was settled! Check if policy renewal was finished:
+      let policy = null;
+      if (policyNumber) {
+        policy = await repos.policies.findByNumber(policyNumber, tenantContext);
+      }
+
+      if (policy && policy.status === "renewed") {
+        // Renewal is already complete; mark session completed
+        await repos.sessions.updateStatus(sessionId, "completed", new Date().toISOString(), tenantContext);
+        return {
+          sessionId,
+          resolvedStatus: "completed",
+          reconciliationAction: "completed_renewal",
+          message: "Payment confirmed settled and policy is renewed. Session marked completed.",
+        };
+      }
+
+      // Payment succeeded but policy renewal failed: perform compensating refund
+      const refundTool = toolRegistry.get("refund_payment");
+      if (refundTool) {
+        const refundExecCtx = createWorkflowExecutionContext(
+          {
+            userId: session.customer_id || "recovery_agent",
+            profileId: "recovery_profile",
+            organizationId: session.organization_id,
+            customerId: session.customer_id || undefined,
+            role: "manager",
+            isDemo: false,
+          },
+          { sessionId, planId: "recovery_plan", channel: session.channel, language: session.language }
+        );
+
+        await refundTool.execute(
+          {
+            reference: deterministicRef,
+            amount: tx.amount,
+            currency: tx.currency,
+            reason: "Reconciliation Recovery: Payment settled but renewal was uncompleted.",
+          },
+          refundExecCtx
+        );
+      }
+
+      await repos.sessions.updateStatus(sessionId, "escalated", undefined, tenantContext);
+      return {
+        sessionId,
+        resolvedStatus: "escalated",
+        reconciliationAction: "refunded_uncompleted",
+        message: "Payment was settled but downstream renewal failed. Customer was refunded and session escalated.",
+      };
+    }
+
+    // Payment never succeeded or transaction does not exist. Do NOT retry blindly!
+    await repos.sessions.updateStatus(sessionId, "failed", undefined, tenantContext);
+    return {
+      sessionId,
+      resolvedStatus: "failed",
+      reconciliationAction: "cancelled_unpaid",
+      message: "No settled payment found with gateway. Session safely failed closed without charging customer.",
     };
   }
 }

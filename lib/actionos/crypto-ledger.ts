@@ -148,6 +148,18 @@ export function verifyLedgerIntegrity(
   for (let i = 0; i < events.length; i++) {
     const ev = events[i];
 
+    // Verify sequence continuity if sequenceNumber is defined on events
+    if (typeof ev.sequenceNumber === "number") {
+      const expectedSeq = i + 1;
+      if (ev.sequenceNumber !== expectedSeq) {
+        return {
+          valid: false,
+          tamperedIndex: i,
+          reason: `Broken sequence continuity at index ${i}: expected sequence number ${expectedSeq} but got ${ev.sequenceNumber}`,
+        };
+      }
+    }
+
     // Verify previous hash link
     if (ev.previousHash && ev.previousHash !== expectedPrevHash) {
       return {

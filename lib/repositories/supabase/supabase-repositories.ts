@@ -572,6 +572,76 @@ export class SupabaseActionSessionRepository implements IActionSessionRepository
     }
     return (data || null) as ActionSession | null;
   }
+
+  async claimAuthorizationAndAcceptQuote(
+    sessionId: string,
+    quoteId: string,
+    tenant?: TenantContext
+  ): Promise<{ session: ActionSession; quote: Quote } | null> {
+    // Attempt Postgres RPC first for single-transaction atomic execution
+    try {
+      const { data: rpcResult, error: rpcError } = await this.client.rpc("claim_and_accept_quote", {
+        p_session_id: sessionId,
+        p_quote_id: quoteId,
+        p_organization_id: tenant?.organizationId,
+        p_customer_id: tenant?.customerId ?? null,
+      });
+
+      if (!rpcError && rpcResult && rpcResult.success) {
+        return {
+          session: rpcResult.session as ActionSession,
+          quote: rpcResult.quote as Quote,
+        };
+      }
+    } catch {
+      // Fallback to application-level transactional CAS if RPC is not available in environment
+    }
+
+    // Step 1: Conditionally claim session awaiting_authorization -> executing
+    const claimedSession = await this.claimAuthorization(sessionId, tenant);
+    if (!claimedSession) {
+      return null;
+    }
+
+    // Step 2: Conditionally accept quote issued -> accepted
+    let quoteQuery = this.client
+      .from("quotes")
+      .update({
+        status: "accepted",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", quoteId)
+      .eq("session_id", sessionId)
+      .eq("status", "issued");
+
+    if (tenant?.organizationId) {
+      quoteQuery = quoteQuery.eq("organization_id", tenant.organizationId);
+    }
+    if (tenant?.customerId) {
+      quoteQuery = quoteQuery.eq("customer_id", tenant.customerId);
+    }
+
+    const { data: quoteData, error: quoteError } = await quoteQuery.select("*").maybeSingle();
+
+    if (quoteError || !quoteData) {
+      // ROLLBACK: Revert session claim back to awaiting_authorization so it is never left in executing!
+      await this.client
+        .from("action_sessions")
+        .update({
+          status: "awaiting_authorization",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", sessionId)
+        .eq("status", "executing");
+
+      return null;
+    }
+
+    return {
+      session: claimedSession,
+      quote: quoteData as Quote,
+    };
+  }
 }
 
 export class SupabaseActionPlanRepository implements IActionPlanRepository {
@@ -1094,23 +1164,28 @@ export class SupabaseQuoteRepository implements IQuoteRepository {
       throw new DatabaseError("Tenant authorization violation: customer mismatch on quote create", "UNAUTHORIZED");
     }
 
+    const insertPayload: Record<string, unknown> = {
+      session_id: data.session_id,
+      organization_id: data.organization_id,
+      customer_id: data.customer_id,
+      policy_id: data.policy_id,
+      underwriter_id: data.underwriter_id ?? null,
+      provider_name: data.provider_name,
+      amount: data.amount,
+      currency: data.currency ?? "NGN",
+      status: data.status ?? "issued",
+      expires_at: data.expires_at,
+      quote_hash: data.quote_hash ?? "sha256_unhashed",
+      provider_reference: data.provider_reference ?? null,
+      metadata: data.metadata ?? {},
+    };
+    if (data.id) {
+      insertPayload.id = data.id;
+    }
+
     const { data: created, error } = await this.client
       .from("quotes")
-      .insert({
-        session_id: data.session_id,
-        organization_id: data.organization_id,
-        customer_id: data.customer_id,
-        policy_id: data.policy_id,
-        underwriter_id: data.underwriter_id ?? null,
-        provider_name: data.provider_name,
-        amount: data.amount,
-        currency: data.currency ?? "NGN",
-        status: data.status ?? "issued",
-        expires_at: data.expires_at,
-        quote_hash: data.quote_hash ?? "sha256_unhashed",
-        provider_reference: data.provider_reference ?? null,
-        metadata: data.metadata ?? {},
-      })
+      .insert(insertPayload)
       .select("*")
       .single();
 

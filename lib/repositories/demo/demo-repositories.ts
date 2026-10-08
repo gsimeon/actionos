@@ -393,6 +393,30 @@ export class DemoActionSessionRepository implements IActionSessionRepository {
     session.status = "executing";
     return session;
   }
+
+  async claimAuthorizationAndAcceptQuote(
+    sessionId: string,
+    quoteId: string,
+    tenant?: TenantContext
+  ): Promise<{ session: ActionSession; quote: Quote } | null> {
+    const store = getStore();
+    const session = store.sessions.find((s) => s.id === sessionId);
+    if (!session) return null;
+    if (tenant?.organizationId && session.organization_id !== tenant.organizationId) return null;
+    if (tenant?.customerId && session.customer_id && session.customer_id !== tenant.customerId) return null;
+    if (session.status !== "awaiting_authorization") return null;
+
+    const quote = store.quotes.find((q) => q.id === quoteId);
+    if (!quote) return null;
+    if (quote.session_id !== sessionId) return null;
+    if (tenant?.organizationId && quote.organization_id !== tenant.organizationId) return null;
+    if (tenant?.customerId && quote.customer_id && quote.customer_id !== tenant.customerId) return null;
+    if (quote.status !== "issued") return null;
+
+    session.status = "executing";
+    quote.status = "accepted";
+    return { session, quote };
+  }
 }
 
 export class DemoActionPlanRepository implements IActionPlanRepository {
