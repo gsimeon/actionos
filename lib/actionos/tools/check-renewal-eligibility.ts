@@ -46,7 +46,7 @@ export class CheckRenewalEligibilityTool implements IActionOSTool<EligibilityInp
     if (!policy && input.policyId) {
       policy = (await repos.policies.findById(input.policyId, tenantContext)) || undefined;
     }
-    if (!policy) {
+    if (!policy && context.isSimulated) {
       policy = (await repos.policies.findByNumber("AUTO-2026-00182", tenantContext)) || undefined;
     }
 

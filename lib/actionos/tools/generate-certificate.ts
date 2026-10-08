@@ -15,6 +15,10 @@ export interface CertOutput {
   documentNumber: string;
   fileUrl: string;
   document: Document;
+  isSimulated: boolean;
+  authority: string;
+  legalStatus: "SIMULATED_DEMO_NON_STATUTORY" | "STATUTORY_OFFICIAL_ISSUED";
+  statutoryNotice: string;
 }
 
 export class GenerateCertificateTool implements IActionOSTool<GenerateCertInput, CertOutput> {
@@ -44,6 +48,14 @@ export class GenerateCertificateTool implements IActionOSTool<GenerateCertInput,
       role: context.auth.role,
     };
     const docNumber = `CERT-ACT-${Date.now().toString().slice(-6)}`;
+    const isSimulated = Boolean(context.isSimulated || context.auth.isDemo);
+    const authority = isSimulated
+      ? "ActionOS Simulation Sandbox (Non-Statutory Demo Certificate)"
+      : "NAICOM Digital Statutory Certificate Portal";
+    const legalStatus = isSimulated ? "SIMULATED_DEMO_NON_STATUTORY" : "STATUTORY_OFFICIAL_ISSUED";
+    const statutoryNotice = isSimulated
+      ? "DEMO SIMULATION: Non-statutory sandbox document for demonstration and testing. Does not confer legal insurance coverage under the Insurance Act."
+      : "STATUTORY DOCUMENT: Issued under the regulatory supervision of the National Insurance Commission (NAICOM).";
 
     const docRecord = await repos.documents.create(
       {
@@ -51,7 +63,9 @@ export class GenerateCertificateTool implements IActionOSTool<GenerateCertInput,
         renewal_id: null,
         document_type: "certificate",
         file_path: `/documents/certificates/${docNumber}.pdf`,
-        file_name: `Motor_Insurance_Certificate_${input.policyNumber}.pdf`,
+        file_name: isSimulated
+          ? `SIMULATED_DEMO_Certificate_${input.policyNumber}.pdf`
+          : `Motor_Insurance_Certificate_${input.policyNumber}.pdf`,
         mime_type: "application/pdf",
         status: "generated",
       },
@@ -65,6 +79,10 @@ export class GenerateCertificateTool implements IActionOSTool<GenerateCertInput,
         documentNumber: docNumber,
         fileUrl: `/dashboard/documents?id=${docRecord.id}`,
         document: docRecord,
+        isSimulated,
+        authority,
+        legalStatus,
+        statutoryNotice,
       },
     };
   }

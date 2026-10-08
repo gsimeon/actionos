@@ -13,6 +13,9 @@ export interface VerifyPaymentOutput {
   amount: number;
   currency: string;
   paidAt: string;
+  isSimulated: boolean;
+  gatewayChannel: "sandbox_simulation" | "paystack_live";
+  verificationSource: string;
 }
 
 export class VerifyPaymentTool implements IActionOSTool<VerifyPaymentInput, VerifyPaymentOutput> {
@@ -34,7 +37,7 @@ export class VerifyPaymentTool implements IActionOSTool<VerifyPaymentInput, Veri
     return { valid: true, data };
   }
 
-  async execute(input: VerifyPaymentInput, _context: WorkflowExecutionContext): Promise<ToolResult<VerifyPaymentOutput>> {
+  async execute(input: VerifyPaymentInput, context: WorkflowExecutionContext): Promise<ToolResult<VerifyPaymentOutput>> {
     try {
       const verification = await mockPaymentProvider.verifyPayment(input.reference);
 
@@ -55,6 +58,8 @@ export class VerifyPaymentTool implements IActionOSTool<VerifyPaymentInput, Veri
         };
       }
 
+      const isSimulated = Boolean(context.isSimulated || context.auth.isDemo);
+
       return {
         success: true,
         data: {
@@ -63,6 +68,11 @@ export class VerifyPaymentTool implements IActionOSTool<VerifyPaymentInput, Veri
           amount: verification.amount,
           currency: verification.currency,
           paidAt: verification.paidAt,
+          isSimulated,
+          gatewayChannel: isSimulated ? "sandbox_simulation" : "paystack_live",
+          verificationSource: isSimulated
+            ? "ActionOS Simulation Sandbox Gateway (Mock Paystack Rail)"
+            : "Paystack Direct Verification API (live_settlement)",
         },
       };
     } catch (err: unknown) {

@@ -132,6 +132,7 @@ export interface UnderwriterQuote {
 
 // Authorization Quote Request
 export interface AuthorizationDetails {
+  quoteId: string;
   sessionId: string;
   policyNumber: string;
   policyId?: string;

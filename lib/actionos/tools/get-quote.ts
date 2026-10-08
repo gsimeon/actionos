@@ -51,7 +51,7 @@ export class GetQuoteTool implements IActionOSTool<GetQuoteInput, QuoteOutput> {
     if (!policy && input.policyId) {
       policy = (await repos.policies.findById(input.policyId, tenantContext)) || undefined;
     }
-    if (!policy) {
+    if (!policy && context.isSimulated) {
       policy = (await repos.policies.findByNumber("AUTO-2026-00182", tenantContext)) || undefined;
     }
 
@@ -65,8 +65,17 @@ export class GetQuoteTool implements IActionOSTool<GetQuoteInput, QuoteOutput> {
       };
     }
 
-    // Benchmark quote calculation: AUTO-2026-00182 has exact ₦87,500
-    const quoteAmount = policy.premium || 87500;
+    if (!policy.premium || policy.premium <= 0) {
+      return {
+        success: false,
+        error: {
+          code: "INVALID_POLICY_PREMIUM",
+          message: "Cannot generate quote: Policy does not specify a valid premium amount.",
+        },
+      };
+    }
+
+    const quoteAmount = policy.premium;
     const basePremium = Math.round(quoteAmount / 1.075);
     const vat = quoteAmount - basePremium;
 

@@ -245,7 +245,7 @@ export class ActionOSOrchestrator {
 
     let activeCustomer: Customer | undefined;
     let activePolicy: Policy | undefined;
-    let quoteAmount = 87500;
+    let quoteAmount: number | undefined;
     let availableQuotes: UnderwriterQuote[] = [];
     let requiresAuth = false;
     let authDetails: AuthorizationDetails | null = null;
@@ -316,6 +316,22 @@ export class ActionOSOrchestrator {
 
     // 4. Yield at AUTHORIZATION GATE if confirmation is required
     if (requiresAuth && activePolicy) {
+      if (quoteAmount === undefined || quoteAmount <= 0) {
+        sm.transition("failed", "Missing valid quote for authorization gate");
+        session.status = "failed";
+        await repos.sessions.updateStatus(sessionId, "failed");
+        return {
+          sessionId,
+          status: "failed",
+          intent: understanding.intent,
+          confidence: understanding.confidence,
+          message: "ActionOS halted: Missing valid quote amount. Authorization requires a verified, unexpired quote.",
+          authorizationRequired: false,
+          authorizationDetails: null,
+          events,
+        };
+      }
+
       sm.transition("awaiting_authorization", "Halting workflow at Cryptographic Authorization Gate");
       session.status = "awaiting_authorization";
 
@@ -325,9 +341,26 @@ export class ActionOSOrchestrator {
 
       const providerName =
         (vehicleMeta.underwriter as string) ||
+        (vehicleMeta.provider_name as string) ||
         (vehicleMeta.provider as string) ||
         (vehicleMeta.insurance_company as string) ||
-        "Leadway Assurance";
+        (availableQuotes.length > 0 ? availableQuotes[0].underwriter : undefined);
+
+      if (!providerName) {
+        sm.transition("failed", "Missing underwriter/provider identity for renewal policy");
+        session.status = "failed";
+        await repos.sessions.updateStatus(sessionId, "failed");
+        return {
+          sessionId,
+          status: "failed",
+          intent: understanding.intent,
+          confidence: understanding.confidence,
+          message: "ActionOS halted: Missing insurer/provider identity. Authorization requires a verified underwriter.",
+          authorizationRequired: false,
+          authorizationDetails: null,
+          events,
+        };
+      }
 
       const assetIdentifier =
         (vehicleMeta.vehicle_reg as string) ||
@@ -340,9 +373,13 @@ export class ActionOSOrchestrator {
         (vehicleMeta.vehicle_name as string) ||
         (vehicleMeta.make_model as string) ||
         (vehicleMeta.asset_name as string) ||
-        "Insured Asset";
+        (activePolicy.policy_number ? `Asset for ${activePolicy.policy_number}` : "Insured Asset");
+
+      const matchedQuote = availableQuotes.find((q) => q.amount === quoteAmount) || availableQuotes[0];
+      const quoteId = matchedQuote?.id || `quo_${activePolicy.policy_number}_${sessionId.slice(0, 8)}`;
 
       authDetails = {
+        quoteId,
         sessionId,
         customerName: activeCustomer?.full_name || "Customer",
         providerName,
@@ -519,15 +556,72 @@ export class ActionOSOrchestrator {
     // 1. Guardrail Check on Authorization
     const authDetails = session.metadata?.authorizationDetails as AuthorizationDetails | undefined;
 
+    if (!authDetails || !authDetails.quoteId || typeof authDetails.amount !== "number" || authDetails.amount <= 0) {
+      sm.transition("failed", "Missing required quote details for authorization");
+      session.status = "failed";
+      await repos.sessions.updateStatus(sessionId, "failed");
+      return {
+        sessionId,
+        status: "failed",
+        intent: plan.intent,
+        confidence: plan.confidence,
+        message: "Guardrail Failure: Authorization must bind to a verified, persisted quote.",
+        authorizationRequired: false,
+        authorizationDetails: null,
+        events,
+      };
+    }
+
+    // Verify quote expiration
+    if (authDetails.expiresAt && new Date(authDetails.expiresAt).getTime() < Date.now()) {
+      sm.transition("failed", "Quote has expired");
+      session.status = "failed";
+      await repos.sessions.updateStatus(sessionId, "failed");
+      return {
+        sessionId,
+        status: "failed",
+        intent: plan.intent,
+        confidence: plan.confidence,
+        message: "Guardrail Failure: Quote has expired. A fresh renewal quote must be requested.",
+        authorizationRequired: false,
+        authorizationDetails: null,
+        events,
+      };
+    }
+
     // Check if user selected an alternative underwriter quote from the marketplace
-    const selectedQuote = authDetails?.quotes?.find(
+    const selectedQuote = authDetails.quotes?.find(
       (q) =>
         (options?.selectedUnderwriter && q.underwriter.toLowerCase() === options.selectedUnderwriter.toLowerCase()) ||
         (options?.customAmount && q.amount === options.customAmount)
     );
 
-    const quoteAmount = selectedQuote?.amount || options?.customAmount || (session.metadata?.quoteAmount as number) || 87500;
-    const expectedAuthAmount = selectedQuote ? selectedQuote.amount : (authDetails?.amount || quoteAmount);
+    let quoteAmount: number;
+    if (selectedQuote) {
+      quoteAmount = selectedQuote.amount;
+    } else if (options?.customAmount) {
+      const validCustom = authDetails.quotes?.find((q) => q.amount === options.customAmount);
+      if (!validCustom && options.customAmount !== authDetails.amount) {
+        sm.transition("failed", "Requested custom amount does not match any verified quote");
+        session.status = "failed";
+        await repos.sessions.updateStatus(sessionId, "failed");
+        return {
+          sessionId,
+          status: "failed",
+          intent: plan.intent,
+          confidence: plan.confidence,
+          message: "Guardrail Failure: Custom amount does not match any approved underwriter quote.",
+          authorizationRequired: false,
+          authorizationDetails: null,
+          events,
+        };
+      }
+      quoteAmount = options.customAmount;
+    } else {
+      quoteAmount = authDetails.amount;
+    }
+
+    const expectedAuthAmount = selectedQuote ? selectedQuote.amount : authDetails.amount;
 
     const guardCheck = this.guardrails.validateAuthorization(true, quoteAmount, expectedAuthAmount);
     if (!guardCheck.passed) {

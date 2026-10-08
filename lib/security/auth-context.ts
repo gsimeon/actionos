@@ -101,34 +101,54 @@ export async function resolveExecutionContext(_req?: Request): Promise<Authentic
       throw new AuthContextError("PROFILE_NOT_FOUND", `User profile not found for auth user ID: ${user.id}`);
     }
 
-    // Resolve organization membership & role
-    const { data: member, error: memberError } = await supabase
+    // Resolve organization membership & role with multi-tenant support
+    const requestedOrgId =
+      _req?.headers.get("x-organization-id") ||
+      cookieStore.get("current_organization_id")?.value ||
+      cookieStore.get("actionos_org_id")?.value;
+
+    let memberQuery = supabase
       .from("organization_members")
       .select("organization_id, role")
       .eq("profile_id", profile.id)
-      .eq("status", "active")
-      .maybeSingle();
+      .eq("status", "active");
+
+    if (requestedOrgId) {
+      memberQuery = memberQuery.eq("organization_id", requestedOrgId);
+    } else {
+      memberQuery = memberQuery.order("created_at", { ascending: false });
+    }
+
+    const { data: members, error: memberError } = await memberQuery;
 
     if (memberError) {
       throw new AuthContextError("AUTH_ERROR", `Failed querying organization membership: ${memberError.message}`);
     }
 
-    if (!member) {
-      throw new AuthContextError("FORBIDDEN", `No active organization membership found for profile ${profile.id}`);
+    if (!members || members.length === 0) {
+      throw new AuthContextError(
+        "FORBIDDEN",
+        requestedOrgId
+          ? `User does not have an active membership in requested organization: ${requestedOrgId}`
+          : `No active organization membership found for profile ${profile.id}`
+      );
     }
 
-    // Resolve linked customer if customer role
+    const activeMember = members[0];
+
+    // Resolve linked customer strictly scoped to the active organization
     const { data: customer } = await supabase
       .from("customers")
       .select("id")
       .eq("profile_id", profile.id)
+      .eq("organization_id", activeMember.organization_id)
       .maybeSingle();
 
     return {
       userId: user.id,
       profileId: profile.id,
-      organizationId: member.organization_id,
-      role: member.role as MemberRole,
+      organizationId: activeMember.organization_id,
+      role: activeMember.role as MemberRole,
       customerId: customer?.id,
       isDemo: false,
     };
