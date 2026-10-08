@@ -285,6 +285,9 @@ export class SupabasePolicyRepository implements IPolicyRepository {
       })
       .eq("id", id);
 
+    if (tenant?.organizationId) {
+      query = query.eq("organization_id", tenant.organizationId);
+    }
     if (tenant?.customerId) {
       query = query.eq("customer_id", tenant.customerId);
     }
@@ -545,6 +548,30 @@ export class SupabaseActionSessionRepository implements IActionSessionRepository
     if (error || !data) throw new DatabaseError(`Failed to update session metadata: ${error?.message}`, error?.code, error);
     return data as ActionSession;
   }
+
+  async claimAuthorization(sessionId: string, tenant?: TenantContext): Promise<ActionSession | null> {
+    let query = this.client
+      .from("action_sessions")
+      .update({
+        status: "executing",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", sessionId)
+      .eq("status", "awaiting_authorization");
+
+    if (tenant?.organizationId) {
+      query = query.eq("organization_id", tenant.organizationId);
+    }
+    if (tenant?.customerId) {
+      query = query.eq("customer_id", tenant.customerId);
+    }
+
+    const { data, error } = await query.select("*").maybeSingle();
+    if (error) {
+      throw new DatabaseError(`Failed to atomically claim session authorization: ${error.message}`, error.code, error);
+    }
+    return (data || null) as ActionSession | null;
+  }
 }
 
 export class SupabaseActionPlanRepository implements IActionPlanRepository {
@@ -715,15 +742,19 @@ export class SupabaseActionStepRepository implements IActionStepRepository {
       }
     }
 
-    const { data, error } = await this.client
+    let query = this.client
       .from("action_steps")
       .update({
         ...update,
         updated_at: new Date().toISOString(),
       })
-      .eq("id", id)
-      .select("*")
-      .single();
+      .eq("id", id);
+
+    if (tenant?.organizationId) {
+      query = query.eq("organization_id", tenant.organizationId);
+    }
+
+    const { data, error } = await query.select("*").single();
     if (error || !data) throw new DatabaseError(`Failed to update step: ${error?.message}`, error?.code, error);
     return data as ActionStep;
   }
@@ -803,6 +834,9 @@ export class SupabaseTransactionRepository implements ITransactionRepository {
       })
       .eq("id", id);
 
+    if (tenant?.organizationId) {
+      query = query.eq("organization_id", tenant.organizationId);
+    }
     if (tenant?.customerId) {
       query = query.eq("customer_id", tenant.customerId);
     }
@@ -1147,6 +1181,31 @@ export class SupabaseQuoteRepository implements IQuoteRepository {
       throw new DatabaseError(`Failed to update quote status: ${error?.message}`, error?.code, error);
     }
     return data as Quote;
+  }
+
+  async acceptQuote(id: string, sessionId: string, tenant?: TenantContext): Promise<Quote | null> {
+    let query = this.client
+      .from("quotes")
+      .update({
+        status: "accepted",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", id)
+      .eq("status", "issued")
+      .eq("session_id", sessionId);
+
+    if (tenant?.organizationId) {
+      query = query.eq("organization_id", tenant.organizationId);
+    }
+    if (tenant?.customerId) {
+      query = query.eq("customer_id", tenant.customerId);
+    }
+
+    const { data, error } = await query.select("*").maybeSingle();
+    if (error) {
+      throw new DatabaseError(`Failed to atomically accept quote: ${error.message}`, error.code, error);
+    }
+    return (data || null) as Quote | null;
   }
 }
 

@@ -274,6 +274,7 @@ export interface ActionPlan {
 export interface ActionStep {
   id: string;
   action_plan_id: string;
+  organization_id?: string;
   sequence: number;
   action_type: string;
   description: string;
@@ -328,6 +329,7 @@ export interface ToolExecution {
 export interface Transaction {
   id: string;
   customer_id: string;
+  organization_id?: string;
   renewal_id: string | null;
   amount: number;
   currency: string;

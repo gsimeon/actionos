@@ -54,6 +54,7 @@ export interface IActionSessionRepository {
   create(data: Partial<ActionSession> & { organization_id: string; channel: ActionSession["channel"] }, tenant?: TenantContext): Promise<ActionSession>;
   updateStatus(id: string, status: ActionSession["status"], completedAt?: string, tenant?: TenantContext): Promise<ActionSession>;
   updateMetadata(id: string, metadata: Record<string, unknown>, tenant?: TenantContext): Promise<ActionSession>;
+  claimAuthorization(sessionId: string, tenant?: TenantContext): Promise<ActionSession | null>;
 }
 
 export interface IActionPlanRepository {
@@ -112,6 +113,7 @@ export interface IQuoteRepository {
   findById(id: string, tenant?: TenantContext): Promise<Quote | null>;
   findBySessionId(sessionId: string, tenant?: TenantContext): Promise<Quote[]>;
   updateStatus(id: string, status: Quote["status"], tenant?: TenantContext): Promise<Quote>;
+  acceptQuote(id: string, sessionId: string, tenant?: TenantContext): Promise<Quote | null>;
 }
 
 export interface RepositoryContainer {

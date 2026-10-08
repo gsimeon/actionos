@@ -37,8 +37,10 @@ export class RequestPaymentTool implements IActionOSTool<RequestPaymentInput, Pa
   }
 
   async execute(input: RequestPaymentInput, context: WorkflowExecutionContext): Promise<ToolResult<PaymentRequestOutput>> {
-    // Idempotency key per session
-    const reference = `act_${context.sessionId.substring(0, 8)}_pay_${Date.now()}`;
+    // Deterministic idempotency reference per session and policy to prevent duplicate debits
+    const sanitizedSession = context.sessionId.replace(/-/g, "").substring(0, 16);
+    const sanitizedPolicy = input.policyNumber.replace(/[^a-zA-Z0-9]/g, "");
+    const reference = `act_${sanitizedSession}_pay_${sanitizedPolicy}`;
 
     try {
       const res = await mockPaymentProvider.requestPayment({

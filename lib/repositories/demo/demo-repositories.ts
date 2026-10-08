@@ -382,6 +382,17 @@ export class DemoActionSessionRepository implements IActionSessionRepository {
     session.metadata = { ...session.metadata, ...metadata };
     return session;
   }
+
+  async claimAuthorization(id: string, tenant?: TenantContext): Promise<ActionSession | null> {
+    const store = getStore();
+    const session = store.sessions.find((s) => s.id === id);
+    if (!session) return null;
+    if (tenant?.organizationId && session.organization_id !== tenant.organizationId) return null;
+    if (tenant?.customerId && session.customer_id && session.customer_id !== tenant.customerId) return null;
+    if (session.status !== "awaiting_authorization") return null;
+    session.status = "executing";
+    return session;
+  }
 }
 
 export class DemoActionPlanRepository implements IActionPlanRepository {
@@ -488,11 +499,27 @@ export class DemoActionStepRepository implements IActionStepRepository {
     return store.steps.filter((s) => s.action_plan_id === planId);
   }
 
-  async updateStep(id: string, update: Partial<ActionStep>, _tenant?: TenantContext): Promise<ActionStep> {
+  async updateStep(id: string, update: Partial<ActionStep>, tenant?: TenantContext): Promise<ActionStep> {
     const store = getStore();
     const step = store.steps.find((s) => s.id === id);
     if (!step) {
       throw new Error(`Action step not found: ${id}`);
+    }
+    if (tenant?.organizationId || tenant?.customerId) {
+      const plan = store.plans.find((p) => p.id === step.action_plan_id);
+      if (!plan) {
+        throw new Error(`Action plan not found for step: ${id}`);
+      }
+      const session = store.sessions.find((s) => s.id === plan.session_id);
+      if (!session) {
+        throw new Error(`Action session not found for step: ${id}`);
+      }
+      if (tenant.organizationId && session.organization_id !== tenant.organizationId) {
+        throw new Error(`Tenant authorization violation for action step ${id}`);
+      }
+      if (tenant.customerId && session.customer_id && session.customer_id !== tenant.customerId) {
+        throw new Error(`Tenant authorization violation for action step ${id}`);
+      }
     }
     Object.assign(step, update);
     return step;
@@ -780,6 +807,19 @@ export class DemoQuoteRepository implements IQuoteRepository {
       throw new Error(`Tenant authorization violation for quote ${id}`);
     }
     quote.status = status;
+    quote.updated_at = new Date().toISOString();
+    return quote;
+  }
+
+  async acceptQuote(id: string, sessionId: string, tenant?: TenantContext): Promise<Quote | null> {
+    const store = getStore();
+    const quote = store.quotes.find((q) => q.id === id);
+    if (!quote) return null;
+    if (tenant?.organizationId && quote.organization_id !== tenant.organizationId) return null;
+    if (tenant?.customerId && quote.customer_id !== tenant.customerId) return null;
+    if (quote.session_id !== sessionId) return null;
+    if (quote.status !== "issued") return null;
+    quote.status = "accepted";
     quote.updated_at = new Date().toISOString();
     return quote;
   }

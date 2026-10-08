@@ -25,6 +25,7 @@ import crypto from "node:crypto";
 import { isDemoMode, isProductionMode } from "@/lib/runtime/mode";
 import { formatNaira, formatDate } from "@/lib/utils";
 import { createWorkflowExecutionContext } from "@/lib/runtime/execution-context";
+import { computeQuoteSignature, verifyQuoteSignature } from "@/lib/actionos/quote-signature";
 
 export interface StartWorkflowInput {
   inputText: string;
@@ -381,17 +382,21 @@ export class ActionOSOrchestrator {
         (vehicleMeta.asset_name as string) ||
         (activePolicy.policy_number ? `Asset for ${activePolicy.policy_number}` : "Insured Asset");
 
-      const matchedQuote = availableQuotes.find((q) => q.amount === quoteAmount) || availableQuotes.find((q) => q.isRecommended) || availableQuotes[0];
+      // Require exact match on amount and currency - fail closed if no match
+      const targetCurrency = activePolicy.currency || "NGN";
+      const matchedQuote = availableQuotes.find(
+        (q) => q.amount === quoteAmount && (q.currency || "NGN") === targetCurrency
+      );
       if (!matchedQuote || !matchedQuote.id) {
-        sm.transition("failed", "Missing verified quote record from issued quotes");
+        sm.transition("failed", "No issued underwriter quote exactly matches calculated quote amount and currency");
         session.status = "failed";
-        await repos.sessions.updateStatus(sessionId, "failed");
+        await repos.sessions.updateStatus(sessionId, "failed", undefined, tenantContext);
         return {
           sessionId,
           status: "failed",
           intent: understanding.intent,
           confidence: understanding.confidence,
-          message: "ActionOS halted: Missing valid quote record. Authorization requires an issued underwriter quote.",
+          message: "ActionOS halted: Quote selection integrity violation. Calculated amount does not match any verified underwriter quote exactly. Failing closed.",
           authorizationRequired: false,
           authorizationDetails: null,
           events,
@@ -401,8 +406,16 @@ export class ActionOSOrchestrator {
       const quoteExpiry = new Date(Date.now() + 15 * 60 * 1000).toISOString();
       const quoteCustId = activeCustomer?.id || customerId || "f0000000-0000-0000-0000-000000000001";
       const quoteProvider = matchedQuote.underwriter || providerName;
-      const quoteHashPayload = `${sessionId}:${orgId}:${quoteCustId}:${activePolicy.id}:${quoteProvider}:${quoteAmount}:${activePolicy.currency || "NGN"}:${quoteExpiry}`;
-      const quoteHash = crypto.createHash("sha256").update(quoteHashPayload).digest("hex");
+      const { quoteHash } = computeQuoteSignature({
+        sessionId,
+        organizationId: orgId,
+        customerId: quoteCustId,
+        policyId: activePolicy.id,
+        providerName: quoteProvider,
+        amount: matchedQuote.amount,
+        currency: targetCurrency,
+        expiresAt: quoteExpiry,
+      });
 
       const createdQuote = await repos.quotes.create(
         {
@@ -412,8 +425,8 @@ export class ActionOSOrchestrator {
           customer_id: quoteCustId,
           policy_id: activePolicy.id,
           provider_name: quoteProvider,
-          amount: quoteAmount,
-          currency: activePolicy.currency || "NGN",
+          amount: matchedQuote.amount,
+          currency: targetCurrency,
           status: "issued",
           expires_at: quoteExpiry,
           quote_hash: quoteHash,
@@ -431,9 +444,17 @@ export class ActionOSOrchestrator {
       for (const alt of availableQuotes) {
         if (alt.id !== matchedQuote.id) {
           const altProvider = alt.underwriter || providerName;
-          const altHash = crypto.createHash("sha256").update(
-            `${sessionId}:${orgId}:${quoteCustId}:${activePolicy.id}:${altProvider}:${alt.amount}:${alt.currency || "NGN"}:${quoteExpiry}`
-          ).digest("hex");
+          const altCurrency = alt.currency || targetCurrency;
+          const { quoteHash: altHash } = computeQuoteSignature({
+            sessionId,
+            organizationId: orgId,
+            customerId: quoteCustId,
+            policyId: activePolicy.id,
+            providerName: altProvider,
+            amount: alt.amount,
+            currency: altCurrency,
+            expiresAt: quoteExpiry,
+          });
           await repos.quotes.create(
             {
               id: alt.id,
@@ -443,7 +464,7 @@ export class ActionOSOrchestrator {
               policy_id: activePolicy.id,
               provider_name: altProvider,
               amount: alt.amount,
-              currency: alt.currency || "NGN",
+              currency: altCurrency,
               status: "issued",
               expires_at: quoteExpiry,
               quote_hash: altHash,
@@ -464,9 +485,9 @@ export class ActionOSOrchestrator {
         quoteId,
         sessionId,
         customerName: activeCustomer?.full_name || "Customer",
-        providerName,
-        amount: quoteAmount,
-        currency: activePolicy.currency || "NGN",
+        providerName: createdQuote.provider_name,
+        amount: createdQuote.amount,
+        currency: createdQuote.currency,
         policyNumber: activePolicy.policy_number,
         policyId: activePolicy.id,
         assetIdentifier,
@@ -716,6 +737,25 @@ export class ActionOSOrchestrator {
       }
     }
 
+    // Verify targetQuoteId was among valid options presented to customer
+    const presentedQuotes = authDetails.quotes || [];
+    const validQuoteIds = new Set<string>([authDetails.quoteId, ...presentedQuotes.map((q) => q.id)]);
+    if (!validQuoteIds.has(targetQuoteId)) {
+      sm.transition("failed", "Requested quoteId was not among options presented to customer");
+      session.status = "failed";
+      await repos.sessions.updateStatus(sessionId, "failed", undefined, tenantContext);
+      return {
+        sessionId,
+        status: "failed",
+        intent: plan.intent,
+        confidence: plan.confidence,
+        message: `Guardrail Failure: Quote integrity violation. Quote '${targetQuoteId}' was not among the verified options presented to the customer. Authorization must bind to a verified, persisted quote record.`,
+        authorizationRequired: false,
+        authorizationDetails: null,
+        events,
+      };
+    }
+
     // 2. Load the quote from the database using immutable quoteId
     const dbQuote = await repos.quotes.findById(targetQuoteId, tenantContext);
     if (!dbQuote) {
@@ -817,36 +857,48 @@ export class ActionOSOrchestrator {
       };
     }
 
-    // Verify cryptographic quote hash if present
-    if (dbQuote.quote_hash && dbQuote.quote_hash !== "demo_hash") {
-      const expectedHash = crypto.createHash("sha256").update(
-        `${dbQuote.session_id}:${dbQuote.organization_id}:${dbQuote.customer_id}:${dbQuote.policy_id}:${dbQuote.provider_name}:${dbQuote.amount}:${dbQuote.currency}:${dbQuote.expires_at}`
-      ).digest("hex");
-      if (dbQuote.quote_hash !== expectedHash) {
-        sm.transition("failed", "Quote hash mismatch");
-        session.status = "failed";
-        await repos.sessions.updateStatus(sessionId, "failed");
-        return {
-          sessionId,
-          status: "failed",
-          intent: plan.intent,
-          confidence: plan.confidence,
-          message: "Guardrail Failure: Quote hash integrity violation. Persisted quote record has been tampered with.",
-          authorizationRequired: false,
-          authorizationDetails: null,
-          events,
-        };
-      }
+    // Validate quote status: must be strictly 'issued'
+    if (dbQuote.status !== "issued") {
+      sm.transition("failed", `Quote status is '${dbQuote.status}'; must be 'issued'`);
+      session.status = "failed";
+      await repos.sessions.updateStatus(sessionId, "failed", undefined, tenantContext);
+      return {
+        sessionId,
+        status: "failed",
+        intent: plan.intent,
+        confidence: plan.confidence,
+        message: `Guardrail Failure: Quote status is '${dbQuote.status}'. Only quotes in 'issued' status can be authorized.`,
+        authorizationRequired: false,
+        authorizationDetails: null,
+        events,
+      };
+    }
+
+    // Verify cryptographic quote signature (keyed HMAC-SHA256)
+    if (!verifyQuoteSignature(dbQuote)) {
+      sm.transition("failed", "Quote signature verification failed");
+      session.status = "failed";
+      await repos.sessions.updateStatus(sessionId, "failed", undefined, tenantContext);
+      return {
+        sessionId,
+        status: "failed",
+        intent: plan.intent,
+        confidence: plan.confidence,
+        message: "Guardrail Failure: Cryptographic quote signature mismatch. Persisted quote record has been tampered with.",
+        authorizationRequired: false,
+        authorizationDetails: null,
+        events,
+      };
     }
 
     const quoteAmount = dbQuote.amount;
-    const expectedAuthAmount = dbQuote.amount;
+    const expectedAuthAmount = options?.customAmount ?? dbQuote.amount;
 
     const guardCheck = this.guardrails.validateAuthorization(true, quoteAmount, expectedAuthAmount);
     if (!guardCheck.passed) {
       sm.transition("failed", guardCheck.reason);
       session.status = "failed";
-      await repos.sessions.updateStatus(sessionId, "failed");
+      await repos.sessions.updateStatus(sessionId, "failed", undefined, tenantContext);
       return {
         sessionId,
         status: "failed",
@@ -859,13 +911,41 @@ export class ActionOSOrchestrator {
       };
     }
 
-    // Mark quote as accepted in the database
-    await repos.quotes.updateStatus(dbQuote.id, "accepted", tenantContext);
+    // 1. Atomically claim session from awaiting_authorization -> executing
+    const claimedSession = await repos.sessions.claimAuthorization(sessionId, tenantContext);
+    if (!claimedSession) {
+      sm.transition("failed", "Concurrent authorization claim conflict");
+      return {
+        sessionId,
+        status: "failed",
+        intent: plan.intent,
+        confidence: plan.confidence,
+        message: "Guardrail Failure: Concurrent authorization detected. Session has already been claimed or is executing.",
+        authorizationRequired: false,
+        authorizationDetails: null,
+        events,
+      };
+    }
 
-    // 2. Move to EXECUTING
+    // 2. Atomically accept quote from issued -> accepted
+    const acceptedQuote = await repos.quotes.acceptQuote(dbQuote.id, sessionId, tenantContext);
+    if (!acceptedQuote) {
+      await repos.sessions.updateStatus(sessionId, "failed", undefined, tenantContext);
+      sm.transition("failed", "Quote could not be atomically accepted; status must be issued");
+      return {
+        sessionId,
+        status: "failed",
+        intent: plan.intent,
+        confidence: plan.confidence,
+        message: `Guardrail Failure: Quote ${dbQuote.id} could not be accepted atomically. Current status is '${dbQuote.status}'. Only 'issued' quotes can be accepted.`,
+        authorizationRequired: false,
+        authorizationDetails: null,
+        events,
+      };
+    }
+
     sm.transition("executing", "Customer authorization confirmed; executing secure payment and renewal");
     session.status = "executing";
-    await repos.sessions.updateStatus(sessionId, "executing");
 
     const authDesc = options?.authMethod === "biometric_webauthn"
       ? `WebAuthn Biometric Passkey authorization confirmed for ${formatNaira(quoteAmount)}.`

@@ -22,6 +22,36 @@ export class MockPaymentProvider implements IPaymentProvider {
   private simulatedPayments = new Map<string, PaymentStoreEntry>();
 
   async requestPayment(input: PaymentInitiationInput): Promise<PaymentInitiationResult> {
+    // Idempotency check: if payment with this reference was already processed, return existing record
+    const cached = this.simulatedPayments.get(input.reference);
+    if (cached && cached.status === "succeeded") {
+      return {
+        status: cached.status,
+        reference: cached.reference,
+        gatewayUrl: `https://checkout.actionos.ng/pay/sim/${cached.reference}`,
+      };
+    }
+
+    const repos = getRepositoryContainer();
+    const existing = await repos.transactions.findByReference(input.reference);
+    if (existing && existing.status === "succeeded") {
+      const recoveredEntry: PaymentStoreEntry = {
+        reference: existing.reference,
+        customerId: existing.customer_id,
+        amount: existing.amount,
+        currency: existing.currency,
+        status: "succeeded",
+        paidAt: existing.updated_at,
+        providerReference: (existing.metadata?.provider_reference as string) || `pstk_recovered_${existing.reference}`,
+      };
+      this.simulatedPayments.set(input.reference, recoveredEntry);
+      return {
+        status: "succeeded",
+        reference: existing.reference,
+        gatewayUrl: `https://checkout.actionos.ng/pay/sim/${existing.reference}`,
+      };
+    }
+
     const providerRef = `pstk_sim_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
 
     // In simulation mode, payment automatically transitions to succeeded upon confirmation
@@ -36,10 +66,6 @@ export class MockPaymentProvider implements IPaymentProvider {
     };
 
     this.simulatedPayments.set(input.reference, entry);
-
-    // Record transaction via repository abstraction
-    const repos = getRepositoryContainer();
-    const existing = await repos.transactions.findByReference(input.reference);
 
     if (existing) {
       await repos.transactions.updateStatus(existing.id, "succeeded");

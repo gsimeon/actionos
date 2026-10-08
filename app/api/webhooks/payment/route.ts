@@ -15,11 +15,25 @@ export async function POST(req: Request) {
     }
 
     const txStatus = payload.event === "charge.success" ? "succeeded" : "failed";
-    await repos.transactions.updateStatus(payload.data.reference, txStatus).catch(() => {});
+    const existingTx = await repos.transactions.findByReference(payload.data.reference).catch(() => null);
+
+    if (existingTx && existingTx.status === txStatus) {
+      // Idempotent retry acknowledgement
+      return NextResponse.json({
+        success: true,
+        data: { acknowledged: true, duplicate: true, reference: payload.data.reference },
+      });
+    }
+
+    if (existingTx) {
+      await repos.transactions.updateStatus(existingTx.id, txStatus).catch(() => {});
+    } else {
+      await repos.transactions.updateStatus(payload.data.reference, txStatus).catch(() => {});
+    }
 
     return NextResponse.json({
       success: true,
-      data: { acknowledged: true, reference: payload.data.reference },
+      data: { acknowledged: true, duplicate: false, reference: payload.data.reference },
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Webhook processing failed";
