@@ -10,7 +10,6 @@ import {
   Fingerprint,
   RotateCcw,
   Sparkles,
-  Check,
 } from "lucide-react";
 import { formatNaira, formatDate } from "@/lib/utils";
 import type { AuthorizationDetails, UnderwriterQuote } from "@/types/actionos";

@@ -1,4 +1,4 @@
-import type { IActionOSTool, ToolResult, ExecutionContext } from "@/types/actionos";
+import type { IActionOSTool, ToolResult, WorkflowExecutionContext } from "@/types/actionos";
 import type { Policy } from "@/types/database";
 import { ActionOSGuardrails } from "@/lib/actionos/guardrails";
 import { getRepositoryContainer } from "@/lib/repositories";
@@ -34,15 +34,20 @@ export class CheckRenewalEligibilityTool implements IActionOSTool<EligibilityInp
     return { valid: true, data: input as EligibilityInput };
   }
 
-  async execute(input: EligibilityInput, _context: ExecutionContext): Promise<ToolResult<EligibilityOutput>> {
+  async execute(input: EligibilityInput, context: WorkflowExecutionContext): Promise<ToolResult<EligibilityOutput>> {
     const repos = getRepositoryContainer();
+    const tenantContext = {
+      organizationId: context.organizationId,
+      customerId: context.customerId,
+      role: context.role,
+    };
     let policy = input.policy;
 
     if (!policy && input.policyId) {
-      policy = (await repos.policies.findById(input.policyId)) || undefined;
+      policy = (await repos.policies.findById(input.policyId, tenantContext)) || undefined;
     }
     if (!policy) {
-      policy = (await repos.policies.findByNumber("AUTO-2026-00182")) || undefined;
+      policy = (await repos.policies.findByNumber("AUTO-2026-00182", tenantContext)) || undefined;
     }
 
     if (!policy) {

@@ -92,6 +92,10 @@ export class DemoPolicyRepository implements IPolicyRepository {
     return store.policies.filter((p) => {
       if (options?.status && options.status !== "all" && p.status !== options.status) return false;
       if (options?.tenant?.customerId && p.customer_id !== options.tenant.customerId) return false;
+      if (options?.tenant?.organizationId) {
+        const cust = store.customers.find((c) => c.id === p.customer_id);
+        if (!cust || cust.organization_id !== options.tenant.organizationId) return false;
+      }
       return true;
     });
   }
@@ -101,6 +105,10 @@ export class DemoPolicyRepository implements IPolicyRepository {
     const policy = store.policies.find((p) => p.id === id);
     if (!policy) return null;
     if (tenant?.customerId && policy.customer_id !== tenant.customerId) return null;
+    if (tenant?.organizationId) {
+      const cust = store.customers.find((c) => c.id === policy.customer_id);
+      if (!cust || cust.organization_id !== tenant.organizationId) return null;
+    }
     return policy;
   }
 
@@ -111,17 +119,34 @@ export class DemoPolicyRepository implements IPolicyRepository {
     );
     if (!policy) return null;
     if (tenant?.customerId && policy.customer_id !== tenant.customerId) return null;
+    if (tenant?.organizationId) {
+      const cust = store.customers.find((c) => c.id === policy.customer_id);
+      if (!cust || cust.organization_id !== tenant.organizationId) return null;
+    }
     return policy;
   }
 
   async findByCustomerId(customerId: string, tenant?: TenantContext): Promise<Policy[]> {
     const store = getStore();
     if (tenant?.customerId && customerId !== tenant.customerId) return [];
+    if (tenant?.organizationId) {
+      const cust = store.customers.find((c) => c.id === customerId);
+      if (!cust || cust.organization_id !== tenant.organizationId) return [];
+    }
     return store.policies.filter((p) => p.customer_id === customerId);
   }
 
-  async create(data: Partial<Policy> & { customer_id: string; provider_id: string; policy_type_id: string; policy_number: string; start_date: string; expiry_date: string; premium: number }): Promise<Policy> {
+  async create(data: Partial<Policy> & { customer_id: string; provider_id: string; policy_type_id: string; policy_number: string; start_date: string; expiry_date: string; premium: number }, tenant?: TenantContext): Promise<Policy> {
     const store = getStore();
+    if (tenant?.customerId && data.customer_id !== tenant.customerId) {
+      throw new Error(`Tenant authorization violation: customer mismatch on policy create`);
+    }
+    if (tenant?.organizationId) {
+      const cust = store.customers.find((c) => c.id === data.customer_id);
+      if (!cust || cust.organization_id !== tenant.organizationId) {
+        throw new Error(`Tenant authorization violation: organization mismatch on policy create`);
+      }
+    }
     const policy: Policy = {
       id: data.id || `demo_pol_${Date.now()}`,
       customer_id: data.customer_id,
@@ -142,11 +167,20 @@ export class DemoPolicyRepository implements IPolicyRepository {
     return policy;
   }
 
-  async updateStatusAndExpiry(id: string, status: Policy["status"], newExpiryDate: string): Promise<Policy> {
+  async updateStatusAndExpiry(id: string, status: Policy["status"], newExpiryDate: string, tenant?: TenantContext): Promise<Policy> {
     const store = getStore();
     const policy = store.policies.find((p) => p.id === id);
     if (!policy) {
       throw new Error(`Policy not found: ${id}`);
+    }
+    if (tenant?.customerId && policy.customer_id !== tenant.customerId) {
+      throw new Error(`Tenant authorization violation for policy ${id}`);
+    }
+    if (tenant?.organizationId) {
+      const cust = store.customers.find((c) => c.id === policy.customer_id);
+      if (!cust || cust.organization_id !== tenant.organizationId) {
+        throw new Error(`Tenant authorization violation for policy ${id}`);
+      }
     }
     policy.status = status;
     policy.expiry_date = newExpiryDate;
@@ -161,6 +195,10 @@ export class DemoRenewalRepository implements IRenewalRepository {
     return store.renewals.filter((r) => {
       if (options?.status && options.status !== "all" && r.status !== options.status) return false;
       if (options?.tenant?.customerId && r.customer_id !== options.tenant.customerId) return false;
+      if (options?.tenant?.organizationId) {
+        const cust = store.customers.find((c) => c.id === r.customer_id);
+        if (!cust || cust.organization_id !== options.tenant.organizationId) return false;
+      }
       return true;
     });
   }
@@ -170,6 +208,10 @@ export class DemoRenewalRepository implements IRenewalRepository {
     const renewal = store.renewals.find((r) => r.id === id);
     if (!renewal) return null;
     if (tenant?.customerId && renewal.customer_id !== tenant.customerId) return null;
+    if (tenant?.organizationId) {
+      const cust = store.customers.find((c) => c.id === renewal.customer_id);
+      if (!cust || cust.organization_id !== tenant.organizationId) return null;
+    }
     return renewal;
   }
 
@@ -178,11 +220,24 @@ export class DemoRenewalRepository implements IRenewalRepository {
     const renewal = store.renewals.find((r) => r.policy_id === policyId);
     if (!renewal) return null;
     if (tenant?.customerId && renewal.customer_id !== tenant.customerId) return null;
+    if (tenant?.organizationId) {
+      const cust = store.customers.find((c) => c.id === renewal.customer_id);
+      if (!cust || cust.organization_id !== tenant.organizationId) return null;
+    }
     return renewal;
   }
 
-  async create(data: Partial<Renewal> & { policy_id: string; customer_id: string; scheduled_for: string }): Promise<Renewal> {
+  async create(data: Partial<Renewal> & { policy_id: string; customer_id: string; scheduled_for: string }, tenant?: TenantContext): Promise<Renewal> {
     const store = getStore();
+    if (tenant?.customerId && data.customer_id !== tenant.customerId) {
+      throw new Error(`Tenant authorization violation: customer mismatch on renewal create`);
+    }
+    if (tenant?.organizationId) {
+      const cust = store.customers.find((c) => c.id === data.customer_id);
+      if (!cust || cust.organization_id !== tenant.organizationId) {
+        throw new Error(`Tenant authorization violation: organization mismatch on renewal create`);
+      }
+    }
     const renewal: Renewal = {
       id: data.id || `demo_ren_${Date.now()}`,
       policy_id: data.policy_id,
@@ -210,6 +265,12 @@ export class DemoRenewalRepository implements IRenewalRepository {
     if (tenant?.customerId && renewal.customer_id !== tenant.customerId) {
       throw new Error(`Tenant authorization violation for renewal ${id}`);
     }
+    if (tenant?.organizationId) {
+      const cust = store.customers.find((c) => c.id === renewal.customer_id);
+      if (!cust || cust.organization_id !== tenant.organizationId) {
+        throw new Error(`Tenant authorization violation for renewal ${id}`);
+      }
+    }
     renewal.status = status;
     if (renewedAt) renewal.renewed_at = renewedAt;
     renewal.updated_at = new Date().toISOString();
@@ -224,6 +285,12 @@ export class DemoRenewalRepository implements IRenewalRepository {
     }
     if (tenant?.customerId && renewal.customer_id !== tenant.customerId) {
       throw new Error(`Tenant authorization violation for renewal ${id}`);
+    }
+    if (tenant?.organizationId) {
+      const cust = store.customers.find((c) => c.id === renewal.customer_id);
+      if (!cust || cust.organization_id !== tenant.organizationId) {
+        throw new Error(`Tenant authorization violation for renewal ${id}`);
+      }
     }
     renewal.payment_status = paymentStatus;
     renewal.updated_at = new Date().toISOString();
@@ -241,8 +308,14 @@ export class DemoActionSessionRepository implements IActionSessionRepository {
     return session;
   }
 
-  async create(data: Partial<ActionSession> & { organization_id: string; channel: ActionSession["channel"] }): Promise<ActionSession> {
+  async create(data: Partial<ActionSession> & { organization_id: string; channel: ActionSession["channel"] }, tenant?: TenantContext): Promise<ActionSession> {
     const store = getStore();
+    if (tenant?.organizationId && data.organization_id !== tenant.organizationId) {
+      throw new Error(`Tenant authorization violation: organization mismatch on session create`);
+    }
+    if (tenant?.customerId && data.customer_id && data.customer_id !== tenant.customerId) {
+      throw new Error(`Tenant authorization violation: customer mismatch on session create`);
+    }
     const session: ActionSession = {
       id: data.id || `demo_ses_${Date.now()}`,
       customer_id: data.customer_id || null,
@@ -261,22 +334,34 @@ export class DemoActionSessionRepository implements IActionSessionRepository {
     return session;
   }
 
-  async updateStatus(id: string, status: ActionSession["status"], completedAt?: string): Promise<ActionSession> {
+  async updateStatus(id: string, status: ActionSession["status"], completedAt?: string, tenant?: TenantContext): Promise<ActionSession> {
     const store = getStore();
     const session = store.sessions.find((s) => s.id === id);
     if (!session) {
       throw new Error(`Action session not found: ${id}`);
+    }
+    if (tenant?.organizationId && session.organization_id !== tenant.organizationId) {
+      throw new Error(`Tenant authorization violation for session ${id}`);
+    }
+    if (tenant?.customerId && session.customer_id && session.customer_id !== tenant.customerId) {
+      throw new Error(`Tenant authorization violation for session ${id}`);
     }
     session.status = status;
     if (completedAt) session.completed_at = completedAt;
     return session;
   }
 
-  async updateMetadata(id: string, metadata: Record<string, unknown>): Promise<ActionSession> {
+  async updateMetadata(id: string, metadata: Record<string, unknown>, tenant?: TenantContext): Promise<ActionSession> {
     const store = getStore();
     const session = store.sessions.find((s) => s.id === id);
     if (!session) {
       throw new Error(`Action session not found: ${id}`);
+    }
+    if (tenant?.organizationId && session.organization_id !== tenant.organizationId) {
+      throw new Error(`Tenant authorization violation for session ${id}`);
+    }
+    if (tenant?.customerId && session.customer_id && session.customer_id !== tenant.customerId) {
+      throw new Error(`Tenant authorization violation for session ${id}`);
     }
     session.metadata = { ...session.metadata, ...metadata };
     return session;
@@ -284,8 +369,19 @@ export class DemoActionSessionRepository implements IActionSessionRepository {
 }
 
 export class DemoActionPlanRepository implements IActionPlanRepository {
-  async create(data: Partial<ActionPlan> & { session_id: string; intent: string; goal: string }): Promise<ActionPlan> {
+  async create(data: Partial<ActionPlan> & { session_id: string; intent: string; goal: string }, tenant?: TenantContext): Promise<ActionPlan> {
     const store = getStore();
+    if (tenant?.organizationId || tenant?.customerId) {
+      const session = store.sessions.find((s) => s.id === data.session_id);
+      if (session) {
+        if (tenant.organizationId && session.organization_id !== tenant.organizationId) {
+          throw new Error(`Tenant authorization violation on action plan create`);
+        }
+        if (tenant.customerId && session.customer_id && session.customer_id !== tenant.customerId) {
+          throw new Error(`Tenant authorization violation on action plan create`);
+        }
+      }
+    }
     const plan: ActionPlan = {
       id: data.id || `demo_plan_${Date.now()}`,
       session_id: data.session_id,
@@ -301,16 +397,33 @@ export class DemoActionPlanRepository implements IActionPlanRepository {
     return plan;
   }
 
-  async findBySessionId(sessionId: string): Promise<ActionPlan | null> {
+  async findBySessionId(sessionId: string, tenant?: TenantContext): Promise<ActionPlan | null> {
     const store = getStore();
+    if (tenant?.organizationId || tenant?.customerId) {
+      const session = store.sessions.find((s) => s.id === sessionId);
+      if (!session) return null;
+      if (tenant.organizationId && session.organization_id !== tenant.organizationId) return null;
+      if (tenant.customerId && session.customer_id && session.customer_id !== tenant.customerId) return null;
+    }
     return store.plans.find((p) => p.session_id === sessionId) || null;
   }
 
-  async updateStatus(id: string, status: ActionPlan["status"]): Promise<ActionPlan> {
+  async updateStatus(id: string, status: ActionPlan["status"], tenant?: TenantContext): Promise<ActionPlan> {
     const store = getStore();
     const plan = store.plans.find((p) => p.id === id);
     if (!plan) {
       throw new Error(`Action plan not found: ${id}`);
+    }
+    if (tenant?.organizationId || tenant?.customerId) {
+      const session = store.sessions.find((s) => s.id === plan.session_id);
+      if (session) {
+        if (tenant.organizationId && session.organization_id !== tenant.organizationId) {
+          throw new Error(`Tenant authorization violation for action plan ${id}`);
+        }
+        if (tenant.customerId && session.customer_id && session.customer_id !== tenant.customerId) {
+          throw new Error(`Tenant authorization violation for action plan ${id}`);
+        }
+      }
     }
     plan.status = status;
     if (status === "completed" || status === "failed") {
@@ -322,7 +435,8 @@ export class DemoActionPlanRepository implements IActionPlanRepository {
 
 export class DemoActionStepRepository implements IActionStepRepository {
   async createMany(
-    stepsData: Array<Partial<ActionStep> & { action_plan_id: string; sequence: number; action_type: string; description: string; tool_name: string }>
+    stepsData: Array<Partial<ActionStep> & { action_plan_id: string; sequence: number; action_type: string; description: string; tool_name: string }>,
+    _tenant?: TenantContext
   ): Promise<ActionStep[]> {
     const store = getStore();
     const created: ActionStep[] = stepsData.map((s) => ({
@@ -344,12 +458,21 @@ export class DemoActionStepRepository implements IActionStepRepository {
     return created;
   }
 
-  async findByPlanId(planId: string): Promise<ActionStep[]> {
+  async findByPlanId(planId: string, tenant?: TenantContext): Promise<ActionStep[]> {
     const store = getStore();
+    if (tenant?.organizationId || tenant?.customerId) {
+      const plan = store.plans.find((p) => p.id === planId);
+      if (plan) {
+        const session = store.sessions.find((s) => s.id === plan.session_id);
+        if (!session) return [];
+        if (tenant.organizationId && session.organization_id !== tenant.organizationId) return [];
+        if (tenant.customerId && session.customer_id && session.customer_id !== tenant.customerId) return [];
+      }
+    }
     return store.steps.filter((s) => s.action_plan_id === planId);
   }
 
-  async updateStep(id: string, update: Partial<ActionStep>): Promise<ActionStep> {
+  async updateStep(id: string, update: Partial<ActionStep>, _tenant?: TenantContext): Promise<ActionStep> {
     const store = getStore();
     const step = store.steps.find((s) => s.id === id);
     if (!step) {
@@ -361,8 +484,17 @@ export class DemoActionStepRepository implements IActionStepRepository {
 }
 
 export class DemoTransactionRepository implements ITransactionRepository {
-  async create(data: Partial<Transaction> & { customer_id: string; amount: number; reference: string }): Promise<Transaction> {
+  async create(data: Partial<Transaction> & { customer_id: string; amount: number; reference: string }, tenant?: TenantContext): Promise<Transaction> {
     const store = getStore();
+    if (tenant?.customerId && data.customer_id !== tenant.customerId) {
+      throw new Error(`Tenant authorization violation: customer mismatch on transaction create`);
+    }
+    if (tenant?.organizationId) {
+      const cust = store.customers.find((c) => c.id === data.customer_id);
+      if (!cust || cust.organization_id !== tenant.organizationId) {
+        throw new Error(`Tenant authorization violation: organization mismatch on transaction create`);
+      }
+    }
     const tx: Transaction = {
       id: data.id || `demo_tx_${Date.now()}`,
       customer_id: data.customer_id,
@@ -381,16 +513,32 @@ export class DemoTransactionRepository implements ITransactionRepository {
     return tx;
   }
 
-  async findByReference(reference: string): Promise<Transaction | null> {
+  async findByReference(reference: string, tenant?: TenantContext): Promise<Transaction | null> {
     const store = getStore();
-    return store.transactions.find((t) => t.reference === reference) || null;
+    const tx = store.transactions.find((t) => t.reference === reference);
+    if (!tx) return null;
+    if (tenant?.customerId && tx.customer_id !== tenant.customerId) return null;
+    if (tenant?.organizationId) {
+      const cust = store.customers.find((c) => c.id === tx.customer_id);
+      if (!cust || cust.organization_id !== tenant.organizationId) return null;
+    }
+    return tx;
   }
 
-  async updateStatus(id: string, status: Transaction["status"]): Promise<Transaction> {
+  async updateStatus(id: string, status: Transaction["status"], tenant?: TenantContext): Promise<Transaction> {
     const store = getStore();
     const tx = store.transactions.find((t) => t.id === id || t.reference === id);
     if (!tx) {
       throw new Error(`Transaction not found: ${id}`);
+    }
+    if (tenant?.customerId && tx.customer_id !== tenant.customerId) {
+      throw new Error(`Tenant authorization violation for transaction ${id}`);
+    }
+    if (tenant?.organizationId) {
+      const cust = store.customers.find((c) => c.id === tx.customer_id);
+      if (!cust || cust.organization_id !== tenant.organizationId) {
+        throw new Error(`Tenant authorization violation for transaction ${id}`);
+      }
     }
     tx.status = status;
     tx.updated_at = new Date().toISOString();
@@ -399,8 +547,17 @@ export class DemoTransactionRepository implements ITransactionRepository {
 }
 
 export class DemoDocumentRepository implements IDocumentRepository {
-  async create(data: Partial<Document> & { customer_id: string; document_type: Document["document_type"]; file_path: string; file_name: string }): Promise<Document> {
+  async create(data: Partial<Document> & { customer_id: string; document_type: Document["document_type"]; file_path: string; file_name: string }, tenant?: TenantContext): Promise<Document> {
     const store = getStore();
+    if (tenant?.customerId && data.customer_id !== tenant.customerId) {
+      throw new Error(`Tenant authorization violation: customer mismatch on document create`);
+    }
+    if (tenant?.organizationId) {
+      const cust = store.customers.find((c) => c.id === data.customer_id);
+      if (!cust || cust.organization_id !== tenant.organizationId) {
+        throw new Error(`Tenant authorization violation: organization mismatch on document create`);
+      }
+    }
     const doc: Document = {
       id: data.id || `demo_doc_${Date.now()}`,
       customer_id: data.customer_id,
@@ -416,20 +573,42 @@ export class DemoDocumentRepository implements IDocumentRepository {
     return doc;
   }
 
-  async findByCustomerId(customerId: string): Promise<Document[]> {
+  async findByCustomerId(customerId: string, tenant?: TenantContext): Promise<Document[]> {
     const store = getStore();
+    if (tenant?.customerId && customerId !== tenant.customerId) return [];
+    if (tenant?.organizationId) {
+      const cust = store.customers.find((c) => c.id === customerId);
+      if (!cust || cust.organization_id !== tenant.organizationId) return [];
+    }
     return store.documents.filter((d) => d.customer_id === customerId);
   }
 
-  async findByRenewalId(renewalId: string): Promise<Document[]> {
+  async findByRenewalId(renewalId: string, tenant?: TenantContext): Promise<Document[]> {
     const store = getStore();
-    return store.documents.filter((d) => d.renewal_id === renewalId);
+    return store.documents.filter((d) => {
+      if (d.renewal_id !== renewalId) return false;
+      if (tenant?.customerId && d.customer_id !== tenant.customerId) return false;
+      if (tenant?.organizationId) {
+        const cust = store.customers.find((c) => c.id === d.customer_id);
+        if (!cust || cust.organization_id !== tenant.organizationId) return false;
+      }
+      return true;
+    });
   }
 }
 
 export class DemoNotificationRepository implements INotificationRepository {
-  async create(data: Partial<NotificationRecord> & { customer_id: string; type: NotificationRecord["type"]; channel: NotificationRecord["channel"]; title: string; message: string; scheduled_for: string }): Promise<NotificationRecord> {
+  async create(data: Partial<NotificationRecord> & { customer_id: string; type: NotificationRecord["type"]; channel: NotificationRecord["channel"]; title: string; message: string; scheduled_for: string }, tenant?: TenantContext): Promise<NotificationRecord> {
     const store = getStore();
+    if (tenant?.customerId && data.customer_id !== tenant.customerId) {
+      throw new Error(`Tenant authorization violation: customer mismatch on notification create`);
+    }
+    if (tenant?.organizationId) {
+      const cust = store.customers.find((c) => c.id === data.customer_id);
+      if (!cust || cust.organization_id !== tenant.organizationId) {
+        throw new Error(`Tenant authorization violation: organization mismatch on notification create`);
+      }
+    }
     const notif: NotificationRecord = {
       id: data.id || `demo_notif_${Date.now()}`,
       customer_id: data.customer_id,
@@ -446,15 +625,23 @@ export class DemoNotificationRepository implements INotificationRepository {
     return notif;
   }
 
-  async findByCustomerId(customerId: string): Promise<NotificationRecord[]> {
+  async findByCustomerId(customerId: string, tenant?: TenantContext): Promise<NotificationRecord[]> {
     const store = getStore();
+    if (tenant?.customerId && customerId !== tenant.customerId) return [];
+    if (tenant?.organizationId) {
+      const cust = store.customers.find((c) => c.id === customerId);
+      if (!cust || cust.organization_id !== tenant.organizationId) return [];
+    }
     return store.notifications.filter((n) => n.customer_id === customerId);
   }
 }
 
 export class DemoAuditRepository implements IAuditRepository {
-  async log(data: Partial<AuditLog> & { organization_id: string; action: string; resource_type: string }): Promise<AuditLog> {
+  async log(data: Partial<AuditLog> & { organization_id: string; action: string; resource_type: string }, tenant?: TenantContext): Promise<AuditLog> {
     const store = getStore();
+    if (tenant?.organizationId && data.organization_id !== tenant.organizationId) {
+      throw new Error(`Tenant authorization violation: organization mismatch on audit log`);
+    }
     const entry: AuditLog = {
       id: data.id || `demo_aud_${Date.now()}`,
       organization_id: data.organization_id,
@@ -475,7 +662,7 @@ export class DemoAuditRepository implements IAuditRepository {
 }
 
 export class DemoLedgerRepository implements ILedgerRepository {
-  async appendEvent(event: ActionLedgerEvent): Promise<ActionLedgerEvent> {
+  async appendEvent(event: ActionLedgerEvent, _tenant?: TenantContext): Promise<ActionLedgerEvent> {
     const store = getStore();
     if (!store.ledgerEvents[event.sessionId]) {
       store.ledgerEvents[event.sessionId] = [];
@@ -489,8 +676,14 @@ export class DemoLedgerRepository implements ILedgerRepository {
     return event;
   }
 
-  async getEventsBySessionId(sessionId: string): Promise<ActionLedgerEvent[]> {
+  async getEventsBySessionId(sessionId: string, tenant?: TenantContext): Promise<ActionLedgerEvent[]> {
     const store = getStore();
+    if (tenant?.organizationId || tenant?.customerId) {
+      const session = store.sessions.find((s) => s.id === sessionId);
+      if (!session) return [];
+      if (tenant.organizationId && session.organization_id !== tenant.organizationId) return [];
+      if (tenant.customerId && session.customer_id && session.customer_id !== tenant.customerId) return [];
+    }
     return [...(store.ledgerEvents[sessionId] || [])];
   }
 }

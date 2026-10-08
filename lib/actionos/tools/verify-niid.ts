@@ -1,4 +1,4 @@
-import type { IActionOSTool, ToolResult, ExecutionContext } from "@/types/actionos";
+import type { IActionOSTool, ToolResult, WorkflowExecutionContext } from "@/types/actionos";
 
 export interface VerifyNiidInput {
   vehiclePlate?: string;
@@ -34,7 +34,7 @@ export class VerifyNiidTool implements IActionOSTool<VerifyNiidInput, NiidVerifi
     return { valid: true, data: input as VerifyNiidInput };
   }
 
-  async execute(input: VerifyNiidInput, _context: ExecutionContext): Promise<ToolResult<NiidVerificationOutput>> {
+  async execute(input: VerifyNiidInput, _context: WorkflowExecutionContext): Promise<ToolResult<NiidVerificationOutput>> {
     const plate = input.vehiclePlate || "ABC-123-XY";
 
     // NIID & FRSC statutory registry verification token
@@ -45,8 +45,8 @@ export class VerifyNiidTool implements IActionOSTool<VerifyNiidInput, NiidVerifi
       data: {
         verified: true,
         vehiclePlate: plate,
-        chassisNumber: input.chassisNumber || "JTD12345678901234",
-        engineNumber: "ENG-2GR-99410",
+        chassisNumber: input.chassisNumber || "DEMO-VIN-000001",
+        engineNumber: "DEMO-ENGINE-000001",
         niidRecordFound: true,
         activeExistingPolicy: false, // Eligible for renewal
         frscRegistered: true,

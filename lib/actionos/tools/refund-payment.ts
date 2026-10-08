@@ -1,5 +1,7 @@
-import type { IActionOSTool, ToolResult, ExecutionContext } from "@/types/actionos";
+import type { IActionOSTool, ToolResult, WorkflowExecutionContext } from "@/types/actionos";
 import { getRepositoryContainer } from "@/lib/repositories";
+import { isDemoMode } from "@/lib/runtime/mode";
+import { DEMO_CONTEXT } from "@/lib/security/auth-context";
 
 export interface RefundPaymentInput {
   reference: string;
@@ -37,27 +39,46 @@ export class RefundPaymentTool implements IActionOSTool<RefundPaymentInput, Refu
     return { valid: true, data };
   }
 
-  async execute(input: RefundPaymentInput, context: ExecutionContext): Promise<ToolResult<RefundPaymentOutput>> {
+  async execute(input: RefundPaymentInput, context: WorkflowExecutionContext): Promise<ToolResult<RefundPaymentOutput>> {
     const repos = getRepositoryContainer();
     const refundRef = `ref_rev_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    const customerId = context.customerId || "f0000000-0000-0000-0000-000000000001";
+    const customerId = context.customerId || (isDemoMode() ? DEMO_CONTEXT.customerId : undefined);
+
+    if (!customerId) {
+      return {
+        success: false,
+        error: {
+          code: "MISSING_CUSTOMER_ID",
+          message: "Security violation: customerId is required to process refund.",
+        },
+      };
+    }
+
+    const tenantContext = {
+      organizationId: context.organizationId,
+      customerId: context.customerId,
+      role: context.role,
+    };
 
     // Record reversing transaction via repository
-    await repos.transactions.create({
-      customer_id: customerId,
-      renewal_id: null,
-      amount: -Math.abs(input.amount),
-      currency: input.currency || "NGN",
-      provider: "mock_paystack",
-      reference: refundRef,
-      status: "succeeded",
-      transaction_type: "refund",
-      metadata: {
-        originalReference: input.reference,
-        reason: input.reason,
-        isSagaCompensating: true,
+    await repos.transactions.create(
+      {
+        customer_id: customerId,
+        renewal_id: null,
+        amount: -Math.abs(input.amount),
+        currency: input.currency || "NGN",
+        provider: "mock_paystack",
+        reference: refundRef,
+        status: "succeeded",
+        transaction_type: "refund",
+        metadata: {
+          originalReference: input.reference,
+          reason: input.reason,
+          isSagaCompensating: true,
+        },
       },
-    });
+      tenantContext
+    );
 
     return {
       success: true,

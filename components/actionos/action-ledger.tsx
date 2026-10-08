@@ -15,7 +15,6 @@ import {
   Hash,
   RotateCcw,
   ShieldCheck,
-  Copy,
 } from "lucide-react";
 import type { ActionLedgerEvent } from "@/types/actionos";
 import { formatDateTime } from "@/lib/utils";

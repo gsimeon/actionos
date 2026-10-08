@@ -1,4 +1,4 @@
-import type { IActionOSTool, ToolResult, ExecutionContext } from "@/types/actionos";
+import type { IActionOSTool, ToolResult, WorkflowExecutionContext } from "@/types/actionos";
 import { mockPaymentProvider } from "@/lib/payments/mock";
 
 export interface RequestPaymentInput {
@@ -36,7 +36,7 @@ export class RequestPaymentTool implements IActionOSTool<RequestPaymentInput, Pa
     return { valid: true, data };
   }
 
-  async execute(input: RequestPaymentInput, context: ExecutionContext): Promise<ToolResult<PaymentRequestOutput>> {
+  async execute(input: RequestPaymentInput, context: WorkflowExecutionContext): Promise<ToolResult<PaymentRequestOutput>> {
     // Idempotency key per session
     const reference = `act_${context.sessionId.substring(0, 8)}_pay_${Date.now()}`;
 

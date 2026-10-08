@@ -1,4 +1,5 @@
 import type { NAtlasProvider, NAtlasUnderstanding } from "@/types/actionos";
+import { isDemoMode } from "@/lib/runtime/mode";
 
 export interface NAtlasInput {
   text?: string;
@@ -182,9 +183,7 @@ export class OfficialNAtlasProvider implements NAtlasProvider {
  * Factory creating either official N-ATLAS boundary provider or deterministic demo provider.
  */
 export function createNAtlasProvider(): NAtlasProvider {
-  const isDemo = process.env.DEMO_MODE === "true";
-
-  if (isDemo) {
+  if (isDemoMode()) {
     return new DeterministicDemoAIProvider();
   }
 

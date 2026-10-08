@@ -50,10 +50,45 @@ export async function POST(request: Request) {
       }
     }
 
+    const { getRepositoryContainer } = await import("@/lib/repositories");
+    const { isDemoMode } = await import("@/lib/runtime/mode");
+    const { DEMO_CONTEXT } = await import("@/lib/security/auth-context");
+    type AuthenticatedExecutionContext = import("@/types/actionos").AuthenticatedExecutionContext;
+
+    const repos = getRepositoryContainer();
+    let callerContext: AuthenticatedExecutionContext;
+
+    if (isDemoMode()) {
+      callerContext = DEMO_CONTEXT;
+    } else {
+      const customers = await repos.customers.findAll();
+      const customer = customers.find((c) => c.phone === sender);
+      if (!customer) {
+        return NextResponse.json({
+          success: false,
+          channel: "whatsapp",
+          response: {
+            messaging_product: "whatsapp",
+            to: sender,
+            type: "text",
+            text: { body: `ActionOS: No customer account found linked to ${sender}. Please contact your administrator.` },
+          },
+        });
+      }
+      callerContext = {
+        userId: customer.profile_id || customer.id,
+        profileId: customer.profile_id || customer.id,
+        organizationId: customer.organization_id,
+        role: "customer",
+        customerId: customer.id,
+        isDemo: false,
+      };
+    }
+
     // If customer clicked [Authorize] on WhatsApp interactive message
     if (isButtonReply && buttonPayload.startsWith("auth_approve_")) {
       const sessionId = buttonPayload.replace("auth_approve_", "");
-      const execResult = await orchestrator.authorizeAndExecute(sessionId, true, "customer");
+      const execResult = await orchestrator.authorizeAndExecute(sessionId, true, callerContext);
 
       return NextResponse.json({
         success: true,
@@ -77,6 +112,7 @@ export async function POST(request: Request) {
       inputText: messageText,
       channel: "whatsapp",
       language: "en-NG",
+      executionContext: callerContext,
     });
 
     if (result.authorizationRequired && result.authorizationDetails) {

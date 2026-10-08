@@ -3,17 +3,11 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { isDemoMode } from "@/lib/runtime/mode";
 
-export interface ExecutionContext {
-  userId: string;
-  profileId: string;
-  organizationId: string;
-  role: MemberRole;
-  customerId?: string;
-  isDemo: boolean;
-}
+import type { AuthenticatedExecutionContext } from "@/types/actionos";
+export type { AuthenticatedExecutionContext };
 
 // Canonical Demo/Competition Benchmark Context strictly for offline sandbox mode
-export const DEMO_CONTEXT: ExecutionContext = {
+export const DEMO_CONTEXT: AuthenticatedExecutionContext = {
   userId: "f0000000-0000-0000-0000-000000000001",
   profileId: "b0000000-0000-0000-0000-000000000003",
   organizationId: "a0000000-0000-0000-0000-000000000001",
@@ -37,7 +31,7 @@ export class AuthContextError extends Error {
  * Never trusts client-supplied organizationId, customerId, or role.
  * 
  * Strict Enforcement:
- * - In demo mode (ACTIONOS_RUNTIME_MODE=demo or DEMO_MODE=true): returns DEMO_CONTEXT
+ * - In demo mode (ACTIONOS_RUNTIME_MODE=demo): returns DEMO_CONTEXT
  * - In production mode:
  *     * Missing session -> 401 UNAUTHORIZED
  *     * Supabase error -> 401/500 AUTH_ERROR
@@ -45,7 +39,7 @@ export class AuthContextError extends Error {
  *     * Missing organization membership -> 403 FORBIDDEN
  *   Never falls back to demo context on error or unauthenticated state.
  */
-export async function resolveExecutionContext(req?: Request): Promise<ExecutionContext> {
+export async function resolveExecutionContext(_req?: Request): Promise<AuthenticatedExecutionContext> {
   // If explicitly configured for demo/competition sandbox
   if (isDemoMode()) {
     return DEMO_CONTEXT;

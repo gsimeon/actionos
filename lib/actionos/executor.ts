@@ -1,5 +1,5 @@
 import type { ActionStep, ToolExecution } from "@/types/database";
-import type { ExecutionContext, ToolResult, ActionLedgerEvent } from "@/types/actionos";
+import type { WorkflowExecutionContext, ToolResult, ActionLedgerEvent } from "@/types/actionos";
 import { toolRegistry } from "./tool-registry";
 import { ActionOSPermissions } from "./permissions";
 import { getRepositoryContainer } from "@/lib/repositories";
@@ -11,7 +11,7 @@ export class ActionOSExecutor {
    */
   async executeStep(
     step: ActionStep,
-    context: ExecutionContext,
+    context: WorkflowExecutionContext,
     stepInputOverride?: Record<string, unknown>
   ): Promise<{
     result: ToolResult;
@@ -57,14 +57,15 @@ export class ActionOSExecutor {
     }
 
     // 2. Validate permissions with Default-Deny
+    const effectiveRole = context.role || context.auth?.role || "customer";
     const permission = ActionOSPermissions.checkPermission({
-      role: context.userRole || "customer",
+      role: effectiveRole,
       toolName: step.tool_name,
       amount: (stepInputOverride?.amount as number) || (step.input?.amount as number),
     });
 
     if (!permission.allowed) {
-      const errorMsg = permission.reason || `Permission denied for role '${context.userRole}'`;
+      const errorMsg = permission.reason || `Permission denied for role '${effectiveRole}'`;
       step.status = "failed";
       step.error = errorMsg;
       step.completed_at = new Date().toISOString();
@@ -157,7 +158,7 @@ export class ActionOSExecutor {
     const executionTimeMs = Date.now() - startTime;
 
     // 6. Record tool execution
-    const executionRecord: ToolExecution = {
+    const _executionRecord: ToolExecution = {
       id: `exec_${Date.now()}`,
       action_step_id: step.id,
       tool_id: step.tool_name,

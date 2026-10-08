@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
-import { Mic, MicOff, Loader2, Volume2, AlertCircle } from "lucide-react";
+import React, { useState } from "react";
+import { Mic, Loader2, Volume2, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export type VoiceState = "idle" | "listening" | "processing" | "speaking" | "error";
@@ -19,32 +19,36 @@ export function VoiceActionButton({
   isProcessing = false,
   className,
 }: VoiceActionButtonProps) {
-  const [state, setState] = useState<VoiceState>("idle");
+  const [internalState, setInternalState] = useState<VoiceState>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (isProcessing) {
-      setState("processing");
-    } else if (state === "processing") {
-      setState("idle");
-    }
-  }, [isProcessing, state]);
+  const state: VoiceState = isProcessing ? "processing" : internalState;
 
   const startListening = () => {
     setErrorMessage(null);
 
     // Check Web Speech API availability
-    const win = typeof window !== "undefined" ? (window as unknown as Record<string, any>) : {};
-    const SpeechRecognitionClass = win.SpeechRecognition || win.webkitSpeechRecognition;
+    const win = typeof window !== "undefined" ? (window as unknown as Record<string, unknown>) : {};
+    const SpeechRecognitionClass = (win.SpeechRecognition || win.webkitSpeechRecognition) as
+      | (new () => {
+          lang: string;
+          interimResults: boolean;
+          maxAlternatives: number;
+          onresult: ((event: { results?: Array<Array<{ transcript?: string }>> }) => void) | null;
+          onerror: (() => void) | null;
+          onend: (() => void) | null;
+          start: () => void;
+        })
+      | undefined;
 
     if (!SpeechRecognitionClass) {
       // Simulate realistic speech input for demo environment
-      setState("listening");
+      setInternalState("listening");
       setTimeout(() => {
-        setState("processing");
+        setInternalState("processing");
         setTimeout(() => {
           onTranscript("My car insurance expires next week. Check it and renew it for me.");
-          setState("idle");
+          setInternalState("idle");
         }, 1200);
       }, 2500);
       return;
@@ -56,41 +60,39 @@ export function VoiceActionButton({
       recognition.interimResults = false;
       recognition.maxAlternatives = 1;
 
-      setState("listening");
+      setInternalState("listening");
 
-      recognition.onresult = (event: any) => {
+      recognition.onresult = (event: { results?: Array<Array<{ transcript?: string }>> }) => {
         const transcript = event.results?.[0]?.[0]?.transcript;
         if (transcript) {
-          setState("processing");
+          setInternalState("processing");
           onTranscript(transcript);
         }
       };
 
       recognition.onerror = () => {
         // Fallback to simulated benchmark utterance on permission error or localhost restriction
-        setState("processing");
+        setInternalState("processing");
         setTimeout(() => {
           onTranscript("My car insurance expires next week. Check it and renew it for me.");
-          setState("idle");
+          setInternalState("idle");
         }, 800);
       };
 
       recognition.onend = () => {
-        if (state === "listening") {
-          setState("idle");
-        }
+        setInternalState((curr) => (curr === "listening" ? "idle" : curr));
       };
 
       recognition.start();
     } catch {
-      setState("error");
+      setInternalState("error");
       setErrorMessage("Microphone access could not be established.");
-      setTimeout(() => setState("idle"), 3000);
+      setTimeout(() => setInternalState("idle"), 3000);
     }
   };
 
   const stopListening = () => {
-    setState("idle");
+    setInternalState("idle");
   };
 
   return (

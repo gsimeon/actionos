@@ -45,13 +45,19 @@ export default function DashboardOverviewPage() {
   }, []);
 
   const totalPremiums = policies.reduce((acc, p) => acc + (p.premium || 0), 0);
-  const dueRenewals = renewals.filter((r) => r.status === "awaiting_confirmation" || r.status === "scheduled");
+  const dueRenewals = renewals.filter(
+    (r) => r.status === "awaiting_confirmation" || r.status === "scheduled"
+  );
   const completedRenewals = renewals.filter((r) => r.status === "completed");
 
   const pipelineStages = [
     { label: "Upcoming", count: renewals.filter((r) => r.status === "scheduled").length, color: "text-slate-700" },
-    { label: "Contacted", count: 1, color: "text-blue-700" },
-    { label: "Awaiting Auth", count: renewals.filter((r) => r.status === "awaiting_confirmation").length, color: "text-amber-700" },
+    { label: "Contacted", count: renewals.filter((r) => r.status === "contacted").length, color: "text-blue-700" },
+    {
+      label: "Awaiting Auth",
+      count: renewals.filter((r) => r.status === "awaiting_confirmation").length,
+      color: "text-amber-700",
+    },
     { label: "Payment Pending", count: renewals.filter((r) => r.status === "payment_pending").length, color: "text-yellow-700" },
     { label: "Processing", count: renewals.filter((r) => r.status === "processing").length, color: "text-cyan-700" },
     { label: "Completed", count: completedRenewals.length, color: "text-emerald-700" },

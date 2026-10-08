@@ -1,5 +1,6 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { isDemoMode } from "@/lib/runtime/mode";
 
 export async function updateSession(request: NextRequest) {
   let response = NextResponse.next({
@@ -12,7 +13,7 @@ export async function updateSession(request: NextRequest) {
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || "demo-anon-key";
 
   // If in pure demo mode without supabase config, pass through smoothly
-  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.DEMO_MODE === "true") {
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || isDemoMode()) {
     return response;
   }
 

@@ -1,4 +1,4 @@
-import type { IActionOSTool, ToolResult, ExecutionContext } from "@/types/actionos";
+import type { IActionOSTool, ToolResult, WorkflowExecutionContext } from "@/types/actionos";
 import type { Policy } from "@/types/database";
 import { getRepositoryContainer } from "@/lib/repositories";
 
@@ -35,12 +35,12 @@ export class RenewPolicyTool implements IActionOSTool<RenewPolicyInput, RenewPol
     return { valid: true, data };
   }
 
-  async execute(input: RenewPolicyInput, context: ExecutionContext): Promise<ToolResult<RenewPolicyOutput>> {
+  async execute(input: RenewPolicyInput, context: WorkflowExecutionContext): Promise<ToolResult<RenewPolicyOutput>> {
     const repos = getRepositoryContainer();
     const tenantContext = {
       organizationId: context.organizationId,
       customerId: context.customerId,
-      role: context.userRole,
+      role: context.role,
     };
     const policy = await repos.policies.findByNumber(input.policyNumber, tenantContext);
 

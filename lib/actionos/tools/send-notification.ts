@@ -1,4 +1,4 @@
-import type { IActionOSTool, ToolResult, ExecutionContext } from "@/types/actionos";
+import type { IActionOSTool, ToolResult, WorkflowExecutionContext } from "@/types/actionos";
 import type { NotificationRecord } from "@/types/database";
 import { getRepositoryContainer } from "@/lib/repositories";
 import { formatNaira, formatDate } from "@/lib/utils";
@@ -39,12 +39,12 @@ export class SendNotificationTool implements IActionOSTool<SendNotificationInput
     return { valid: true, data };
   }
 
-  async execute(input: SendNotificationInput, context: ExecutionContext): Promise<ToolResult<NotificationOutput>> {
+  async execute(input: SendNotificationInput, context: WorkflowExecutionContext): Promise<ToolResult<NotificationOutput>> {
     const repos = getRepositoryContainer();
     const tenantContext = {
       organizationId: context.organizationId,
       customerId: context.customerId,
-      role: context.userRole,
+      role: context.role,
     };
     let customer = await repos.customers.findById(input.customerId, tenantContext);
     if (!customer && context.isSimulated) {
@@ -61,14 +61,17 @@ export class SendNotificationTool implements IActionOSTool<SendNotificationInput
     const deliveryStatuses = [];
 
     for (const ch of channels) {
-      await repos.notifications.create({
-        customer_id: input.customerId,
-        type: "certificate_issued",
-        channel: ch,
-        title,
-        message,
-        scheduled_for: new Date().toISOString(),
-      });
+      await repos.notifications.create(
+        {
+          customer_id: input.customerId,
+          type: "certificate_issued",
+          channel: ch,
+          title,
+          message,
+          scheduled_for: new Date().toISOString(),
+        },
+        tenantContext
+      );
 
       deliveryStatuses.push({
         channel: ch,

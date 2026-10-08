@@ -1,4 +1,5 @@
 import type {
+  ActionSessionChannel,
   ActionSessionStatus,
   MemberRole,
   ToolRiskLevel,
@@ -20,18 +21,34 @@ export const ALLOWED_STATE_TRANSITIONS: Record<ActionSessionStatus, ActionSessio
   expired: [],
 };
 
-// Tool Execution Context
-export interface ExecutionContext {
+export type ChannelType = ActionSessionChannel;
+
+// Canonical Authenticated Execution Context derived server-side
+export interface AuthenticatedExecutionContext {
+  userId: string;
+  profileId: string;
+  organizationId: string;
+  role: MemberRole;
+  customerId?: string;
+  isDemo: boolean;
+}
+
+// Tool & Workflow Execution Context carrying verified auth as primary authority
+export interface WorkflowExecutionContext {
+  auth: AuthenticatedExecutionContext;
   sessionId: string;
   planId?: string;
   stepId?: string;
+  channel: ChannelType;
+  language?: string;
+  isSimulated: boolean;
+  // Direct accessors mirroring auth for ergonomic usage in tools
   organizationId: string;
   customerId?: string;
+  role: MemberRole;
   userId?: string;
-  userRole?: MemberRole;
-  channel?: string;
-  language?: string;
-  isSimulated?: boolean;
+  profileId?: string;
+  isDemo?: boolean;
 }
 
 // Structured Tool Output standard
@@ -55,7 +72,7 @@ export interface IActionOSTool<TInput = any, TOutput = any> {
   riskLevel: ToolRiskLevel;
   requiresConfirmation: boolean;
   validateInput(input: unknown): { valid: boolean; error?: string; data?: TInput };
-  execute(input: TInput, context: ExecutionContext): Promise<ToolResult<TOutput>>;
+  execute(input: TInput, context: WorkflowExecutionContext): Promise<ToolResult<TOutput>>;
 }
 
 // N-ATLAS Provider Interface

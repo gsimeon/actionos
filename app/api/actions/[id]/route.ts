@@ -8,8 +8,16 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
+    const { resolveExecutionContext } = await import("@/lib/security/auth-context");
+    const context = await resolveExecutionContext(_req);
+    const tenant = {
+      organizationId: context.organizationId,
+      customerId: context.customerId,
+      role: context.role,
+    };
+
     const repos = getRepositoryContainer();
-    const session = await repos.sessions.findById(id);
+    const session = await repos.sessions.findById(id, tenant);
 
     if (!session) {
       return NextResponse.json(
@@ -21,9 +29,9 @@ export async function GET(
       );
     }
 
-    const plan = await repos.plans.findBySessionId(id);
-    const steps = plan ? await repos.steps.findByPlanId(plan.id) : [];
-    const events = (await repos.ledger.getEventsBySessionId(id)) || [];
+    const plan = await repos.plans.findBySessionId(id, tenant);
+    const steps = plan ? await repos.steps.findByPlanId(plan.id, tenant) : [];
+    const events = (await repos.ledger.getEventsBySessionId(id, tenant)) || [];
     const authDetails = (session.metadata?.authorizationDetails as AuthorizationDetails) || null;
 
     return NextResponse.json({
@@ -63,6 +71,13 @@ export async function GET(
       },
     });
   } catch (err: unknown) {
+    const { AuthContextError } = await import("@/lib/security/auth-context");
+    if (err instanceof AuthContextError) {
+      return NextResponse.json(
+        { success: false, error: { code: err.code, message: err.message } },
+        { status: err.code === "UNAUTHORIZED" ? 401 : 403 }
+      );
+    }
     const message = err instanceof Error ? err.message : "Internal error";
     return NextResponse.json(
       { success: false, error: { code: "INTERNAL_ERROR", message } },

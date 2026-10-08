@@ -12,25 +12,24 @@ import type {
   ActionSession,
   Customer,
   Policy,
+  MemberRole,
 } from "@/types/database";
 import type {
   ActionLedgerEvent,
   AuthorizationDetails,
-  ExecutionContext,
+  AuthenticatedExecutionContext,
   UnderwriterQuote,
 } from "@/types/actionos";
+import { isDemoMode } from "@/lib/runtime/mode";
 import { formatNaira, formatDate } from "@/lib/utils";
+import { createWorkflowExecutionContext } from "@/lib/runtime/execution-context";
 
 export interface StartWorkflowInput {
   inputText: string;
   inputAudioUrl?: string;
   channel: "web" | "voice" | "whatsapp" | "telegram" | "api";
   language?: string;
-  customerId?: string;
-  organizationId?: string;
-  userId?: string;
-  userRole?: ExecutionContext["userRole"];
-  executionContext?: Partial<ExecutionContext>;
+  executionContext: AuthenticatedExecutionContext;
 }
 
 export interface WorkflowStepResult {
@@ -113,10 +112,36 @@ export class ActionOSOrchestrator {
   async startWorkflow(input: StartWorkflowInput): Promise<WorkflowStepResult> {
     const repos = getRepositoryContainer();
     const sessionId = `act_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    const orgId = input.executionContext?.organizationId || input.organizationId || "a0000000-0000-0000-0000-000000000001";
-    const customerId = input.executionContext?.customerId || input.customerId || "f0000000-0000-0000-0000-000000000001";
-    const userId = input.executionContext?.userId || input.userId;
-    const userRole = ((input.executionContext as Record<string, unknown>)?.role as ExecutionContext["userRole"]) || input.executionContext?.userRole || input.userRole || "customer";
+    const isDemo = isDemoMode();
+
+    // Strict authentication enforcement: zero implicit fallback
+    const auth = input.executionContext;
+    if (!auth) {
+      throw new Error(
+        "Security enforcement violation: executionContext is required to execute an ActionOS workflow."
+      );
+    }
+
+    if (!isDemo && auth.isDemo) {
+      throw new Error(
+        "Security enforcement violation: Demo execution context cannot be used in production runtime mode."
+      );
+    }
+
+    if (!auth.organizationId) {
+      throw new Error("Tenant boundary violation: organizationId is required in executionContext.");
+    }
+
+    if (!auth.role) {
+      throw new Error("Role enforcement violation: role is required in executionContext.");
+    }
+
+    if (!auth.customerId && auth.role === "customer") {
+      throw new Error("Identity enforcement violation: customerId is required for customer role.");
+    }
+
+    const orgId = auth.organizationId;
+    const customerId = auth.customerId;
 
     const sm = new ActionStateMachine("received");
     const events: ActionLedgerEvent[] = [];
@@ -206,17 +231,13 @@ export class ActionOSOrchestrator {
     session.status = "validating";
     await repos.sessions.updateStatus(sessionId, "validating");
 
-    const execContext: ExecutionContext = {
+    const execContext = createWorkflowExecutionContext(auth, {
       sessionId,
       planId: plan.id,
-      organizationId: orgId,
-      customerId,
-      userId,
-      userRole,
       channel: input.channel,
       language: input.language,
-      isSimulated: input.executionContext?.isSimulated ?? true,
-    };
+      isSimulated: isDemo,
+    });
 
     let activeCustomer: Customer | undefined;
     let activePolicy: Policy | undefined;
@@ -298,16 +319,35 @@ export class ActionOSOrchestrator {
       const nextYearDate = new Date(activePolicy.expiry_date);
       nextYearDate.setFullYear(nextYearDate.getFullYear() + 1);
 
+      const providerName =
+        (vehicleMeta.underwriter as string) ||
+        (vehicleMeta.provider as string) ||
+        (vehicleMeta.insurance_company as string) ||
+        "Leadway Assurance";
+
+      const assetIdentifier =
+        (vehicleMeta.vehicle_reg as string) ||
+        (vehicleMeta.vehicle_plate as string) ||
+        (vehicleMeta.plate_number as string) ||
+        (vehicleMeta.chassis_number as string) ||
+        activePolicy.policy_number;
+
+      const assetName =
+        (vehicleMeta.vehicle_name as string) ||
+        (vehicleMeta.make_model as string) ||
+        (vehicleMeta.asset_name as string) ||
+        "Insured Asset";
+
       authDetails = {
         sessionId,
         customerName: activeCustomer?.full_name || "Customer",
-        providerName: "Leadway Assurance",
+        providerName,
         amount: quoteAmount,
         currency: activePolicy.currency || "NGN",
         policyNumber: activePolicy.policy_number,
         policyId: activePolicy.id,
-        assetIdentifier: (vehicleMeta.vehicle_plate as string) || "ABC-123-XY",
-        assetName: (vehicleMeta.vehicle_name as string) || "Toyota Camry (2020)",
+        assetIdentifier,
+        assetName,
         currentExpiry: activePolicy.expiry_date,
         newExpiry: nextYearDate.toISOString().split("T")[0],
         requiresExplicitConsent: true,
@@ -387,7 +427,7 @@ export class ActionOSOrchestrator {
   async authorizeAndExecute(
     sessionId: string,
     authorized: boolean,
-    userRoleOrContext: string | ExecutionContext | import("@/lib/security/auth-context").ExecutionContext = "customer",
+    authContext: AuthenticatedExecutionContext,
     options?: {
       selectedUnderwriter?: string;
       customAmount?: number;
@@ -395,28 +435,51 @@ export class ActionOSOrchestrator {
       authMethod?: "pin" | "biometric_webauthn" | "passkey" | "whatsapp_otp";
     }
   ): Promise<WorkflowStepResult> {
-    const ctxObj =
-      typeof userRoleOrContext === "object" && userRoleOrContext !== null
-        ? (userRoleOrContext as unknown as Record<string, unknown>)
-        : null;
+    const isDemo = isDemoMode();
+    const auth = authContext;
+    if (!auth) {
+      throw new Error("Security enforcement violation: authContext is required to authorize and execute an ActionOS workflow.");
+    }
 
-    const userRole = (ctxObj ? (ctxObj.role || ctxObj.userRole) : userRoleOrContext) || "customer";
-    const userId = ctxObj ? (ctxObj.userId as string | undefined) : undefined;
-    const callerOrgId = ctxObj ? (ctxObj.organizationId as string | undefined) : undefined;
-    const callerCustomerId = ctxObj ? (ctxObj.customerId as string | undefined) : undefined;
+    if (!isDemo && auth.isDemo) {
+      throw new Error("Security enforcement violation: Demo execution context cannot be used in production runtime mode.");
+    }
 
-    const tenantContext: TenantContext | undefined = callerOrgId
-      ? { organizationId: callerOrgId, customerId: callerCustomerId, role: userRole as string }
-      : undefined;
+    if (!auth.organizationId) {
+      throw new Error("Tenant boundary violation: organizationId is required in executionContext.");
+    }
+
+    if (!auth.role) {
+      throw new Error("Role enforcement violation: role is required in executionContext.");
+    }
+
+    const role: MemberRole = auth.role;
+    const callerOrgId = auth.organizationId;
+    const callerCustomerId = auth.customerId;
+
+    const tenantContext: TenantContext = {
+      organizationId: callerOrgId,
+      customerId: callerCustomerId,
+      role,
+    };
 
     const repos = getRepositoryContainer();
     const session = await repos.sessions.findById(sessionId, tenantContext);
-    const plan = await repos.plans.findBySessionId(sessionId);
-    const steps = plan ? await repos.steps.findByPlanId(plan.id) : [];
+    const plan = await repos.plans.findBySessionId(sessionId, tenantContext);
+    const steps = plan ? await repos.steps.findByPlanId(plan.id, tenantContext) : [];
     const events = (await repos.ledger.getEventsBySessionId(sessionId, tenantContext)) || [];
 
     if (!session || !plan) {
       throw new Error(`Session '${sessionId}' not found.`);
+    }
+
+    if (callerOrgId && session.organization_id !== callerOrgId) {
+      throw new Error("Tenant boundary violation: cannot authorize action belonging to another organization.");
+    }
+
+    const targetCustomerId = session.customer_id || callerCustomerId;
+    if (!targetCustomerId && role === "customer") {
+      throw new Error("Identity enforcement violation: customerId is required to execute workflow.");
     }
 
     const sm = new ActionStateMachine(session.status);
@@ -498,23 +561,23 @@ export class ActionOSOrchestrator {
       metadata: { authMethod: options?.authMethod || "pin", selectedUnderwriter: options?.selectedUnderwriter },
     });
 
-    const orgId = callerOrgId || session.organization_id;
-    const customerId = callerCustomerId || session.customer_id || "f0000000-0000-0000-0000-000000000001";
-    const isSimulated = ctxObj
-      ? ((ctxObj.isSimulated as boolean | undefined) ?? (ctxObj.isDemo as boolean | undefined) ?? true)
-      : true;
-
-    const execContext: ExecutionContext = {
+    const execContext = createWorkflowExecutionContext(auth, {
       sessionId,
       planId: plan.id,
-      organizationId: orgId,
-      customerId,
-      userId,
-      userRole: userRole as ExecutionContext["userRole"],
       channel: session.channel,
       language: session.language,
-      isSimulated,
-    };
+      isSimulated: isDemo,
+    });
+
+    const policyNumber = authDetails?.policyNumber;
+    if (!policyNumber) {
+      throw new Error("Execution violation: policyNumber is required in authorizationDetails.");
+    }
+    const currentExpiry = authDetails?.currentExpiry;
+    const targetNewExpiry = authDetails?.newExpiry;
+    if (!targetNewExpiry) {
+      throw new Error("Execution violation: newExpiry is required in authorizationDetails.");
+    }
 
     let paymentReference = "";
     let renewalOutput: { newExpiry?: string; policyNumber?: string } = {};
@@ -582,31 +645,33 @@ export class ActionOSOrchestrator {
       const stepOverride: Record<string, unknown> = {};
 
       if (step.tool_name === "request_payment") {
-        stepOverride.customerId = session.customer_id || "f0000000-0000-0000-0000-000000000001";
+        stepOverride.customerId = targetCustomerId;
         stepOverride.amount = quoteAmount;
         stepOverride.currency = "NGN";
-        stepOverride.policyNumber = authDetails?.policyNumber || "AUTO-2026-00182";
+        stepOverride.policyNumber = policyNumber;
       } else if (step.tool_name === "verify_payment") {
         stepOverride.reference = paymentReference;
         stepOverride.expectedAmount = quoteAmount;
       } else if (step.tool_name === "renew_policy") {
-        stepOverride.policyNumber = authDetails?.policyNumber || "AUTO-2026-00182";
+        stepOverride.policyNumber = policyNumber;
         stepOverride.paymentReference = paymentReference;
       } else if (step.tool_name === "generate_certificate") {
-        stepOverride.customerId = session.customer_id || "f0000000-0000-0000-0000-000000000001";
-        stepOverride.policyNumber = authDetails?.policyNumber || "AUTO-2026-00182";
-        stepOverride.previousExpiry = authDetails?.currentExpiry || "2026-10-14";
-        stepOverride.newExpiry = renewalOutput.newExpiry || "2027-10-14";
+        stepOverride.customerId = targetCustomerId;
+        stepOverride.policyNumber = policyNumber;
+        if (currentExpiry) {
+          stepOverride.previousExpiry = currentExpiry;
+        }
+        stepOverride.newExpiry = renewalOutput.newExpiry || targetNewExpiry;
         stepOverride.amount = quoteAmount;
       } else if (step.tool_name === "send_notification") {
-        stepOverride.customerId = session.customer_id || "f0000000-0000-0000-0000-000000000001";
-        stepOverride.policyNumber = authDetails?.policyNumber || "AUTO-2026-00182";
-        stepOverride.newExpiry = renewalOutput.newExpiry || "2027-10-14";
+        stepOverride.customerId = targetCustomerId;
+        stepOverride.policyNumber = policyNumber;
+        stepOverride.newExpiry = renewalOutput.newExpiry || targetNewExpiry;
         stepOverride.amount = quoteAmount;
       } else if (step.tool_name === "schedule_reminder") {
-        stepOverride.customerId = session.customer_id || "f0000000-0000-0000-0000-000000000001";
-        stepOverride.policyNumber = authDetails?.policyNumber || "AUTO-2026-00182";
-        stepOverride.newExpiry = renewalOutput.newExpiry || "2027-10-14";
+        stepOverride.customerId = targetCustomerId;
+        stepOverride.policyNumber = policyNumber;
+        stepOverride.newExpiry = renewalOutput.newExpiry || targetNewExpiry;
       }
 
       const { result, ledgerEvent } = await this.executor.executeStep(
@@ -675,9 +740,12 @@ export class ActionOSOrchestrator {
     session.status = "verifying";
     await repos.sessions.updateStatus(sessionId, "verifying");
 
+    const effectiveNewExpiry = renewalOutput.newExpiry || targetNewExpiry;
+    const expectedYear = new Date(effectiveNewExpiry).getFullYear();
+
     const verifyRenewalResult = await this.verifier.verifyRenewal(
-      authDetails?.policyNumber || "AUTO-2026-00182",
-      2027
+      policyNumber,
+      expectedYear
     );
 
     await this.appendLedgerEvent(events, {
@@ -686,7 +754,7 @@ export class ActionOSOrchestrator {
       timestamp: new Date().toISOString(),
       action: "independent_verification",
       description: verifyRenewalResult.passed
-        ? "Database roll-forward verified: Expiry successfully updated to 2027-10-14."
+        ? `Database roll-forward verified: Expiry successfully updated to ${effectiveNewExpiry}.`
         : `Verification check failed: ${verifyRenewalResult.reason}`,
       status: verifyRenewalResult.passed ? "verified" : "failed",
       actor: "Policy Guardrail",
@@ -716,17 +784,21 @@ export class ActionOSOrchestrator {
 
     webhookDispatcher.broadcast("policy.renewed", {
       sessionId,
-      policyNumber: authDetails?.policyNumber || "AUTO-2026-00182",
+      policyNumber,
       amount: quoteAmount,
-      expiryDate: "2027-10-14",
+      expiryDate: effectiveNewExpiry,
     });
+
+    const assetDesc = authDetails.assetName
+      ? `${authDetails.assetName}${authDetails.assetIdentifier ? ` (${authDetails.assetIdentifier})` : ""}`
+      : policyNumber;
 
     return {
       sessionId,
       status: "completed",
       intent: plan.intent,
       confidence: plan.confidence,
-      message: `Success! Your insurance for ${authDetails?.assetName} (${authDetails?.assetIdentifier}) has been renewed to October 14, 2027. Your certified certificate is ready.`,
+      message: `Success! Your insurance for ${assetDesc} has been renewed to ${formatDate(effectiveNewExpiry)}. Your certified certificate is ready.`,
       authorizationRequired: false,
       authorizationDetails: null,
       events,

@@ -10,7 +10,6 @@ import {
   ShieldCheck,
   QrCode,
 } from "lucide-react";
-import { formatNaira, formatDate } from "@/lib/utils";
 
 export default function DocumentsPage() {
   const [selectedDoc, setSelectedDoc] = useState<boolean>(false);

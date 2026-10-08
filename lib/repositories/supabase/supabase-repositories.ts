@@ -94,6 +94,9 @@ export class SupabaseCustomerRepository implements ICustomerRepository {
     if (tenant?.organizationId) {
       query = query.eq("organization_id", tenant.organizationId);
     }
+    if (tenant?.customerId) {
+      query = query.eq("id", tenant.customerId);
+    }
 
     const { data, error } = await query.maybeSingle();
     if (error) {
@@ -102,18 +105,28 @@ export class SupabaseCustomerRepository implements ICustomerRepository {
     return (data || null) as Customer | null;
   }
 
-  async findByOrganization(orgId: string): Promise<Customer[]> {
-    const { data, error } = await this.client
+  async findByOrganization(orgId: string, tenant?: TenantContext): Promise<Customer[]> {
+    if (tenant?.organizationId && orgId !== tenant.organizationId) {
+      return [];
+    }
+    let query = this.client
       .from("customers")
       .select("*")
       .eq("organization_id", orgId);
+    if (tenant?.customerId) {
+      query = query.eq("id", tenant.customerId);
+    }
+    const { data, error } = await query;
     if (error) {
       throw new DatabaseError(`Customer lookup by organization failed: ${error.message}`, error.code, error);
     }
     return (data || []) as Customer[];
   }
 
-  async create(data: Partial<Customer> & { customer_number: string; full_name: string; phone: string; email: string; organization_id: string }): Promise<Customer> {
+  async create(data: Partial<Customer> & { customer_number: string; full_name: string; phone: string; email: string; organization_id: string }, tenant?: TenantContext): Promise<Customer> {
+    if (tenant?.organizationId && data.organization_id !== tenant.organizationId) {
+      throw new DatabaseError(`Tenant authorization violation: organization mismatch on customer create`, "UNAUTHORIZED");
+    }
     const { data: created, error } = await this.client
       .from("customers")
       .insert({
@@ -139,9 +152,12 @@ export class SupabasePolicyRepository implements IPolicyRepository {
   private client = getSupabaseClient();
 
   async findAll(options?: { status?: string; tenant?: TenantContext }): Promise<Policy[]> {
-    let query = this.client.from("policies").select("*");
+    let query = this.client.from("policies").select("*, customer:customers!inner(*)");
     if (options?.status && options.status !== "all") {
       query = query.eq("status", options.status);
+    }
+    if (options?.tenant?.organizationId) {
+      query = query.eq("customer.organization_id", options.tenant.organizationId);
     }
     if (options?.tenant?.customerId) {
       query = query.eq("customer_id", options.tenant.customerId);
@@ -157,9 +173,12 @@ export class SupabasePolicyRepository implements IPolicyRepository {
   async findById(id: string, tenant?: TenantContext): Promise<Policy | null> {
     let query = this.client
       .from("policies")
-      .select("*")
+      .select("*, customer:customers!inner(*)")
       .eq("id", id);
 
+    if (tenant?.organizationId) {
+      query = query.eq("customer.organization_id", tenant.organizationId);
+    }
     if (tenant?.customerId) {
       query = query.eq("customer_id", tenant.customerId);
     }
@@ -174,9 +193,12 @@ export class SupabasePolicyRepository implements IPolicyRepository {
   async findByNumber(policyNumber: string, tenant?: TenantContext): Promise<Policy | null> {
     let query = this.client
       .from("policies")
-      .select("*")
+      .select("*, customer:customers!inner(*)")
       .ilike("policy_number", policyNumber);
 
+    if (tenant?.organizationId) {
+      query = query.eq("customer.organization_id", tenant.organizationId);
+    }
     if (tenant?.customerId) {
       query = query.eq("customer_id", tenant.customerId);
     }
@@ -193,18 +215,37 @@ export class SupabasePolicyRepository implements IPolicyRepository {
       return [];
     }
 
-    const { data, error } = await this.client
+    let query = this.client
       .from("policies")
-      .select("*")
-      .eq("customer_id", customerId)
-      .order("created_at", { ascending: false });
+      .select("*, customer:customers!inner(*)")
+      .eq("customer_id", customerId);
+
+    if (tenant?.organizationId) {
+      query = query.eq("customer.organization_id", tenant.organizationId);
+    }
+
+    const { data, error } = await query.order("created_at", { ascending: false });
     if (error) {
       throw new DatabaseError(`Policy query by customer ID failed: ${error.message}`, error.code, error);
     }
     return (data || []) as Policy[];
   }
 
-  async create(data: Partial<Policy> & { customer_id: string; provider_id: string; policy_type_id: string; policy_number: string; start_date: string; expiry_date: string; premium: number }): Promise<Policy> {
+  async create(data: Partial<Policy> & { customer_id: string; provider_id: string; policy_type_id: string; policy_number: string; start_date: string; expiry_date: string; premium: number }, tenant?: TenantContext): Promise<Policy> {
+    if (tenant?.customerId && data.customer_id !== tenant.customerId) {
+      throw new DatabaseError(`Tenant authorization violation: customer mismatch on policy create`, "UNAUTHORIZED");
+    }
+    if (tenant?.organizationId) {
+      const { data: cust } = await this.client
+        .from("customers")
+        .select("id, organization_id")
+        .eq("id", data.customer_id)
+        .eq("organization_id", tenant.organizationId)
+        .maybeSingle();
+      if (!cust) {
+        throw new DatabaseError(`Tenant authorization violation: customer does not belong to organization`, "UNAUTHORIZED");
+      }
+    }
     const { data: created, error } = await this.client
       .from("policies")
       .insert({
@@ -227,6 +268,12 @@ export class SupabasePolicyRepository implements IPolicyRepository {
   }
 
   async updateStatusAndExpiry(id: string, status: Policy["status"], newExpiryDate: string, tenant?: TenantContext): Promise<Policy> {
+    if (tenant?.organizationId || tenant?.customerId) {
+      const existing = await this.findById(id, tenant);
+      if (!existing) {
+        throw new DatabaseError(`Policy ${id} not found or tenant authorization mismatch`, "UNAUTHORIZED");
+      }
+    }
     let query = this.client
       .from("policies")
       .update({
@@ -252,10 +299,13 @@ export class SupabaseRenewalRepository implements IRenewalRepository {
   async findAll(options?: { status?: string; tenant?: TenantContext }): Promise<Renewal[]> {
     let query = this.client
       .from("renewals")
-      .select("*, policy:policies(*), customer:customers(*)");
+      .select("*, policy:policies(*), customer:customers!inner(*)");
 
     if (options?.status && options.status !== "all") {
       query = query.eq("status", options.status);
+    }
+    if (options?.tenant?.organizationId) {
+      query = query.eq("customer.organization_id", options.tenant.organizationId);
     }
     if (options?.tenant?.customerId) {
       query = query.eq("customer_id", options.tenant.customerId);
@@ -271,9 +321,12 @@ export class SupabaseRenewalRepository implements IRenewalRepository {
   async findById(id: string, tenant?: TenantContext): Promise<Renewal | null> {
     let query = this.client
       .from("renewals")
-      .select("*, policy:policies(*), customer:customers(*)")
+      .select("*, policy:policies(*), customer:customers!inner(*)")
       .eq("id", id);
 
+    if (tenant?.organizationId) {
+      query = query.eq("customer.organization_id", tenant.organizationId);
+    }
     if (tenant?.customerId) {
       query = query.eq("customer_id", tenant.customerId);
     }
@@ -288,9 +341,12 @@ export class SupabaseRenewalRepository implements IRenewalRepository {
   async findByPolicyId(policyId: string, tenant?: TenantContext): Promise<Renewal | null> {
     let query = this.client
       .from("renewals")
-      .select("*, policy:policies(*), customer:customers(*)")
+      .select("*, policy:policies(*), customer:customers!inner(*)")
       .eq("policy_id", policyId);
 
+    if (tenant?.organizationId) {
+      query = query.eq("customer.organization_id", tenant.organizationId);
+    }
     if (tenant?.customerId) {
       query = query.eq("customer_id", tenant.customerId);
     }
@@ -302,7 +358,21 @@ export class SupabaseRenewalRepository implements IRenewalRepository {
     return (data || null) as Renewal | null;
   }
 
-  async create(data: Partial<Renewal> & { policy_id: string; customer_id: string; scheduled_for: string }): Promise<Renewal> {
+  async create(data: Partial<Renewal> & { policy_id: string; customer_id: string; scheduled_for: string }, tenant?: TenantContext): Promise<Renewal> {
+    if (tenant?.customerId && data.customer_id !== tenant.customerId) {
+      throw new DatabaseError(`Tenant authorization violation: customer mismatch on renewal create`, "UNAUTHORIZED");
+    }
+    if (tenant?.organizationId) {
+      const { data: cust } = await this.client
+        .from("customers")
+        .select("id, organization_id")
+        .eq("id", data.customer_id)
+        .eq("organization_id", tenant.organizationId)
+        .maybeSingle();
+      if (!cust) {
+        throw new DatabaseError(`Tenant authorization violation: customer does not belong to organization`, "UNAUTHORIZED");
+      }
+    }
     const { data: created, error } = await this.client
       .from("renewals")
       .insert({
@@ -322,6 +392,12 @@ export class SupabaseRenewalRepository implements IRenewalRepository {
   }
 
   async updateStatus(id: string, status: Renewal["status"], renewedAt?: string, tenant?: TenantContext): Promise<Renewal> {
+    if (tenant?.organizationId || tenant?.customerId) {
+      const existing = await this.findById(id, tenant);
+      if (!existing) {
+        throw new DatabaseError(`Renewal ${id} not found or tenant authorization mismatch`, "UNAUTHORIZED");
+      }
+    }
     const updatePayload: Record<string, unknown> = {
       status,
       updated_at: new Date().toISOString(),
@@ -343,6 +419,12 @@ export class SupabaseRenewalRepository implements IRenewalRepository {
   }
 
   async updatePaymentStatus(id: string, paymentStatus: Renewal["payment_status"], tenant?: TenantContext): Promise<Renewal> {
+    if (tenant?.organizationId || tenant?.customerId) {
+      const existing = await this.findById(id, tenant);
+      if (!existing) {
+        throw new DatabaseError(`Renewal ${id} not found or tenant authorization mismatch`, "UNAUTHORIZED");
+      }
+    }
     let query = this.client
       .from("renewals")
       .update({
@@ -384,7 +466,13 @@ export class SupabaseActionSessionRepository implements IActionSessionRepository
     return (data || null) as ActionSession | null;
   }
 
-  async create(data: Partial<ActionSession> & { organization_id: string; channel: ActionSession["channel"] }): Promise<ActionSession> {
+  async create(data: Partial<ActionSession> & { organization_id: string; channel: ActionSession["channel"] }, tenant?: TenantContext): Promise<ActionSession> {
+    if (tenant?.organizationId && data.organization_id !== tenant.organizationId) {
+      throw new DatabaseError(`Tenant authorization violation: organization mismatch on session create`, "UNAUTHORIZED");
+    }
+    if (tenant?.customerId && data.customer_id && data.customer_id !== tenant.customerId) {
+      throw new DatabaseError(`Tenant authorization violation: customer mismatch on session create`, "UNAUTHORIZED");
+    }
     const { data: created, error } = await this.client
       .from("action_sessions")
       .insert({
@@ -419,6 +507,9 @@ export class SupabaseActionSessionRepository implements IActionSessionRepository
     if (tenant?.organizationId) {
       query = query.eq("organization_id", tenant.organizationId);
     }
+    if (tenant?.customerId) {
+      query = query.eq("customer_id", tenant.customerId);
+    }
 
     const { data, error } = await query.select("*").single();
     if (error || !data) throw new DatabaseError(`Failed to update action session status: ${error?.message}`, error?.code, error);
@@ -437,6 +528,9 @@ export class SupabaseActionSessionRepository implements IActionSessionRepository
     if (tenant?.organizationId) {
       query = query.eq("organization_id", tenant.organizationId);
     }
+    if (tenant?.customerId) {
+      query = query.eq("customer_id", tenant.customerId);
+    }
 
     const { data, error } = await query.select("*").single();
     if (error || !data) throw new DatabaseError(`Failed to update session metadata: ${error?.message}`, error?.code, error);
@@ -447,7 +541,7 @@ export class SupabaseActionSessionRepository implements IActionSessionRepository
 export class SupabaseActionPlanRepository implements IActionPlanRepository {
   private client = getSupabaseClient();
 
-  async create(data: Partial<ActionPlan> & { session_id: string; intent: string; goal: string }): Promise<ActionPlan> {
+  async create(data: Partial<ActionPlan> & { session_id: string; intent: string; goal: string }, _tenant?: TenantContext): Promise<ActionPlan> {
     const { data: created, error } = await this.client
       .from("action_plans")
       .insert({
@@ -464,7 +558,26 @@ export class SupabaseActionPlanRepository implements IActionPlanRepository {
     return created as ActionPlan;
   }
 
-  async findBySessionId(sessionId: string): Promise<ActionPlan | null> {
+  async findBySessionId(sessionId: string, tenant?: TenantContext): Promise<ActionPlan | null> {
+    if (tenant?.organizationId || tenant?.customerId) {
+      let sessionQuery = this.client
+        .from("action_sessions")
+        .select("id")
+        .eq("id", sessionId);
+
+      if (tenant.organizationId) {
+        sessionQuery = sessionQuery.eq("organization_id", tenant.organizationId);
+      }
+      if (tenant.customerId) {
+        sessionQuery = sessionQuery.eq("customer_id", tenant.customerId);
+      }
+
+      const { data: sessionData } = await sessionQuery.maybeSingle();
+      if (!sessionData) {
+        return null;
+      }
+    }
+
     const { data, error } = await this.client
       .from("action_plans")
       .select("*")
@@ -474,7 +587,28 @@ export class SupabaseActionPlanRepository implements IActionPlanRepository {
     return (data || null) as ActionPlan | null;
   }
 
-  async updateStatus(id: string, status: ActionPlan["status"]): Promise<ActionPlan> {
+  async updateStatus(id: string, status: ActionPlan["status"], tenant?: TenantContext): Promise<ActionPlan> {
+    if (tenant?.organizationId || tenant?.customerId) {
+      const { data: planData } = await this.client
+        .from("action_plans")
+        .select("session_id")
+        .eq("id", id)
+        .maybeSingle();
+      if (!planData) {
+        throw new DatabaseError(`Action plan ${id} not found`, "NOT_FOUND");
+      }
+      let sessionQuery = this.client
+        .from("action_sessions")
+        .select("id")
+        .eq("id", planData.session_id);
+      if (tenant.organizationId) sessionQuery = sessionQuery.eq("organization_id", tenant.organizationId);
+      if (tenant.customerId) sessionQuery = sessionQuery.eq("customer_id", tenant.customerId);
+      const { data: sessionData } = await sessionQuery.maybeSingle();
+      if (!sessionData) {
+        throw new DatabaseError(`Tenant authorization violation for action plan ${id}`, "UNAUTHORIZED");
+      }
+    }
+
     const { data, error } = await this.client
       .from("action_plans")
       .update({ status, updated_at: new Date().toISOString() })
@@ -489,7 +623,7 @@ export class SupabaseActionPlanRepository implements IActionPlanRepository {
 export class SupabaseActionStepRepository implements IActionStepRepository {
   private client = getSupabaseClient();
 
-  async createMany(steps: Array<Partial<ActionStep> & { action_plan_id: string; sequence: number; action_type: string; description: string; tool_name: string }>): Promise<ActionStep[]> {
+  async createMany(steps: Array<Partial<ActionStep> & { action_plan_id: string; sequence: number; action_type: string; description: string; tool_name: string }>, _tenant?: TenantContext): Promise<ActionStep[]> {
     const records = steps.map((s) => ({
       action_plan_id: s.action_plan_id,
       sequence: s.sequence,
@@ -507,7 +641,32 @@ export class SupabaseActionStepRepository implements IActionStepRepository {
     return data as ActionStep[];
   }
 
-  async findByPlanId(planId: string): Promise<ActionStep[]> {
+  async findByPlanId(planId: string, tenant?: TenantContext): Promise<ActionStep[]> {
+    if (tenant?.organizationId || tenant?.customerId) {
+      const { data: planData } = await this.client
+        .from("action_plans")
+        .select("session_id")
+        .eq("id", planId)
+        .maybeSingle();
+      if (!planData) {
+        return [];
+      }
+      let sessionQuery = this.client
+        .from("action_sessions")
+        .select("id")
+        .eq("id", planData.session_id);
+      if (tenant.organizationId) {
+        sessionQuery = sessionQuery.eq("organization_id", tenant.organizationId);
+      }
+      if (tenant.customerId) {
+        sessionQuery = sessionQuery.eq("customer_id", tenant.customerId);
+      }
+      const { data: sessionData } = await sessionQuery.maybeSingle();
+      if (!sessionData) {
+        return [];
+      }
+    }
+
     const { data, error } = await this.client
       .from("action_steps")
       .select("*")
@@ -517,7 +676,36 @@ export class SupabaseActionStepRepository implements IActionStepRepository {
     return (data || []) as ActionStep[];
   }
 
-  async updateStep(id: string, update: Partial<ActionStep>): Promise<ActionStep> {
+  async updateStep(id: string, update: Partial<ActionStep>, tenant?: TenantContext): Promise<ActionStep> {
+    if (tenant?.organizationId || tenant?.customerId) {
+      const { data: stepData } = await this.client
+        .from("action_steps")
+        .select("action_plan_id")
+        .eq("id", id)
+        .maybeSingle();
+      if (!stepData) {
+        throw new DatabaseError(`Action step ${id} not found`, "NOT_FOUND");
+      }
+      const { data: planData } = await this.client
+        .from("action_plans")
+        .select("session_id")
+        .eq("id", stepData.action_plan_id)
+        .maybeSingle();
+      if (!planData) {
+        throw new DatabaseError(`Action plan not found for step ${id}`, "NOT_FOUND");
+      }
+      let sessionQuery = this.client
+        .from("action_sessions")
+        .select("id")
+        .eq("id", planData.session_id);
+      if (tenant.organizationId) sessionQuery = sessionQuery.eq("organization_id", tenant.organizationId);
+      if (tenant.customerId) sessionQuery = sessionQuery.eq("customer_id", tenant.customerId);
+      const { data: sessionData } = await sessionQuery.maybeSingle();
+      if (!sessionData) {
+        throw new DatabaseError(`Tenant authorization violation for action step ${id}`, "UNAUTHORIZED");
+      }
+    }
+
     const { data, error } = await this.client
       .from("action_steps")
       .update({
@@ -535,7 +723,21 @@ export class SupabaseActionStepRepository implements IActionStepRepository {
 export class SupabaseTransactionRepository implements ITransactionRepository {
   private client = getSupabaseClient();
 
-  async create(data: Partial<Transaction> & { customer_id: string; amount: number; reference: string }): Promise<Transaction> {
+  async create(data: Partial<Transaction> & { customer_id: string; amount: number; reference: string }, tenant?: TenantContext): Promise<Transaction> {
+    if (tenant?.customerId && data.customer_id !== tenant.customerId) {
+      throw new DatabaseError(`Tenant authorization violation: customer mismatch on transaction create`, "UNAUTHORIZED");
+    }
+    if (tenant?.organizationId) {
+      const { data: cust } = await this.client
+        .from("customers")
+        .select("id, organization_id")
+        .eq("id", data.customer_id)
+        .eq("organization_id", tenant.organizationId)
+        .maybeSingle();
+      if (!cust) {
+        throw new DatabaseError(`Tenant authorization violation: customer does not belong to organization`, "UNAUTHORIZED");
+      }
+    }
     const { data: created, error } = await this.client
       .from("transactions")
       .insert({
@@ -558,9 +760,12 @@ export class SupabaseTransactionRepository implements ITransactionRepository {
   async findByReference(reference: string, tenant?: TenantContext): Promise<Transaction | null> {
     let query = this.client
       .from("transactions")
-      .select("*")
+      .select("*, customer:customers!inner(*)")
       .eq("reference", reference);
 
+    if (tenant?.organizationId) {
+      query = query.eq("customer.organization_id", tenant.organizationId);
+    }
     if (tenant?.customerId) {
       query = query.eq("customer_id", tenant.customerId);
     }
@@ -570,16 +775,30 @@ export class SupabaseTransactionRepository implements ITransactionRepository {
     return (data || null) as Transaction | null;
   }
 
-  async updateStatus(id: string, status: Transaction["status"]): Promise<Transaction> {
-    const { data, error } = await this.client
+  async updateStatus(id: string, status: Transaction["status"], tenant?: TenantContext): Promise<Transaction> {
+    if (tenant?.organizationId || tenant?.customerId) {
+      let checkQuery = this.client.from("transactions").select("*, customer:customers!inner(*)").eq("id", id);
+      if (tenant?.organizationId) checkQuery = checkQuery.eq("customer.organization_id", tenant.organizationId);
+      if (tenant?.customerId) checkQuery = checkQuery.eq("customer_id", tenant.customerId);
+      const { data: check } = await checkQuery.maybeSingle();
+      if (!check) {
+        throw new DatabaseError(`Transaction ${id} not found or tenant authorization mismatch`, "UNAUTHORIZED");
+      }
+    }
+
+    let query = this.client
       .from("transactions")
       .update({
         status,
         updated_at: new Date().toISOString(),
       })
-      .eq("id", id)
-      .select("*")
-      .single();
+      .eq("id", id);
+
+    if (tenant?.customerId) {
+      query = query.eq("customer_id", tenant.customerId);
+    }
+
+    const { data, error } = await query.select("*").single();
     if (error || !data) throw new DatabaseError(`Failed to update transaction status: ${error?.message}`, error?.code, error);
     return data as Transaction;
   }
@@ -588,7 +807,21 @@ export class SupabaseTransactionRepository implements ITransactionRepository {
 export class SupabaseDocumentRepository implements IDocumentRepository {
   private client = getSupabaseClient();
 
-  async create(data: Partial<Document> & { customer_id: string; document_type: Document["document_type"]; file_path: string; file_name: string }): Promise<Document> {
+  async create(data: Partial<Document> & { customer_id: string; document_type: Document["document_type"]; file_path: string; file_name: string }, tenant?: TenantContext): Promise<Document> {
+    if (tenant?.customerId && data.customer_id !== tenant.customerId) {
+      throw new DatabaseError(`Tenant authorization violation: customer mismatch on document create`, "UNAUTHORIZED");
+    }
+    if (tenant?.organizationId) {
+      const { data: cust } = await this.client
+        .from("customers")
+        .select("id, organization_id")
+        .eq("id", data.customer_id)
+        .eq("organization_id", tenant.organizationId)
+        .maybeSingle();
+      if (!cust) {
+        throw new DatabaseError(`Tenant authorization violation: customer does not belong to organization`, "UNAUTHORIZED");
+      }
+    }
     const { data: created, error } = await this.client
       .from("documents")
       .insert({
@@ -609,11 +842,16 @@ export class SupabaseDocumentRepository implements IDocumentRepository {
   async findByCustomerId(customerId: string, tenant?: TenantContext): Promise<Document[]> {
     if (tenant?.customerId && customerId !== tenant.customerId) return [];
 
-    const { data, error } = await this.client
+    let query = this.client
       .from("documents")
-      .select("*")
-      .eq("customer_id", customerId)
-      .order("created_at", { ascending: false });
+      .select("*, customer:customers!inner(*)")
+      .eq("customer_id", customerId);
+
+    if (tenant?.organizationId) {
+      query = query.eq("customer.organization_id", tenant.organizationId);
+    }
+
+    const { data, error } = await query.order("created_at", { ascending: false });
     if (error) throw new DatabaseError(`Document query failed: ${error.message}`, error.code, error);
     return (data || []) as Document[];
   }
@@ -621,9 +859,12 @@ export class SupabaseDocumentRepository implements IDocumentRepository {
   async findByRenewalId(renewalId: string, tenant?: TenantContext): Promise<Document[]> {
     let query = this.client
       .from("documents")
-      .select("*")
+      .select("*, customer:customers!inner(*)")
       .eq("renewal_id", renewalId);
 
+    if (tenant?.organizationId) {
+      query = query.eq("customer.organization_id", tenant.organizationId);
+    }
     if (tenant?.customerId) {
       query = query.eq("customer_id", tenant.customerId);
     }
@@ -637,7 +878,21 @@ export class SupabaseDocumentRepository implements IDocumentRepository {
 export class SupabaseNotificationRepository implements INotificationRepository {
   private client = getSupabaseClient();
 
-  async create(data: Partial<NotificationRecord> & { customer_id: string; type: NotificationRecord["type"]; channel: NotificationRecord["channel"]; title: string; message: string; scheduled_for: string }): Promise<NotificationRecord> {
+  async create(data: Partial<NotificationRecord> & { customer_id: string; type: NotificationRecord["type"]; channel: NotificationRecord["channel"]; title: string; message: string; scheduled_for: string }, tenant?: TenantContext): Promise<NotificationRecord> {
+    if (tenant?.customerId && data.customer_id !== tenant.customerId) {
+      throw new DatabaseError(`Tenant authorization violation: customer mismatch on notification create`, "UNAUTHORIZED");
+    }
+    if (tenant?.organizationId) {
+      const { data: cust } = await this.client
+        .from("customers")
+        .select("id, organization_id")
+        .eq("id", data.customer_id)
+        .eq("organization_id", tenant.organizationId)
+        .maybeSingle();
+      if (!cust) {
+        throw new DatabaseError(`Tenant authorization violation: customer does not belong to organization`, "UNAUTHORIZED");
+      }
+    }
     const { data: created, error } = await this.client
       .from("notifications")
       .insert({
@@ -659,11 +914,16 @@ export class SupabaseNotificationRepository implements INotificationRepository {
   async findByCustomerId(customerId: string, tenant?: TenantContext): Promise<NotificationRecord[]> {
     if (tenant?.customerId && customerId !== tenant.customerId) return [];
 
-    const { data, error } = await this.client
+    let query = this.client
       .from("notifications")
-      .select("*")
-      .eq("customer_id", customerId)
-      .order("created_at", { ascending: false });
+      .select("*, customer:customers!inner(*)")
+      .eq("customer_id", customerId);
+
+    if (tenant?.organizationId) {
+      query = query.eq("customer.organization_id", tenant.organizationId);
+    }
+
+    const { data, error } = await query.order("created_at", { ascending: false });
     if (error) throw new DatabaseError(`Notification query failed: ${error.message}`, error.code, error);
     return (data || []) as NotificationRecord[];
   }
@@ -723,12 +983,29 @@ export class SupabaseLedgerRepository implements ILedgerRepository {
   }
 
   async getEventsBySessionId(sessionId: string, tenant?: TenantContext): Promise<ActionLedgerEvent[]> {
-    let query = this.client
+    if (tenant?.organizationId || tenant?.customerId) {
+      const { data: session } = await this.client
+        .from("action_sessions")
+        .select("organization_id, customer_id")
+        .eq("id", sessionId)
+        .maybeSingle();
+
+      if (session) {
+        if (tenant.organizationId && session.organization_id !== tenant.organizationId) {
+          return [];
+        }
+        if (tenant.customerId && session.customer_id !== tenant.customerId) {
+          return [];
+        }
+      }
+    }
+
+    const { data, error } = await this.client
       .from("action_ledger_events")
       .select("*")
-      .eq("session_id", sessionId);
+      .eq("session_id", sessionId)
+      .order("sequence_number", { ascending: true });
 
-    const { data, error } = await query.order("sequence_number", { ascending: true });
     if (error) throw new DatabaseError(`Ledger query failed: ${error.message}`, error.code, error);
     return (data || []).map((row) => ({
       id: row.id,

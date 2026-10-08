@@ -1,4 +1,4 @@
-import type { IActionOSTool, ToolResult, ExecutionContext } from "@/types/actionos";
+import type { IActionOSTool, ToolResult, WorkflowExecutionContext } from "@/types/actionos";
 import type { Policy } from "@/types/database";
 import { getRepositoryContainer } from "@/lib/repositories";
 
@@ -24,12 +24,12 @@ export class GetPolicyTool implements IActionOSTool<GetPolicyInput, Policy> {
     return { valid: true, data };
   }
 
-  async execute(input: GetPolicyInput, context: ExecutionContext): Promise<ToolResult<Policy>> {
+  async execute(input: GetPolicyInput, context: WorkflowExecutionContext): Promise<ToolResult<Policy>> {
     const repos = getRepositoryContainer();
     const tenantContext = {
       organizationId: context.organizationId,
       customerId: context.customerId,
-      role: context.userRole,
+      role: context.role,
     };
 
     // 1. Try matching policyNumber directly

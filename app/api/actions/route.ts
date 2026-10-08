@@ -25,22 +25,35 @@ export async function POST(req: Request) {
     // Resolve verified server-side identity & tenant context
     const context = await resolveExecutionContext(req);
 
+    // Enforce identity boundaries: never fallback outside demo
+    let targetCustomerId = context.customerId;
+    if (context.isDemo && validated.data.customerId) {
+      targetCustomerId = validated.data.customerId;
+    } else if (!context.isDemo && context.role !== "customer" && validated.data.customerId) {
+      targetCustomerId = validated.data.customerId;
+    }
+
+    if (!context.isDemo && !targetCustomerId) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: "FORBIDDEN",
+            message: "Production identity error: no linked customer record found for authenticated context.",
+          },
+        },
+        { status: 403 }
+      );
+    }
+
     const result = await orchestrator.startWorkflow({
       inputText: validated.data.inputText,
       inputAudioUrl: validated.data.inputAudioUrl,
       channel: validated.data.channel,
       language: validated.data.language,
-      customerId: context.customerId || (context.isDemo ? validated.data.customerId : undefined),
-      organizationId: context.organizationId,
-      userId: context.userId,
-      userRole: context.role,
       executionContext: {
-        sessionId: "",
-        organizationId: context.organizationId,
-        customerId: context.customerId,
-        userId: context.userId,
-        userRole: context.role,
-        isSimulated: context.isDemo,
+        ...context,
+        customerId: targetCustomerId,
       },
     });
 

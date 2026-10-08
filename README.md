@@ -47,13 +47,13 @@ ActionOS autonomously:
 - **Backend & Database:** Supabase PostgreSQL with `pgcrypto`, Row Level Security (RLS) on all tables, Supabase Edge Functions
 - **AI Engine:** N-ATLAS Provider Adapter with deterministic fallback and multilingual normalization
 - **Payment Gateway:** Sandboxed mock payment provider ready for Paystack & Flutterwave webhooks
-- **Testing:** Node.js native test runner & TypeScript test harness with 100% passing unit & acceptance suites
+- **Testing:** Node.js native test runner (`tsx --test`) with automated unit, integration, and security regression suites (validated via continuous verification)
 
 ---
 
 ## 4. Quick Start & Demo Mode
 
-The application includes an offline-ready **Demo Mode** (`DEMO_MODE=true`) requiring no external credentials.
+The application includes an offline-ready **Demo Mode** (`ACTIONOS_RUNTIME_MODE=demo`) requiring no external credentials.
 
 ### Installation
 ```bash

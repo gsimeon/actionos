@@ -1,4 +1,4 @@
-import type { IActionOSTool, ToolResult, ExecutionContext } from "@/types/actionos";
+import type { IActionOSTool, ToolResult, WorkflowExecutionContext } from "@/types/actionos";
 import { mockPaymentProvider } from "@/lib/payments/mock";
 import { ActionOSGuardrails } from "@/lib/actionos/guardrails";
 
@@ -34,7 +34,7 @@ export class VerifyPaymentTool implements IActionOSTool<VerifyPaymentInput, Veri
     return { valid: true, data };
   }
 
-  async execute(input: VerifyPaymentInput, _context: ExecutionContext): Promise<ToolResult<VerifyPaymentOutput>> {
+  async execute(input: VerifyPaymentInput, _context: WorkflowExecutionContext): Promise<ToolResult<VerifyPaymentOutput>> {
     try {
       const verification = await mockPaymentProvider.verifyPayment(input.reference);
 

@@ -10,9 +10,9 @@ ON CONFLICT (id) DO NOTHING;
 -- 2. Profiles (Staff & Demo Customer)
 INSERT INTO profiles (id, full_name, phone, avatar_url, status)
 VALUES
-  ('b0000000-0000-0000-0000-000000000001', 'Olumide Adeleke', '+234 802 555 0101', 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150', 'active'),
-  ('b0000000-0000-0000-0000-000000000002', 'Amina Bello', '+234 803 555 0102', 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150', 'active'),
-  ('b0000000-0000-0000-0000-000000000003', 'Chinedu Eze', '+234 805 555 0103', 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150', 'active')
+  ('b0000000-0000-0000-0000-000000000001', 'Demo Admin', '+234 800 000 0001', 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150', 'active'),
+  ('b0000000-0000-0000-0000-000000000002', 'Demo Agent', '+234 800 000 0002', 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150', 'active'),
+  ('b0000000-0000-0000-0000-000000000003', 'Demo Customer User', '+234 800 000 0003', 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150', 'active')
 ON CONFLICT (id) DO NOTHING;
 
 -- 3. Organization Members
@@ -42,16 +42,16 @@ ON CONFLICT (id) DO NOTHING;
 -- 6. Customers
 INSERT INTO customers (id, organization_id, profile_id, customer_number, full_name, phone, email, address, state, country, status, metadata)
 VALUES
-  ('f0000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001', 'b0000000-0000-0000-0000-000000000003', 'CUS-000001', 'Demo Customer', '+234 803 123 4567', 'demo.customer@actionos.ng', '14 Adeola Odeku St, Victoria Island', 'Lagos', 'Nigeria', 'active', '{"nin": "12345678901", "preferred_language": "en-NG"}'::jsonb),
-  ('f0000000-0000-0000-0000-000000000002', 'a0000000-0000-0000-0000-000000000001', NULL, 'CUS-000002', 'Babajide Sanwo-Olu', '+234 802 333 1122', 'babajide.s@lagos.ng', 'Marina Road, Lagos Island', 'Lagos', 'Nigeria', 'active', '{}'::jsonb),
-  ('f0000000-0000-0000-0000-000000000003', 'a0000000-0000-0000-0000-000000000001', NULL, 'CUS-000003', 'Ngozi Okonjo', '+234 809 444 8877', 'ngozi.o@trade.ng', 'Plot 412, Maitama District', 'Abuja', 'Nigeria', 'active', '{}'::jsonb),
-  ('f0000000-0000-0000-0000-000000000004', 'a0000000-0000-0000-0000-000000000001', NULL, 'CUS-000004', 'Tariq Al-Mansur', '+234 807 111 2233', 'tariq.m@kano.ng', 'Bompai Industrial Area', 'Kano', 'Nigeria', 'active', '{}'::jsonb)
+  ('f0000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001', 'b0000000-0000-0000-0000-000000000003', 'CUS-000001', 'Demo Customer', '+234 800 000 0001', 'demo.customer@actionos.ng', '101 Demo Innovation Avenue, Victoria Island', 'Lagos', 'Nigeria', 'active', '{"nin": "DEMO-NIN-000001", "preferred_language": "en-NG"}'::jsonb),
+  ('f0000000-0000-0000-0000-000000000002', 'a0000000-0000-0000-0000-000000000001', NULL, 'CUS-000002', 'Demo Customer Two', '+234 800 000 0002', 'demo.customer2@actionos.ng', '202 Demo Synthetic Boulevard, Lagos Island', 'Lagos', 'Nigeria', 'active', '{"nin": "DEMO-NIN-000002"}'::jsonb),
+  ('f0000000-0000-0000-0000-000000000003', 'a0000000-0000-0000-0000-000000000001', NULL, 'CUS-000003', 'Demo Customer Three', '+234 800 000 0003', 'demo.customer3@actionos.ng', '303 Demo Sandbox Avenue, Central District', 'Abuja', 'Nigeria', 'active', '{"nin": "DEMO-NIN-000003"}'::jsonb),
+  ('f0000000-0000-0000-0000-000000000004', 'a0000000-0000-0000-0000-000000000001', NULL, 'CUS-000004', 'Demo Customer Four', '+234 800 000 0004', 'demo.customer4@actionos.ng', '404 Demo Commercial Way, Industrial Zone', 'Kano', 'Nigeria', 'active', '{"nin": "DEMO-NIN-000004"}'::jsonb)
 ON CONFLICT (id) DO NOTHING;
 
 -- 7. Assets
 INSERT INTO assets (id, customer_id, asset_type, name, identifier, metadata)
 VALUES
-  ('10000000-0000-0000-0000-000000000001', 'f0000000-0000-0000-0000-000000000001', 'vehicle', 'Toyota Camry', 'ABC-123-XY', '{"year": 2022, "color": "Midnight Black", "chassis": "4T1BF1FK8CU128941", "engine": "2AR-FE-99412"}'::jsonb),
+  ('10000000-0000-0000-0000-000000000001', 'f0000000-0000-0000-0000-000000000001', 'vehicle', 'Toyota Camry', 'ABC-123-XY', '{"year": 2022, "color": "Midnight Black", "chassis": "DEMO-VIN-000001", "engine": "DEMO-ENGINE-000001"}'::jsonb),
   ('10000000-0000-0000-0000-000000000002', 'f0000000-0000-0000-0000-000000000002', 'vehicle', 'Honda Accord', 'KJA-882-AB', '{"year": 2021, "color": "Silver Metallic"}'::jsonb),
   ('10000000-0000-0000-0000-000000000003', 'f0000000-0000-0000-0000-000000000003', 'vehicle', 'Mercedes-Benz GLE 450', 'ABJ-501-LG', '{"year": 2024, "color": "Polar White"}'::jsonb),
   ('10000000-0000-0000-0000-000000000004', 'f0000000-0000-0000-0000-000000000004', 'vehicle', 'Toyota Hilux 4x4', 'KN-990-TR', '{"year": 2023, "color": "Army Green"}'::jsonb)

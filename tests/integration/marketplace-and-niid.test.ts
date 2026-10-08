@@ -4,23 +4,21 @@ import { VerifyNiidTool } from "@/lib/actionos/tools/verify-niid";
 import { GetQuoteTool } from "@/lib/actionos/tools/get-quote";
 import { orchestrator } from "@/lib/actionos/orchestrator";
 import { resetStore } from "@/lib/actionos/mock-store";
-import type { ExecutionContext } from "@/types/actionos";
+import { DEMO_CONTEXT } from "@/lib/security/auth-context";
+import { createWorkflowExecutionContext } from "@/lib/runtime/execution-context";
 
 describe("ActionOS NIID Regulatory Verification & Multi-Insurer Marketplace", () => {
   it("should query NIID and FRSC statutory databases and verify vehicle legitimacy", async () => {
     resetStore();
     const niidTool = new VerifyNiidTool();
 
-    const context: ExecutionContext = {
+    const context = createWorkflowExecutionContext(DEMO_CONTEXT, {
       sessionId: "sess_niid_test",
       planId: "plan_1",
-      organizationId: "org_1",
-      customerId: "f0000000-0000-0000-0000-000000000001",
-      userRole: "customer",
       channel: "web",
       language: "en-NG",
       isSimulated: true,
-    };
+    });
 
     const res = await niidTool.execute({ vehiclePlate: "ABC-123-XY" }, context);
 
@@ -36,16 +34,13 @@ describe("ActionOS NIID Regulatory Verification & Multi-Insurer Marketplace", ()
     resetStore();
     const quoteTool = new GetQuoteTool();
 
-    const context: ExecutionContext = {
+    const context = createWorkflowExecutionContext(DEMO_CONTEXT, {
       sessionId: "sess_quote_test",
       planId: "plan_2",
-      organizationId: "org_1",
-      customerId: "f0000000-0000-0000-0000-000000000001",
-      userRole: "customer",
       channel: "web",
       language: "en-NG",
       isSimulated: true,
-    };
+    });
 
     const res = await quoteTool.execute(
       { policyId: "b0000000-0000-0000-0000-000000000001", preferredUnderwriter: "Leadway Assurance" },
@@ -77,7 +72,7 @@ describe("ActionOS NIID Regulatory Verification & Multi-Insurer Marketplace", ()
       inputText: "Check my car insurance and renew it",
       channel: "web",
       language: "en-NG",
-      customerId: "f0000000-0000-0000-0000-000000000001",
+      executionContext: DEMO_CONTEXT,
     });
 
     assert.equal(step1.status, "awaiting_authorization");
@@ -93,7 +88,7 @@ describe("ActionOS NIID Regulatory Verification & Multi-Insurer Marketplace", ()
     const step2 = await orchestrator.authorizeAndExecute(
       step1.sessionId,
       true,
-      "customer",
+      DEMO_CONTEXT,
       {
         selectedUnderwriter: "AXA Mansard",
         customAmount: axaQuote.amount,

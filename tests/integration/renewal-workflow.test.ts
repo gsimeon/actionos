@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { orchestrator } from "@/lib/actionos/orchestrator";
 import { getStore, resetStore } from "@/lib/actionos/mock-store";
+import { DEMO_CONTEXT } from "@/lib/security/auth-context";
 
 describe("ActionOS Vehicle Insurance Renewal Workflow (End-to-End Acceptance Test)", () => {
   it("should process full renewal cycle from natural language to certificate issuance", async () => {
@@ -19,7 +20,7 @@ describe("ActionOS Vehicle Insurance Renewal Workflow (End-to-End Acceptance Tes
       inputText: "My car insurance expires next week. Check it and renew it for me.",
       channel: "web",
       language: "en-NG",
-      customerId: "f0000000-0000-0000-0000-000000000001",
+      executionContext: DEMO_CONTEXT,
     });
 
     assert.equal(step1.intent, "renew_policy");
@@ -45,7 +46,7 @@ describe("ActionOS Vehicle Insurance Renewal Workflow (End-to-End Acceptance Tes
     const step2 = await orchestrator.authorizeAndExecute(
       step1.sessionId,
       true,
-      "customer"
+      DEMO_CONTEXT
     );
     assert.equal(step2.status, "completed");
     assert.equal(step2.authorizationRequired, false);
@@ -101,7 +102,7 @@ describe("ActionOS Vehicle Insurance Renewal Workflow (End-to-End Acceptance Tes
     const step1 = await orchestrator.startWorkflow({
       inputText: "Renew Toyota Camry AUTO-2026-00182 now",
       channel: "web",
-      customerId: "f0000000-0000-0000-0000-000000000001",
+      executionContext: DEMO_CONTEXT,
     });
     assert.equal(step1.status, "awaiting_authorization");
 
@@ -109,7 +110,7 @@ describe("ActionOS Vehicle Insurance Renewal Workflow (End-to-End Acceptance Tes
     const sagaResult = await orchestrator.authorizeAndExecute(
       step1.sessionId,
       true,
-      "customer",
+      DEMO_CONTEXT,
       { simulateSagaFailure: true }
     );
 

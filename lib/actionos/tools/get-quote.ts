@@ -1,4 +1,4 @@
-import type { IActionOSTool, ToolResult, ExecutionContext, UnderwriterQuote } from "@/types/actionos";
+import type { IActionOSTool, ToolResult, WorkflowExecutionContext, UnderwriterQuote } from "@/types/actionos";
 import type { Policy } from "@/types/database";
 import { ActionOSGuardrails } from "@/lib/actionos/guardrails";
 import { getRepositoryContainer } from "@/lib/repositories";
@@ -39,15 +39,20 @@ export class GetQuoteTool implements IActionOSTool<GetQuoteInput, QuoteOutput> {
     return { valid: true, data: input as GetQuoteInput };
   }
 
-  async execute(input: GetQuoteInput, _context: ExecutionContext): Promise<ToolResult<QuoteOutput>> {
+  async execute(input: GetQuoteInput, context: WorkflowExecutionContext): Promise<ToolResult<QuoteOutput>> {
     const repos = getRepositoryContainer();
+    const tenantContext = {
+      organizationId: context.organizationId,
+      customerId: context.customerId,
+      role: context.role,
+    };
     let policy = input.policy;
 
     if (!policy && input.policyId) {
-      policy = (await repos.policies.findById(input.policyId)) || undefined;
+      policy = (await repos.policies.findById(input.policyId, tenantContext)) || undefined;
     }
     if (!policy) {
-      policy = (await repos.policies.findByNumber("AUTO-2026-00182")) || undefined;
+      policy = (await repos.policies.findByNumber("AUTO-2026-00182", tenantContext)) || undefined;
     }
 
     if (!policy) {

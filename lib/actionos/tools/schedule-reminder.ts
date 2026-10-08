@@ -1,4 +1,4 @@
-import type { IActionOSTool, ToolResult, ExecutionContext } from "@/types/actionos";
+import type { IActionOSTool, ToolResult, WorkflowExecutionContext } from "@/types/actionos";
 import { getRepositoryContainer } from "@/lib/repositories";
 
 export interface ScheduleReminderInput {
@@ -35,8 +35,13 @@ export class ScheduleReminderTool implements IActionOSTool<ScheduleReminderInput
     return { valid: true, data };
   }
 
-  async execute(input: ScheduleReminderInput, _context: ExecutionContext): Promise<ToolResult<ReminderOutput>> {
+  async execute(input: ScheduleReminderInput, context: WorkflowExecutionContext): Promise<ToolResult<ReminderOutput>> {
     const repos = getRepositoryContainer();
+    const tenantContext = {
+      organizationId: context.organizationId,
+      customerId: context.customerId,
+      role: context.role,
+    };
     const expiryDate = new Date(input.newExpiry);
     const intervals = [30, 14, 7, 1];
     const createdList: Array<{ daysBefore: number; scheduledFor: string; channel: string }> = [];
@@ -45,14 +50,17 @@ export class ScheduleReminderTool implements IActionOSTool<ScheduleReminderInput
       const scheduledTime = new Date(expiryDate);
       scheduledTime.setDate(scheduledTime.getDate() - days);
 
-      await repos.notifications.create({
-        customer_id: input.customerId,
-        type: "renewal_due",
-        channel: "in_app",
-        title: `Upcoming Renewal Notice: ${days} days remaining`,
-        message: `Your insurance policy ${input.policyNumber} will expire in ${days} days on ${input.newExpiry}. ActionOS can renew it with one tap.`,
-        scheduled_for: scheduledTime.toISOString(),
-      });
+      await repos.notifications.create(
+        {
+          customer_id: input.customerId,
+          type: "renewal_due",
+          channel: "in_app",
+          title: `Upcoming Renewal Notice: ${days} days remaining`,
+          message: `Your insurance policy ${input.policyNumber} will expire in ${days} days on ${input.newExpiry}. ActionOS can renew it with one tap.`,
+          scheduled_for: scheduledTime.toISOString(),
+        },
+        tenantContext
+      );
 
       createdList.push({
         daysBefore: days,

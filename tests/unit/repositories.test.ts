@@ -26,7 +26,7 @@ describe("Repository Abstraction Layer", () => {
     // Customer
     const customer = await repos.customers.findById("f0000000-0000-0000-0000-000000000001");
     assert.ok(customer);
-    assert.equal(customer?.phone, "+234 803 123 4567");
+    assert.equal(customer?.phone, "+234 800 000 0001");
 
     const byNumber = await repos.customers.findByNumber(customer!.customer_number);
     assert.equal(byNumber?.id, customer?.id);
@@ -258,7 +258,6 @@ describe("Repository Abstraction Layer", () => {
     const { getRuntimeMode, isProductionMode, isDemoMode } = await import("@/lib/runtime/mode");
 
     const originalMode = process.env.ACTIONOS_RUNTIME_MODE;
-    const originalDemo = process.env.DEMO_MODE;
 
     try {
       process.env.ACTIONOS_RUNTIME_MODE = "production";
@@ -272,7 +271,6 @@ describe("Repository Abstraction Layer", () => {
       assert.equal(isDemoMode(), true);
     } finally {
       process.env.ACTIONOS_RUNTIME_MODE = originalMode;
-      process.env.DEMO_MODE = originalDemo;
     }
   });
 

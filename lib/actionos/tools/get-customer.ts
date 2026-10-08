@@ -1,4 +1,4 @@
-import type { IActionOSTool, ToolResult, ExecutionContext } from "@/types/actionos";
+import type { IActionOSTool, ToolResult, WorkflowExecutionContext } from "@/types/actionos";
 import type { Customer } from "@/types/database";
 import { getRepositoryContainer } from "@/lib/repositories";
 
@@ -25,13 +25,13 @@ export class GetCustomerTool implements IActionOSTool<GetCustomerInput, Customer
     return { valid: true, data };
   }
 
-  async execute(input: GetCustomerInput, context: ExecutionContext): Promise<ToolResult<Customer>> {
+  async execute(input: GetCustomerInput, context: WorkflowExecutionContext): Promise<ToolResult<Customer>> {
     const repos = getRepositoryContainer();
     const targetId = input.customerId || context.customerId;
     const tenantContext = {
       organizationId: context.organizationId,
       customerId: context.customerId,
-      role: context.userRole,
+      role: context.role,
     };
 
     let customer: Customer | null = null;

@@ -1,4 +1,4 @@
-import type { IActionOSTool, ToolResult, ExecutionContext } from "@/types/actionos";
+import type { IActionOSTool, ToolResult, WorkflowExecutionContext } from "@/types/actionos";
 import type { Document } from "@/types/database";
 import { getRepositoryContainer } from "@/lib/repositories";
 
@@ -36,19 +36,27 @@ export class GenerateCertificateTool implements IActionOSTool<GenerateCertInput,
     return { valid: true, data };
   }
 
-  async execute(input: GenerateCertInput, _context: ExecutionContext): Promise<ToolResult<CertOutput>> {
+  async execute(input: GenerateCertInput, context: WorkflowExecutionContext): Promise<ToolResult<CertOutput>> {
     const repos = getRepositoryContainer();
+    const tenantContext = {
+      organizationId: context.organizationId,
+      customerId: context.customerId,
+      role: context.role,
+    };
     const docNumber = `CERT-ACT-${Date.now().toString().slice(-6)}`;
 
-    const docRecord = await repos.documents.create({
-      customer_id: input.customerId,
-      renewal_id: null,
-      document_type: "certificate",
-      file_path: `/documents/certificates/${docNumber}.pdf`,
-      file_name: `Motor_Insurance_Certificate_${input.policyNumber}.pdf`,
-      mime_type: "application/pdf",
-      status: "generated",
-    });
+    const docRecord = await repos.documents.create(
+      {
+        customer_id: input.customerId,
+        renewal_id: null,
+        document_type: "certificate",
+        file_path: `/documents/certificates/${docNumber}.pdf`,
+        file_name: `Motor_Insurance_Certificate_${input.policyNumber}.pdf`,
+        mime_type: "application/pdf",
+        status: "generated",
+      },
+      tenantContext
+    );
 
     return {
       success: true,

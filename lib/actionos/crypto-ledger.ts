@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import type { ActionLedgerEvent } from "@/types/actionos";
+import { isProductionMode } from "@/lib/runtime/mode";
 
 export const GENESIS_LEDGER_HASH = "0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -22,7 +23,7 @@ function resolveEd25519KeyPair(explicitKey?: string): {
   publicKey: crypto.KeyObject;
   keyId: string;
 } {
-  const isProduction = process.env.NODE_ENV === "production" && process.env.DEMO_MODE !== "true";
+  const isProduction = isProductionMode();
   const rawKey = explicitKey || process.env.ACTION_LEDGER_SIGNING_KEY;
   const keyId = process.env.ACTION_LEDGER_KEY_VERSION || "v1-2026";
 
