@@ -1,6 +1,6 @@
 import type { IActionOSTool, ToolResult, ExecutionContext } from "@/types/actionos";
 import type { NotificationRecord } from "@/types/database";
-import { getStore } from "@/lib/actionos/mock-store";
+import { getRepositoryContainer } from "@/lib/repositories";
 import { formatNaira, formatDate } from "@/lib/utils";
 
 export interface SendNotificationInput {
@@ -40,8 +40,8 @@ export class SendNotificationTool implements IActionOSTool<SendNotificationInput
   }
 
   async execute(input: SendNotificationInput, _context: ExecutionContext): Promise<ToolResult<NotificationOutput>> {
-    const store = getStore();
-    const customer = store.customers.find((c) => c.id === input.customerId) || store.customers[0];
+    const repos = getRepositoryContainer();
+    const customer = (await repos.customers.findById(input.customerId)) || (await repos.customers.findByNumber("CUS-000001"));
 
     const formattedAmount = formatNaira(input.amount);
     const formattedExpiry = formatDate(input.newExpiry);
@@ -53,25 +53,15 @@ export class SendNotificationTool implements IActionOSTool<SendNotificationInput
     const deliveryStatuses = [];
 
     for (const ch of channels) {
-      const notifId = `notif_${Date.now()}_${ch}`;
-      const notifRecord: NotificationRecord = {
-        id: notifId,
+      await repos.notifications.create({
         customer_id: input.customerId,
         type: "certificate_issued",
         channel: ch,
         title,
         message,
         scheduled_for: new Date().toISOString(),
-        sent_at: new Date().toISOString(),
-        status: "sent",
-        metadata: {
-          policyNumber: input.policyNumber,
-          simulation: true,
-          destination: ch === "sms" ? customer?.phone : ch === "email" ? customer?.email : "in_app_tray",
-        },
-      };
+      });
 
-      store.notifications.unshift(notifRecord);
       deliveryStatuses.push({
         channel: ch,
         status: "delivered",

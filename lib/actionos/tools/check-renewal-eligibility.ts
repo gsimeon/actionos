@@ -1,7 +1,7 @@
 import type { IActionOSTool, ToolResult, ExecutionContext } from "@/types/actionos";
 import type { Policy } from "@/types/database";
 import { ActionOSGuardrails } from "@/lib/actionos/guardrails";
-import { getStore } from "@/lib/actionos/mock-store";
+import { getRepositoryContainer } from "@/lib/repositories";
 
 export interface EligibilityInput {
   policyId?: string;
@@ -35,14 +35,14 @@ export class CheckRenewalEligibilityTool implements IActionOSTool<EligibilityInp
   }
 
   async execute(input: EligibilityInput, _context: ExecutionContext): Promise<ToolResult<EligibilityOutput>> {
-    const store = getStore();
+    const repos = getRepositoryContainer();
     let policy = input.policy;
 
     if (!policy && input.policyId) {
-      policy = store.policies.find((p) => p.id === input.policyId);
+      policy = (await repos.policies.findById(input.policyId)) || undefined;
     }
     if (!policy) {
-      policy = store.policies[0];
+      policy = (await repos.policies.findByNumber("AUTO-2026-00182")) || undefined;
     }
 
     if (!policy) {
@@ -63,8 +63,6 @@ export class CheckRenewalEligibilityTool implements IActionOSTool<EligibilityInp
     const diffTime = expiryDate.getTime() - refDate.getTime();
     const daysUntilExpiry = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
-    const asset = store.assets.find((a) => a.id === policy?.asset_id);
-
     if (!check.passed) {
       return {
         success: false,
@@ -82,8 +80,8 @@ export class CheckRenewalEligibilityTool implements IActionOSTool<EligibilityInp
         daysUntilExpiry,
         expiryDate: policy.expiry_date,
         policyNumber: policy.policy_number,
-        vehiclePlate: asset?.identifier || "ABC-123-XY",
-        vehicleName: asset?.name || "Toyota Camry",
+        vehiclePlate: (policy.metadata?.vehiclePlate as string) || "ABC-123-XY",
+        vehicleName: (policy.metadata?.vehicleName as string) || "Toyota Camry",
         status: policy.status,
       },
     };

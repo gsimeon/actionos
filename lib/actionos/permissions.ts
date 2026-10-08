@@ -31,6 +31,7 @@ const ROLE_LIMITS: Record<MemberRole, number> = {
 export class ActionOSPermissions {
   /**
    * Verify if a role is permitted to run a given tool and if transaction limit is respected.
+   * Enforces strict Default-Deny security posture.
    */
   static checkPermission(input: PermissionCheckInput): PermissionResult {
     const { role, toolName, amount } = input;
@@ -47,7 +48,7 @@ export class ActionOSPermissions {
       }
     }
 
-    // Role-specific tool policies
+    // Role-specific tool policies (Default-Deny)
     switch (toolName) {
       case "get_customer":
       case "get_policy":
@@ -59,7 +60,20 @@ export class ActionOSPermissions {
       case "generate_certificate":
       case "send_notification":
       case "schedule_reminder":
+      case "verify_niid":
+      case "verify_niid_database":
         return { allowed: true, requiresApproval: false };
+
+      case "refund_payment":
+        // Permitted for operational staff or automated compensation
+        if (ROLE_HIERARCHY[role] >= ROLE_HIERARCHY.agent) {
+          return { allowed: true, requiresApproval: false };
+        }
+        return {
+          allowed: false,
+          requiresApproval: true,
+          reason: "Refund tool requires agent or manager role.",
+        };
 
       case "override_underwriting":
       case "cancel_policy":
@@ -73,8 +87,12 @@ export class ActionOSPermissions {
         };
 
       default:
-        // Default permit for registered standard tools
-        return { allowed: true, requiresApproval: false };
+        // Default-Deny: Any unrecognized or unconfigured tool is strictly denied
+        return {
+          allowed: false,
+          requiresApproval: true,
+          reason: `Tool '${toolName}' permission not explicitly configured (default-deny).`,
+        };
     }
   }
 }

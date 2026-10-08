@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { orchestrator } from "@/lib/actionos/orchestrator";
 import { createActionSchema } from "@/lib/validations";
+import { resolveExecutionContext } from "@/lib/security/auth-context";
 
 export async function POST(req: Request) {
   try {
@@ -21,13 +22,16 @@ export async function POST(req: Request) {
       );
     }
 
+    // Resolve verified server-side identity & tenant context
+    const context = await resolveExecutionContext(req);
+
     const result = await orchestrator.startWorkflow({
       inputText: validated.data.inputText,
       inputAudioUrl: validated.data.inputAudioUrl,
       channel: validated.data.channel,
       language: validated.data.language,
-      customerId: validated.data.customerId,
-      organizationId: validated.data.organizationId,
+      customerId: context.customerId || (context.isDemo ? validated.data.customerId : undefined),
+      organizationId: context.organizationId,
     });
 
     return NextResponse.json({

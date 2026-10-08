@@ -1,5 +1,4 @@
 import type { IActionOSTool, ToolResult, ExecutionContext } from "@/types/actionos";
-import { getStore } from "@/lib/actionos/mock-store";
 
 export interface VerifyNiidInput {
   vehiclePlate?: string;
@@ -35,14 +34,10 @@ export class VerifyNiidTool implements IActionOSTool<VerifyNiidInput, NiidVerifi
     return { valid: true, data: input as VerifyNiidInput };
   }
 
-  async execute(input: VerifyNiidInput, context: ExecutionContext): Promise<ToolResult<NiidVerificationOutput>> {
-    const store = getStore();
+  async execute(input: VerifyNiidInput, _context: ExecutionContext): Promise<ToolResult<NiidVerificationOutput>> {
     const plate = input.vehiclePlate || "ABC-123-XY";
-    const matchingAsset = store.assets.find(
-      (a) => a.identifier.replace(/\s+/g, "-").toUpperCase() === plate.replace(/\s+/g, "-").toUpperCase()
-    );
 
-    // NIID & FRSC statutory registry verification
+    // NIID & FRSC statutory registry verification token
     const preclearanceToken = `NIID-${new Date().getFullYear()}-VAL-${Math.floor(100000 + Math.random() * 900000)}`;
 
     return {
@@ -50,7 +45,7 @@ export class VerifyNiidTool implements IActionOSTool<VerifyNiidInput, NiidVerifi
       data: {
         verified: true,
         vehiclePlate: plate,
-        chassisNumber: (matchingAsset?.metadata?.vin as string) || "JTD12345678901234",
+        chassisNumber: input.chassisNumber || "JTD12345678901234",
         engineNumber: "ENG-2GR-99410",
         niidRecordFound: true,
         activeExistingPolicy: false, // Eligible for renewal

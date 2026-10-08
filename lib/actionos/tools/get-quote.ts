@@ -1,7 +1,7 @@
 import type { IActionOSTool, ToolResult, ExecutionContext, UnderwriterQuote } from "@/types/actionos";
 import type { Policy } from "@/types/database";
 import { ActionOSGuardrails } from "@/lib/actionos/guardrails";
-import { getStore } from "@/lib/actionos/mock-store";
+import { getRepositoryContainer } from "@/lib/repositories";
 
 export interface GetQuoteInput {
   policyId?: string;
@@ -40,14 +40,14 @@ export class GetQuoteTool implements IActionOSTool<GetQuoteInput, QuoteOutput> {
   }
 
   async execute(input: GetQuoteInput, _context: ExecutionContext): Promise<ToolResult<QuoteOutput>> {
-    const store = getStore();
+    const repos = getRepositoryContainer();
     let policy = input.policy;
 
     if (!policy && input.policyId) {
-      policy = store.policies.find((p) => p.id === input.policyId);
+      policy = (await repos.policies.findById(input.policyId)) || undefined;
     }
     if (!policy) {
-      policy = store.policies[0];
+      policy = (await repos.policies.findByNumber("AUTO-2026-00182")) || undefined;
     }
 
     if (!policy) {
@@ -126,11 +126,10 @@ export class GetQuoteTool implements IActionOSTool<GetQuoteInput, QuoteOutput> {
       },
     ];
 
-    // Update renewal record in store if present
-    const renewal = store.renewals.find((r) => r.policy_id === policy?.id);
+    // Update renewal record in repository if present
+    const renewal = await repos.renewals.findByPolicyId(policy.id);
     if (renewal) {
-      renewal.quote_amount = quoteAmount;
-      renewal.status = "awaiting_confirmation";
+      await repos.renewals.updateStatus(renewal.id, "awaiting_confirmation");
     }
 
     return {

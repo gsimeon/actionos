@@ -1,6 +1,6 @@
 import type { IActionOSTool, ToolResult, ExecutionContext } from "@/types/actionos";
 import type { Document } from "@/types/database";
-import { getStore } from "@/lib/actionos/mock-store";
+import { getRepositoryContainer } from "@/lib/repositories";
 
 export interface GenerateCertInput {
   customerId: string;
@@ -36,13 +36,11 @@ export class GenerateCertificateTool implements IActionOSTool<GenerateCertInput,
     return { valid: true, data };
   }
 
-  async execute(input: GenerateCertInput, context: ExecutionContext): Promise<ToolResult<CertOutput>> {
-    const store = getStore();
+  async execute(input: GenerateCertInput, _context: ExecutionContext): Promise<ToolResult<CertOutput>> {
+    const repos = getRepositoryContainer();
     const docNumber = `CERT-ACT-${Date.now().toString().slice(-6)}`;
-    const docId = `doc_${Date.now()}`;
 
-    const docRecord: Document = {
-      id: docId,
+    const docRecord = await repos.documents.create({
       customer_id: input.customerId,
       renewal_id: null,
       document_type: "certificate",
@@ -50,17 +48,14 @@ export class GenerateCertificateTool implements IActionOSTool<GenerateCertInput,
       file_name: `Motor_Insurance_Certificate_${input.policyNumber}.pdf`,
       mime_type: "application/pdf",
       status: "generated",
-      created_at: new Date().toISOString(),
-    };
-
-    store.documents.unshift(docRecord);
+    });
 
     return {
       success: true,
       data: {
-        certificateId: docId,
+        certificateId: docRecord.id,
         documentNumber: docNumber,
-        fileUrl: `/dashboard/documents?id=${docId}`,
+        fileUrl: `/dashboard/documents?id=${docRecord.id}`,
         document: docRecord,
       },
     };

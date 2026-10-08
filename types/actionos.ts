@@ -77,7 +77,7 @@ export interface NAtlasUnderstanding {
 }
 
 export interface NAtlasProvider {
-  name: "N-ATLAS" | "Demo AI Adapter";
+  name: string;
   understand(input: {
     text?: string;
     audioUrl?: string;
@@ -89,6 +89,7 @@ export interface NAtlasProvider {
 export interface ActionLedgerEvent {
   id: string;
   sessionId: string;
+  sequenceNumber?: number;
   timestamp: string;
   action: string;
   description: string;
@@ -101,6 +102,7 @@ export interface ActionLedgerEvent {
   previousHash?: string;
   hash?: string;
   signature?: string;
+  signingKeyVersion?: string;
   isCompensating?: boolean;
 }
 
@@ -121,6 +123,7 @@ export interface UnderwriterQuote {
 export interface AuthorizationDetails {
   sessionId: string;
   policyNumber: string;
+  policyId?: string;
   customerName: string;
   assetIdentifier: string;
   assetName: string;
@@ -130,6 +133,7 @@ export interface AuthorizationDetails {
   amount: number;
   currency: string;
   expiresAt: string;
+  requiresExplicitConsent?: boolean;
   quotes?: UnderwriterQuote[];
   authMethod?: "pin" | "biometric_webauthn" | "passkey" | "whatsapp_otp";
   biometricVerified?: boolean;

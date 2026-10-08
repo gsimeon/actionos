@@ -1,6 +1,6 @@
 import type { IActionOSTool, ToolResult, ExecutionContext } from "@/types/actionos";
 import type { Policy } from "@/types/database";
-import { getStore } from "@/lib/actionos/mock-store";
+import { getRepositoryContainer } from "@/lib/repositories";
 
 export interface RenewPolicyInput {
   policyNumber: string;
@@ -36,10 +36,8 @@ export class RenewPolicyTool implements IActionOSTool<RenewPolicyInput, RenewPol
   }
 
   async execute(input: RenewPolicyInput, _context: ExecutionContext): Promise<ToolResult<RenewPolicyOutput>> {
-    const store = getStore();
-    const policy = store.policies.find(
-      (p) => p.policy_number.toLowerCase() === input.policyNumber.toLowerCase()
-    );
+    const repos = getRepositoryContainer();
+    const policy = await repos.policies.findByNumber(input.policyNumber);
 
     if (!policy) {
       return {
@@ -57,29 +55,25 @@ export class RenewPolicyTool implements IActionOSTool<RenewPolicyInput, RenewPol
     newDate.setFullYear(prevDate.getFullYear() + 1);
     const newExpiry = newDate.toISOString().split("T")[0]; // e.g. 2027-10-14
 
-    // Mutate policy state
-    policy.status = "renewed";
-    policy.expiry_date = newExpiry;
-    policy.updated_at = new Date().toISOString();
+    // Mutate policy state via repository
+    const updatedPolicy = await repos.policies.updateStatusAndExpiry(policy.id, "renewed", newExpiry);
 
-    // Update renewal record
-    const renewal = store.renewals.find((r) => r.policy_id === policy.id);
+    // Update renewal record if present
+    const renewal = await repos.renewals.findByPolicyId(policy.id);
     if (renewal) {
-      renewal.status = "completed";
-      renewal.payment_status = "paid";
-      renewal.renewed_at = new Date().toISOString();
-      renewal.updated_at = new Date().toISOString();
+      await repos.renewals.updateStatus(renewal.id, "completed", new Date().toISOString());
+      await repos.renewals.updatePaymentStatus(renewal.id, "paid");
     }
 
     return {
       success: true,
       data: {
-        policyNumber: policy.policy_number,
+        policyNumber: updatedPolicy.policy_number,
         previousExpiry,
         newExpiry,
         status: "renewed",
         renewedAt: new Date().toISOString(),
-        policy,
+        policy: updatedPolicy,
       },
     };
   }

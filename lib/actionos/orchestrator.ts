@@ -4,7 +4,7 @@ import { ActionOSPlanner } from "./planner";
 import { ActionOSExecutor } from "./executor";
 import { ActionOSVerifier } from "./verifier";
 import { ActionOSGuardrails } from "./guardrails";
-import { getStore } from "./mock-store";
+import { getRepositoryContainer } from "@/lib/repositories";
 import { toolRegistry } from "./tool-registry";
 import { computeEventHash, signEventHash, GENESIS_LEDGER_HASH } from "./crypto-ledger";
 import { webhookDispatcher } from "./webhook-dispatcher";
@@ -68,12 +68,21 @@ export class ActionOSOrchestrator {
 
     const completeEvent: ActionLedgerEvent = {
       ...ev,
+      sequenceNumber: events.length + 1,
       previousHash,
       hash,
       signature,
+      signingKeyVersion: "v1",
     };
 
     events.push(completeEvent);
+
+    // Asynchronously persist to ledger repository
+    try {
+      const repos = getRepositoryContainer();
+      repos.ledger.appendEvent(completeEvent).catch(() => {});
+    } catch {}
+
     return completeEvent;
   }
 
@@ -83,16 +92,16 @@ export class ActionOSOrchestrator {
    * and yields at the authorization gate if high-risk actions are required.
    */
   async startWorkflow(input: StartWorkflowInput): Promise<WorkflowStepResult> {
-    const store = getStore();
+    const repos = getRepositoryContainer();
     const sessionId = `act_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    const orgId = input.organizationId || store.customers[0]?.organization_id || "a0000000-0000-0000-0000-000000000001";
-    const customerId = input.customerId || store.customers[0]?.id;
+    const orgId = input.organizationId || "a0000000-0000-0000-0000-000000000001";
+    const customerId = input.customerId || "f0000000-0000-0000-0000-000000000001";
 
     const sm = new ActionStateMachine("received");
     const events: ActionLedgerEvent[] = [];
 
-    // Session record
-    const session: ActionSession = {
+    // Session record persisted via repository
+    const session = await repos.sessions.create({
       id: sessionId,
       customer_id: customerId,
       organization_id: orgId,
@@ -102,12 +111,8 @@ export class ActionOSOrchestrator {
       input_audio_url: input.inputAudioUrl || null,
       intent: null,
       status: "received",
-      started_at: new Date().toISOString(),
-      completed_at: null,
       metadata: { aiProvider: this.nAtlas.name },
-    };
-    store.sessions.unshift(session);
-    store.ledgerEvents[sessionId] = events;
+    });
 
     // Outbound webhook dispatch
     webhookDispatcher.broadcast("action.started", {
@@ -119,6 +124,7 @@ export class ActionOSOrchestrator {
     // 1. Move to UNDERSTANDING
     sm.transition("understanding", "Parsing natural language input with N-ATLAS");
     session.status = "understanding";
+    await repos.sessions.updateStatus(sessionId, "understanding");
 
     this.appendLedgerEvent(events, {
       id: `ev_${Date.now()}_rec`,
@@ -137,20 +143,22 @@ export class ActionOSOrchestrator {
     });
 
     session.intent = understanding.intent;
+
     this.appendLedgerEvent(events, {
-      id: `ev_${Date.now()}_ai`,
+      id: `ev_${Date.now()}_natlas`,
       sessionId,
       timestamp: new Date().toISOString(),
-      action: "intent_classification",
-      description: `Intent detected: ${understanding.intent} (${Math.round(understanding.confidence * 100)}% confidence)`,
+      action: "n_atlas_intent_extraction",
+      description: `N-ATLAS Intent: '${understanding.intent}' (${Math.round(understanding.confidence * 100)}% confidence). ${understanding.normalizedText}`,
       status: "verified",
       actor: "N-ATLAS AI",
-      metadata: understanding.entities,
+      metadata: { entities: understanding.entities },
     });
 
     // 2. Move to PLANNING
     sm.transition("planning", "Generating structured deterministic action plan");
     session.status = "planning";
+    await repos.sessions.updateStatus(sessionId, "planning");
 
     const { plan, steps } = this.planner.createPlan({
       sessionId,
@@ -159,8 +167,8 @@ export class ActionOSOrchestrator {
       organizationId: orgId,
     });
 
-    store.plans.unshift(plan);
-    store.steps.push(...steps);
+    await repos.plans.create(plan);
+    await repos.steps.createMany(steps);
 
     this.appendLedgerEvent(events, {
       id: `ev_${Date.now()}_plan`,
@@ -175,6 +183,7 @@ export class ActionOSOrchestrator {
     // 3. Move to VALIDATING
     sm.transition("validating", "Executing pre-authorization validation steps");
     session.status = "validating";
+    await repos.sessions.updateStatus(sessionId, "validating");
 
     const execContext: ExecutionContext = {
       sessionId,
@@ -230,6 +239,7 @@ export class ActionOSOrchestrator {
         // Escalate or Fail
         sm.transition("escalated", result.error?.message);
         session.status = "escalated";
+        await repos.sessions.updateStatus(sessionId, "escalated");
         return {
           sessionId,
           status: "escalated",
@@ -248,36 +258,40 @@ export class ActionOSOrchestrator {
       } else if (step.tool_name === "get_policy") {
         activePolicy = result.data as unknown as Policy;
       } else if (step.tool_name === "get_quote") {
-        quoteAmount = (result.data?.quoteAmount as number) || 87500;
-        availableQuotes = (result.data?.quotes as UnderwriterQuote[]) || [];
+        const quoteRes = result.data as {
+          quoteAmount: number;
+          quotes: UnderwriterQuote[];
+          selectedUnderwriter: string;
+        };
+        quoteAmount = quoteRes.quoteAmount;
+        availableQuotes = quoteRes.quotes;
       }
     }
 
-    // 4. If authorization required (Renewal workflow), transition to AWAITING_AUTHORIZATION
+    // 4. Yield at AUTHORIZATION GATE if confirmation is required
     if (requiresAuth && activePolicy) {
-      sm.transition("awaiting_authorization", "Pending explicit customer authorization for payment and renewal");
+      sm.transition("awaiting_authorization", "Halting workflow at Cryptographic Authorization Gate");
       session.status = "awaiting_authorization";
 
-      const vehicleName = activePolicy.metadata?.vehicle_name as string || "Toyota Camry";
-      const vehiclePlate = activePolicy.metadata?.vehicle_reg as string || "ABC-123-XY";
-      const formattedAmount = formatNaira(quoteAmount);
-      const formattedExpiry = formatDate(activePolicy.expiry_date);
+      const vehicleMeta = (activePolicy.metadata || {}) as Record<string, unknown>;
+      const nextYearDate = new Date(activePolicy.expiry_date);
+      nextYearDate.setFullYear(nextYearDate.getFullYear() + 1);
 
       authDetails = {
         sessionId,
-        policyNumber: activePolicy.policy_number,
-        customerName: activeCustomer?.full_name || "Demo Customer",
-        assetIdentifier: vehiclePlate,
-        assetName: vehicleName,
-        providerName: (activePolicy.metadata?.provider_name as string) || "Demo Insurance Ltd.",
-        currentExpiry: activePolicy.expiry_date,
-        newExpiry: "2027-10-14",
+        customerName: activeCustomer?.full_name || "Customer",
+        providerName: "Leadway Assurance",
         amount: quoteAmount,
         currency: activePolicy.currency || "NGN",
-        expiresAt: new Date(Date.now() + 15 * 60000).toISOString(),
+        policyNumber: activePolicy.policy_number,
+        policyId: activePolicy.id,
+        assetIdentifier: (vehicleMeta.vehicle_plate as string) || "ABC-123-XY",
+        assetName: (vehicleMeta.vehicle_name as string) || "Toyota Camry (2020)",
+        currentExpiry: activePolicy.expiry_date,
+        newExpiry: nextYearDate.toISOString().split("T")[0],
+        requiresExplicitConsent: true,
+        expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(), // 15 mins quote lock
         quotes: availableQuotes,
-        authMethod: "pin",
-        biometricVerified: false,
       };
 
       session.metadata = {
@@ -286,20 +300,33 @@ export class ActionOSOrchestrator {
         quoteAmount,
       };
 
+      await repos.sessions.updateStatus(sessionId, "awaiting_authorization");
+      await repos.sessions.updateMetadata(sessionId, session.metadata);
+
       this.appendLedgerEvent(events, {
-        id: `ev_${Date.now()}_auth_req`,
+        id: `ev_${Date.now()}_auth_gate`,
         sessionId,
         timestamp: new Date().toISOString(),
         action: "authorization_requested",
         description: `Authorization requested for ₦${quoteAmount.toLocaleString()} to renew ${activePolicy.policy_number}`,
         status: "pending",
         actor: "Policy Guardrail",
-        metadata: { amount: quoteAmount, currency: "NGN", quotesCount: availableQuotes.length },
+        metadata: {
+          amount: quoteAmount,
+          currency: "NGN",
+          quotesCount: availableQuotes.length,
+          policy: activePolicy.policy_number,
+          expiry: activePolicy.expiry_date,
+        },
       });
 
-      webhookDispatcher.broadcast("authorization.required", authDetails as unknown as Record<string, unknown>);
+      webhookDispatcher.broadcast("authorization.required", {
+        sessionId,
+        amount: quoteAmount,
+        policyNumber: activePolicy.policy_number,
+      });
 
-      responseMessage = `I found your vehicle insurance policy for ${vehicleName} (${vehiclePlate}) expiring on ${formattedExpiry}. It is eligible for renewal. Your renewal quote is ${formattedAmount}. Would you like me to proceed with payment?`;
+      responseMessage = `Found your policy ${activePolicy.policy_number} for ${authDetails!.assetName}. It expires on ${formatDate(activePolicy.expiry_date)}. Renewal quote is ${formatNaira(quoteAmount)}. Do you authorize payment and renewal?`;
 
       return {
         sessionId,
@@ -315,19 +342,17 @@ export class ActionOSOrchestrator {
       };
     }
 
-    // For non-renewal workflows that completed right away
-    sm.transition("executing");
-    sm.transition("verifying");
-    sm.transition("completed");
+    // Default completion if no steps required authorization
+    sm.transition("completed", "Workflow completed without external confirmation");
     session.status = "completed";
-    session.completed_at = new Date().toISOString();
+    await repos.sessions.updateStatus(sessionId, "completed", new Date().toISOString());
 
     return {
       sessionId,
       status: "completed",
       intent: understanding.intent,
       confidence: understanding.confidence,
-      message: "Customer and policy information retrieved successfully.",
+      message: "Action completed successfully.",
       authorizationRequired: false,
       authorizationDetails: null,
       events,
@@ -335,8 +360,7 @@ export class ActionOSOrchestrator {
   }
 
   /**
-   * Complete workflow after explicit customer authorization.
-   * Resumes at step 5 (request_payment -> verify_payment -> renew_policy -> cert -> notify -> reminder).
+   * Resume and complete workflow after user confirms or declines authorization.
    * Includes distributed Saga transaction rollback with compensating actions.
    */
   async authorizeAndExecute(
@@ -350,11 +374,11 @@ export class ActionOSOrchestrator {
       authMethod?: "pin" | "biometric_webauthn" | "passkey" | "whatsapp_otp";
     }
   ): Promise<WorkflowStepResult> {
-    const store = getStore();
-    const session = store.sessions.find((s) => s.id === sessionId);
-    const plan = store.plans.find((p) => p.session_id === sessionId);
-    const steps = store.steps.filter((s) => s.action_plan_id === plan?.id);
-    const events = store.ledgerEvents[sessionId] || [];
+    const repos = getRepositoryContainer();
+    const session = await repos.sessions.findById(sessionId);
+    const plan = await repos.plans.findBySessionId(sessionId);
+    const steps = plan ? await repos.steps.findByPlanId(plan.id) : [];
+    const events = (await repos.ledger.getEventsBySessionId(sessionId)) || [];
 
     if (!session || !plan) {
       throw new Error(`Session '${sessionId}' not found.`);
@@ -365,6 +389,8 @@ export class ActionOSOrchestrator {
     if (!authorized) {
       sm.transition("cancelled", "User rejected authorization");
       session.status = "cancelled";
+      await repos.sessions.updateStatus(sessionId, "cancelled");
+
       this.appendLedgerEvent(events, {
         id: `ev_${Date.now()}_cancelled`,
         sessionId,
@@ -389,7 +415,7 @@ export class ActionOSOrchestrator {
 
     // 1. Guardrail Check on Authorization
     const authDetails = session.metadata?.authorizationDetails as AuthorizationDetails | undefined;
-    
+
     // Check if user selected an alternative underwriter quote from the marketplace
     const selectedQuote = authDetails?.quotes?.find(
       (q) =>
@@ -404,6 +430,7 @@ export class ActionOSOrchestrator {
     if (!guardCheck.passed) {
       sm.transition("failed", guardCheck.reason);
       session.status = "failed";
+      await repos.sessions.updateStatus(sessionId, "failed");
       return {
         sessionId,
         status: "failed",
@@ -419,6 +446,7 @@ export class ActionOSOrchestrator {
     // 2. Move to EXECUTING
     sm.transition("executing", "Customer authorization confirmed; executing secure payment and renewal");
     session.status = "executing";
+    await repos.sessions.updateStatus(sessionId, "executing");
 
     const authDesc = options?.authMethod === "biometric_webauthn"
       ? `WebAuthn Biometric Passkey authorization confirmed for ${formatNaira(quoteAmount)}.`
@@ -439,7 +467,7 @@ export class ActionOSOrchestrator {
       sessionId,
       planId: plan.id,
       organizationId: session.organization_id,
-      customerId: session.customer_id || store.customers[0]?.id,
+      customerId: session.customer_id || "f0000000-0000-0000-0000-000000000001",
       userRole: userRole as ExecutionContext["userRole"],
       channel: session.channel,
       language: session.language,
@@ -495,6 +523,7 @@ export class ActionOSOrchestrator {
 
         sm.transition("escalated", "Saga rollback completed: Customer charged was reversed");
         session.status = "escalated";
+        await repos.sessions.updateStatus(sessionId, "escalated");
 
         return {
           sessionId,
@@ -511,7 +540,7 @@ export class ActionOSOrchestrator {
       const stepOverride: Record<string, unknown> = {};
 
       if (step.tool_name === "request_payment") {
-        stepOverride.customerId = session.customer_id || store.customers[0]?.id;
+        stepOverride.customerId = session.customer_id || "f0000000-0000-0000-0000-000000000001";
         stepOverride.amount = quoteAmount;
         stepOverride.currency = "NGN";
         stepOverride.policyNumber = authDetails?.policyNumber || "AUTO-2026-00182";
@@ -522,18 +551,18 @@ export class ActionOSOrchestrator {
         stepOverride.policyNumber = authDetails?.policyNumber || "AUTO-2026-00182";
         stepOverride.paymentReference = paymentReference;
       } else if (step.tool_name === "generate_certificate") {
-        stepOverride.customerId = session.customer_id || store.customers[0]?.id;
+        stepOverride.customerId = session.customer_id || "f0000000-0000-0000-0000-000000000001";
         stepOverride.policyNumber = authDetails?.policyNumber || "AUTO-2026-00182";
         stepOverride.previousExpiry = authDetails?.currentExpiry || "2026-10-14";
         stepOverride.newExpiry = renewalOutput.newExpiry || "2027-10-14";
         stepOverride.amount = quoteAmount;
       } else if (step.tool_name === "send_notification") {
-        stepOverride.customerId = session.customer_id || store.customers[0]?.id;
+        stepOverride.customerId = session.customer_id || "f0000000-0000-0000-0000-000000000001";
         stepOverride.policyNumber = authDetails?.policyNumber || "AUTO-2026-00182";
         stepOverride.newExpiry = renewalOutput.newExpiry || "2027-10-14";
         stepOverride.amount = quoteAmount;
       } else if (step.tool_name === "schedule_reminder") {
-        stepOverride.customerId = session.customer_id || store.customers[0]?.id;
+        stepOverride.customerId = session.customer_id || "f0000000-0000-0000-0000-000000000001";
         stepOverride.policyNumber = authDetails?.policyNumber || "AUTO-2026-00182";
         stepOverride.newExpiry = renewalOutput.newExpiry || "2027-10-14";
       }
@@ -577,6 +606,7 @@ export class ActionOSOrchestrator {
 
         sm.transition("failed", result.error?.message);
         session.status = "failed";
+        await repos.sessions.updateStatus(sessionId, "failed");
         return {
           sessionId,
           status: "failed",
@@ -601,6 +631,7 @@ export class ActionOSOrchestrator {
     // 3. Move to VERIFYING (Independent Verification)
     sm.transition("verifying", "Independently verifying policy state rolled forward");
     session.status = "verifying";
+    await repos.sessions.updateStatus(sessionId, "verifying");
 
     const verifyRenewalResult = await this.verifier.verifyRenewal(
       authDetails?.policyNumber || "AUTO-2026-00182",
@@ -622,6 +653,7 @@ export class ActionOSOrchestrator {
     if (!verifyRenewalResult.passed) {
       sm.transition("failed", verifyRenewalResult.reason);
       session.status = "failed";
+      await repos.sessions.updateStatus(sessionId, "failed");
       return {
         sessionId,
         status: "failed",
@@ -638,6 +670,7 @@ export class ActionOSOrchestrator {
     sm.transition("completed", "Workflow finished with certified policy renewal and NAICOM certificate");
     session.status = "completed";
     session.completed_at = new Date().toISOString();
+    await repos.sessions.updateStatus(sessionId, "completed", session.completed_at);
 
     webhookDispatcher.broadcast("policy.renewed", {
       sessionId,

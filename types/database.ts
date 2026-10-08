@@ -358,3 +358,23 @@ export interface AuditLog {
   user_agent: string | null;
   created_at: string;
 }
+
+export interface ActionLedgerEventRecord {
+  id: string;
+  session_id: string;
+  sequence_number: number;
+  timestamp: string;
+  action: string;
+  description: string;
+  actor: string;
+  status: string;
+  tool: string | null;
+  reference_id: string | null;
+  previous_hash: string;
+  event_hash: string;
+  signature: string;
+  signing_key_version: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+

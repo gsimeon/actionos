@@ -19,6 +19,7 @@ import type {
   NotificationRecord,
   HumanEscalation,
   AuditLog,
+  ActionLedgerEventRecord,
 } from "./database";
 
 export type Json =
@@ -131,6 +132,21 @@ export interface Database {
         Row: AuditLog;
         Insert: Partial<AuditLog> & { organization_id: string; action: string; resource_type: string };
         Update: Partial<AuditLog>;
+      };
+      action_ledger_events: {
+        Row: ActionLedgerEventRecord;
+        Insert: Partial<ActionLedgerEventRecord> & {
+          session_id: string;
+          sequence_number: number;
+          action: string;
+          description: string;
+          actor: string;
+          status: string;
+          previous_hash: string;
+          event_hash: string;
+          signature: string;
+        };
+        Update: Partial<ActionLedgerEventRecord>;
       };
     };
     Views: Record<string, never>;

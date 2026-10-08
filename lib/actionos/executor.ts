@@ -1,8 +1,8 @@
-import type { ActionStep, ToolExecution, AuditLog } from "@/types/database";
+import type { ActionStep, ToolExecution } from "@/types/database";
 import type { ExecutionContext, ToolResult, ActionLedgerEvent } from "@/types/actionos";
 import { toolRegistry } from "./tool-registry";
 import { ActionOSPermissions } from "./permissions";
-import { getStore } from "./mock-store";
+import { getRepositoryContainer } from "@/lib/repositories";
 
 export class ActionOSExecutor {
   /**
@@ -19,7 +19,7 @@ export class ActionOSExecutor {
     ledgerEvent: ActionLedgerEvent;
   }> {
     const startTime = Date.now();
-    const store = getStore();
+    const repos = getRepositoryContainer();
 
     // 1. Validate tool exists
     const tool = toolRegistry.get(step.tool_name);
@@ -28,6 +28,14 @@ export class ActionOSExecutor {
       step.status = "failed";
       step.error = errorMsg;
       step.completed_at = new Date().toISOString();
+
+      try {
+        await repos.steps.updateStep(step.id, {
+          status: "failed",
+          error: errorMsg,
+          completed_at: step.completed_at,
+        });
+      } catch {}
 
       return {
         result: {
@@ -48,7 +56,7 @@ export class ActionOSExecutor {
       };
     }
 
-    // 2. Validate permissions
+    // 2. Validate permissions with Default-Deny
     const permission = ActionOSPermissions.checkPermission({
       role: context.userRole || "customer",
       toolName: step.tool_name,
@@ -60,6 +68,14 @@ export class ActionOSExecutor {
       step.status = "failed";
       step.error = errorMsg;
       step.completed_at = new Date().toISOString();
+
+      try {
+        await repos.steps.updateStep(step.id, {
+          status: "failed",
+          error: errorMsg,
+          completed_at: step.completed_at,
+        });
+      } catch {}
 
       return {
         result: {
@@ -89,6 +105,14 @@ export class ActionOSExecutor {
       step.error = errorMsg;
       step.completed_at = new Date().toISOString();
 
+      try {
+        await repos.steps.updateStep(step.id, {
+          status: "failed",
+          error: errorMsg,
+          completed_at: step.completed_at,
+        });
+      } catch {}
+
       return {
         result: {
           success: false,
@@ -111,6 +135,12 @@ export class ActionOSExecutor {
     // 4. Mark step executing
     step.status = "executing";
     step.started_at = new Date().toISOString();
+    try {
+      await repos.steps.updateStep(step.id, {
+        status: "executing",
+        started_at: step.started_at,
+      });
+    } catch {}
 
     // 5. Execute tool
     let result: ToolResult;
@@ -147,9 +177,17 @@ export class ActionOSExecutor {
     step.error = result.error?.message || null;
     step.completed_at = new Date().toISOString();
 
-    // 8. Record audit log
-    const auditRecord: AuditLog = {
-      id: `audit_${Date.now()}`,
+    try {
+      await repos.steps.updateStep(step.id, {
+        status: step.status,
+        output: step.output,
+        error: step.error,
+        completed_at: step.completed_at,
+      });
+    } catch {}
+
+    // 8. Record audit log via repository
+    await repos.audit.log({
       organization_id: context.organizationId,
       user_id: context.userId || null,
       session_id: context.sessionId,
@@ -160,9 +198,7 @@ export class ActionOSExecutor {
       new_value: { status: step.status, output: result.data },
       ip_address: "127.0.0.1",
       user_agent: "ActionOS-Engine/1.0",
-      created_at: new Date().toISOString(),
-    };
-    store.auditLogs.unshift(auditRecord);
+    });
 
     // 9. Build signature Action Ledger Event
     let actorLabel: ActionLedgerEvent["actor"] = "ActionOS Engine";

@@ -1,6 +1,6 @@
 import type { IActionOSTool, ToolResult, ExecutionContext } from "@/types/actionos";
 import type { Customer } from "@/types/database";
-import { getStore } from "@/lib/actionos/mock-store";
+import { getRepositoryContainer } from "@/lib/repositories";
 
 export interface GetCustomerInput {
   customerId?: string;
@@ -26,21 +26,20 @@ export class GetCustomerTool implements IActionOSTool<GetCustomerInput, Customer
   }
 
   async execute(input: GetCustomerInput, context: ExecutionContext): Promise<ToolResult<Customer>> {
-    const store = getStore();
-
-    // Look up customer by ID, context customerId, customerNumber, email, or phone
+    const repos = getRepositoryContainer();
     const targetId = input.customerId || context.customerId;
-    let customer = store.customers.find((c) => {
-      if (targetId && c.id === targetId) return true;
-      if (input.customerNumber && c.customer_number === input.customerNumber) return true;
-      if (input.email && c.email.toLowerCase() === input.email.toLowerCase()) return true;
-      if (input.phone && c.phone === input.phone) return true;
-      return false;
-    });
 
-    // Default to benchmark demo customer if not specified
+    let customer: Customer | null = null;
+    if (targetId) {
+      customer = await repos.customers.findById(targetId);
+    }
+    if (!customer && input.customerNumber) {
+      customer = await repos.customers.findByNumber(input.customerNumber);
+    }
+
+    // Default to benchmark demo customer if not specified or found
     if (!customer) {
-      customer = store.customers[0];
+      customer = await repos.customers.findByNumber("CUS-000001");
     }
 
     if (!customer) {

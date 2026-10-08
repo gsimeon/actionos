@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { orchestrator } from "@/lib/actionos/orchestrator";
 import { authorizeActionSchema } from "@/lib/validations";
-import { getStore } from "@/lib/actionos/mock-store";
+import { getRepositoryContainer } from "@/lib/repositories";
+import { resolveExecutionContext } from "@/lib/security/auth-context";
 import type { AuthorizationDetails } from "@/types/actionos";
 
 export async function POST(
@@ -26,8 +27,8 @@ export async function POST(
       );
     }
 
-    const store = getStore();
-    const session = store.sessions.find((s) => s.id === id);
+    const repos = getRepositoryContainer();
+    const session = await repos.sessions.findById(id);
 
     // 1. Session exists check
     if (!session) {
@@ -72,11 +73,14 @@ export async function POST(
       }
     }
 
-    // 4. Execute the remainder of the workflow with optional marketplace selection and saga failure simulation
+    // 4. Resolve authenticated identity & verified RBAC role server-side
+    const context = await resolveExecutionContext(req);
+
+    // 5. Execute the remainder of the workflow with validated caller role
     const result = await orchestrator.authorizeAndExecute(
       id,
       validated.data.authorized,
-      "customer",
+      context.role,
       {
         selectedUnderwriter: validated.data.selectedUnderwriter,
         customAmount: validated.data.customAmount,

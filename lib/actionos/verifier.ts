@@ -1,5 +1,5 @@
 import type { Policy } from "@/types/database";
-import { getStore } from "./mock-store";
+import { getRepositoryContainer } from "@/lib/repositories";
 import { mockPaymentProvider } from "@/lib/payments/mock";
 
 export interface VerificationResult {
@@ -55,10 +55,8 @@ export class ActionOSVerifier {
    * Independently verify that policy state has truly rolled forward and updated in the database
    */
   async verifyRenewal(policyNumber: string, expectedNewExpiryYear: number): Promise<VerificationResult> {
-    const store = getStore();
-    const policy: Policy | undefined = store.policies.find(
-      (p) => p.policy_number.toLowerCase() === policyNumber.toLowerCase()
-    );
+    const repos = getRepositoryContainer();
+    const policy: Policy | null = await repos.policies.findByNumber(policyNumber);
 
     if (!policy) {
       return {

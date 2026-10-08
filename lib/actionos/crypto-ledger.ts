@@ -3,6 +3,15 @@ import type { ActionLedgerEvent } from "@/types/actionos";
 
 export const GENESIS_LEDGER_HASH = "0000000000000000000000000000000000000000000000000000000000000000";
 
+function getSigningKey(explicitKey?: string): string {
+  return (
+    explicitKey ||
+    process.env.ACTION_LEDGER_SIGNING_KEY ||
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    "actionos-sovereign-audit-key-2026"
+  );
+}
+
 /**
  * Deterministically compute the SHA-256 hash of an Action Ledger event
  * incorporating previous event hash, timestamp, actor, action, and payload.
@@ -11,6 +20,14 @@ export function computeEventHash(
   event: Partial<ActionLedgerEvent>,
   previousHash: string = GENESIS_LEDGER_HASH
 ): string {
+  // Sort metadata keys deterministically
+  const sortedMetadata = Object.keys(event.metadata || {})
+    .sort()
+    .reduce<Record<string, unknown>>((acc, key) => {
+      acc[key] = (event.metadata as Record<string, unknown>)[key];
+      return acc;
+    }, {});
+
   const content = JSON.stringify({
     previousHash,
     sessionId: event.sessionId,
@@ -21,24 +38,37 @@ export function computeEventHash(
     status: event.status,
     tool: event.tool,
     referenceId: event.referenceId,
-    metadata: event.metadata || {},
+    metadata: sortedMetadata,
   });
 
   return crypto.createHash("sha256").update(content).digest("hex");
 }
 
 /**
- * Generate a simulated Ed25519 / HMAC cryptographic signature for non-repudiation
+ * Generate cryptographic signature for non-repudiation using server-configured key
  */
 export function signEventHash(
   hash: string,
-  privateKeySeed: string = "actionos-sovereign-audit-key-2026"
+  privateKeySeed?: string
 ): string {
+  const secret = getSigningKey(privateKeySeed);
   return crypto
-    .createHmac("sha256", privateKeySeed)
+    .createHmac("sha256", secret)
     .update(hash)
     .digest("hex")
     .substring(0, 32);
+}
+
+/**
+ * Verify cryptographic signature of an event hash
+ */
+export function verifyEventSignature(
+  hash: string,
+  signature: string,
+  privateKeySeed?: string
+): boolean {
+  const expected = signEventHash(hash, privateKeySeed);
+  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
 }
 
 /**

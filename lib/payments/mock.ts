@@ -1,5 +1,11 @@
-import type { PaymentProvider } from "@/types/actionos";
-import { getStore } from "@/lib/actionos/mock-store";
+import type {
+  IPaymentProvider,
+  PaymentInitiationInput,
+  PaymentInitiationResult,
+  PaymentVerificationResult,
+  PaymentRefundResult,
+} from "./provider";
+import { getRepositoryContainer } from "@/lib/repositories";
 
 interface PaymentStoreEntry {
   reference: string;
@@ -11,23 +17,13 @@ interface PaymentStoreEntry {
   providerReference: string;
 }
 
-class MockPaymentProvider implements PaymentProvider {
+export class MockPaymentProvider implements IPaymentProvider {
   public readonly name = "ActionOS Mock Paystack Rail (Simulation)";
   private simulatedPayments = new Map<string, PaymentStoreEntry>();
 
-  async requestPayment(input: {
-    customerId: string;
-    amount: number;
-    currency: string;
-    reference: string;
-    metadata?: Record<string, unknown>;
-  }): Promise<{
-    status: "processing" | "succeeded" | "failed";
-    reference: string;
-    gatewayUrl?: string;
-  }> {
+  async requestPayment(input: PaymentInitiationInput): Promise<PaymentInitiationResult> {
     const providerRef = `pstk_sim_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-    
+
     // In simulation mode, payment automatically transitions to succeeded upon confirmation
     const entry: PaymentStoreEntry = {
       reference: input.reference,
@@ -41,34 +37,30 @@ class MockPaymentProvider implements PaymentProvider {
 
     this.simulatedPayments.set(input.reference, entry);
 
-    // Record in global mock store if available
-    const store = getStore();
-    const existingIdx = store.transactions.findIndex((t) => t.reference === input.reference);
-    const txRecord = {
-      id: `tx_${Date.now()}`,
-      customer_id: input.customerId,
-      renewal_id: (input.metadata?.renewalId as string) || null,
-      amount: input.amount,
-      currency: input.currency || "NGN",
-      provider: "mock_paystack",
-      reference: input.reference,
-      status: "succeeded" as const,
-      transaction_type: "renewal_premium" as const,
-      metadata: {
-        simulation_mode: true,
-        channel: "card",
-        bank: "GTBank Nigeria Plc",
-        provider_reference: providerRef,
-        ...input.metadata,
-      },
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
+    // Record transaction via repository abstraction
+    const repos = getRepositoryContainer();
+    const existing = await repos.transactions.findByReference(input.reference);
 
-    if (existingIdx >= 0) {
-      store.transactions[existingIdx] = txRecord;
+    if (existing) {
+      await repos.transactions.updateStatus(existing.id, "succeeded");
     } else {
-      store.transactions.unshift(txRecord);
+      await repos.transactions.create({
+        customer_id: input.customerId,
+        renewal_id: (input.metadata?.renewalId as string) || null,
+        amount: input.amount,
+        currency: input.currency || "NGN",
+        provider: "mock_paystack",
+        reference: input.reference,
+        status: "succeeded",
+        transaction_type: "renewal_premium",
+        metadata: {
+          simulation_mode: true,
+          channel: "card",
+          bank: "GTBank Nigeria Plc",
+          provider_reference: providerRef,
+          ...input.metadata,
+        },
+      });
     }
 
     return {
@@ -78,19 +70,12 @@ class MockPaymentProvider implements PaymentProvider {
     };
   }
 
-  async verifyPayment(reference: string): Promise<{
-    status: "succeeded" | "failed" | "pending";
-    amount: number;
-    currency: string;
-    providerReference: string;
-    paidAt: string;
-  }> {
-    // Check in-memory simulation records or store transactions
+  async verifyPayment(reference: string): Promise<PaymentVerificationResult> {
     let record = this.simulatedPayments.get(reference);
 
     if (!record) {
-      const store = getStore();
-      const tx = store.transactions.find((t) => t.reference === reference);
+      const repos = getRepositoryContainer();
+      const tx = await repos.transactions.findByReference(reference);
       if (tx) {
         record = {
           reference: tx.reference,
@@ -120,6 +105,27 @@ class MockPaymentProvider implements PaymentProvider {
       currency: record.currency,
       providerReference: record.providerReference,
       paidAt: record.paidAt,
+    };
+  }
+
+  async refundPayment(reference: string, amount?: number): Promise<PaymentRefundResult> {
+    const record = this.simulatedPayments.get(reference);
+    const refundRef = `ref_sim_${Date.now()}`;
+
+    if (record) {
+      record.status = "failed";
+    }
+
+    const repos = getRepositoryContainer();
+    const tx = await repos.transactions.findByReference(reference);
+    if (tx) {
+      await repos.transactions.updateStatus(tx.id, "refunded");
+    }
+
+    return {
+      status: "refunded",
+      refundReference: refundRef,
+      amount: amount ?? (record?.amount || 0),
     };
   }
 }

@@ -1,6 +1,5 @@
 import type { IActionOSTool, ToolResult, ExecutionContext } from "@/types/actionos";
-import { getStore } from "@/lib/actionos/mock-store";
-import type { Transaction } from "@/types/database";
+import { getRepositoryContainer } from "@/lib/repositories";
 
 export interface RefundPaymentInput {
   reference: string;
@@ -39,13 +38,13 @@ export class RefundPaymentTool implements IActionOSTool<RefundPaymentInput, Refu
   }
 
   async execute(input: RefundPaymentInput, context: ExecutionContext): Promise<ToolResult<RefundPaymentOutput>> {
-    const store = getStore();
+    const repos = getRepositoryContainer();
     const refundRef = `ref_rev_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const customerId = context.customerId || "f0000000-0000-0000-0000-000000000001";
 
-    // Record reversing transaction in mock store
-    const reversalTx: Transaction = {
-      id: `tx_${Date.now()}_rev`,
-      customer_id: context.customerId || store.customers[0]?.id,
+    // Record reversing transaction via repository
+    await repos.transactions.create({
+      customer_id: customerId,
       renewal_id: null,
       amount: -Math.abs(input.amount),
       currency: input.currency || "NGN",
@@ -58,10 +57,7 @@ export class RefundPaymentTool implements IActionOSTool<RefundPaymentInput, Refu
         reason: input.reason,
         isSagaCompensating: true,
       },
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-    store.transactions.unshift(reversalTx);
+    });
 
     return {
       success: true,

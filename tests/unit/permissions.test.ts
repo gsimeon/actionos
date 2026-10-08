@@ -16,6 +16,12 @@ describe("ActionOSPermissions", () => {
       amount: 87500,
     });
     assert.equal(renewalRes.allowed, true);
+
+    const niidRes = ActionOSPermissions.checkPermission({
+      role: "customer",
+      toolName: "verify_niid",
+    });
+    assert.equal(niidRes.allowed, true);
   });
 
   it("should require approval when customer exceeds 500k limit", () => {
@@ -40,5 +46,15 @@ describe("ActionOSPermissions", () => {
       toolName: "override_underwriting",
     });
     assert.equal(managerAttempt.allowed, true);
+  });
+
+  it("should enforce default-deny for unconfigured or unknown tools", () => {
+    const unknownRes = ActionOSPermissions.checkPermission({
+      role: "admin",
+      toolName: "unregistered_arbitrary_tool",
+    });
+    assert.equal(unknownRes.allowed, false);
+    assert.equal(unknownRes.requiresApproval, true);
+    assert.match(unknownRes.reason || "", /default-deny/);
   });
 });
