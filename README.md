@@ -78,9 +78,30 @@ Visit [http://localhost:3000/actions](http://localhost:3000/actions) for the Act
 
 ---
 
-## 5. Acceptance Test Verification
+## 5. Verification & Capability Status Matrix
 
-To run the automated end-to-end acceptance test:
+To provide complete transparency for NITDA competition judges and enterprise security reviewers, ActionOS categorizes each capability into four architectural readiness tiers:
+
+| Subsystem / Capability | Readiness Tier | Implementation & Verification Status |
+| :--- | :--- | :--- |
+| **Action State Machine** | 🟢 **Implemented & Tested** | Deterministic transition graph validated across legal and illegal states in automated test suites (`tests/unit/state-machine.test.ts`). |
+| **Underwriting Guardrails** | 🟢 **Implemented & Tested** | Pure function validations for customer ownership, 30-day renewal windows, quote bounds, and financial ceilings (`tests/unit/guardrails.test.ts`). |
+| **Cryptographic Action Ledger™** | 🟢 **Implemented & Tested** | SHA-256 hash chaining, genesis linking, and HMAC token signing verified for tamper detection (`tests/unit/crypto-ledger.test.ts`). |
+| **Security Context & Zero Fallback** | 🟢 **Implemented & Tested** | Server-verified `AuthenticatedExecutionContext` and `WorkflowExecutionContext`. Zero production identity fallback (`tests/unit/production-security-hardening.test.ts`). |
+| **Repository Layer & Multi-Tenancy** | 🟢 **Implemented & Tested** | Dual Supabase/Demo container abstraction with hierarchical tenant verification (`tests/unit/repositories.test.ts`). |
+| **Multi-Insurer Quotation Marketplace** | 🟢 **Implemented & Tested** | Actuarial comparison across Leadway, AIICO, AXA Mansard, and Custodian (`tests/integration/marketplace-and-niid.test.ts`). |
+| **Distributed Saga & Auto-Refund** | 🟢 **Implemented & Tested** | Automated compensating transaction triggered upon downstream document failure (`tests/integration/renewal-workflow.test.ts`). |
+| **Supabase PostgreSQL & RLS Policies** | 🟡 **Implemented (Syntax & Schema Verified)** | 15 tables and RLS policies verified in automated schema test suite (`tests/integration/schema-migration.test.ts`). Live deployment requires cloud Supabase project link. |
+| **NIID / Statutory Verification** | 🟠 **Simulated in Demo Sandbox** | Structured adapter simulating Nigerian Insurance Industry Database (NIID) and FRSC plate validation with realistic regulatory schemas. |
+| **Payment Rail (Paystack / Flutterwave)** | 🟠 **Simulated in Demo Sandbox** | Sandboxed provider simulating initialization, webhook callbacks, and independent verification. Live settlement requires production gateway keys. |
+| **Digital NAICOM Certificate Issuance** | 🟠 **Simulated in Demo Sandbox** | Generates verifiable digital certificate records with simulated NAICOM registration numbers and cryptographic hash stamping. |
+| **Official N-ATLAS Inference Endpoint** | 🔵 **Awaiting Official Provider Contract** | Official integration boundary with deterministic multilingual intent parser (English, Pidgin, Yorùbá, Hausa, Igbo) pending official NITDA API specs. |
+
+---
+
+## 6. Automated Test Suite Execution
+
+Run the automated test harness from the repository root:
 ```bash
 npm test
 ```
@@ -89,17 +110,18 @@ The test suite validates:
 - Deterministic underwriting guardrails
 - RBAC role permissions & financial caps
 - Complete renewal workflow from natural language utterance to certificate issuance and Action Ledger generation
+- Security regression suite (zero-fallback, cross-tenant isolation, demo isolation)
 
 ---
 
-## 6. Architecture & Security
+## 7. Architecture & Security
 See detailed specifications in:
 - [ARCHITECTURE.md](file:///C:/Users/PC/.gemini/antigravity-ide/scratch/actionos/ARCHITECTURE.md)
 - [SECURITY.md](file:///C:/Users/PC/.gemini/antigravity-ide/scratch/actionos/SECURITY.md)
 
 ---
 
-## 7. NITDA 2026 Evaluation Notes
+## 8. NITDA 2026 Evaluation Notes
 - **Benchmark Customer:** Demo Customer (`CUS-000001`)
 - **Benchmark Vehicle:** Toyota Camry (`ABC-123-XY`)
 - **Benchmark Policy:** `AUTO-2026-00182` (expiring in 7 days, quote: `₦87,500`)
