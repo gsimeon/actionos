@@ -64,7 +64,7 @@ export async function POST(req: Request) {
       scheduled_for: json.scheduled_for || new Date().toISOString().split("T")[0],
       days_before_expiry: json.days_before_expiry || 7,
       status: json.status || "scheduled",
-      quote_amount: json.quote_amount || 87500,
+      quote_amount: typeof json.quote_amount === "number" ? json.quote_amount : null,
       currency: json.currency || "NGN",
       payment_status: "pending",
     }, tenant);

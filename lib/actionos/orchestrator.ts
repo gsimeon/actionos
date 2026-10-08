@@ -375,8 +375,24 @@ export class ActionOSOrchestrator {
         (vehicleMeta.asset_name as string) ||
         (activePolicy.policy_number ? `Asset for ${activePolicy.policy_number}` : "Insured Asset");
 
-      const matchedQuote = availableQuotes.find((q) => q.amount === quoteAmount) || availableQuotes[0];
-      const quoteId = matchedQuote?.id || `quo_${activePolicy.policy_number}_${sessionId.slice(0, 8)}`;
+      const matchedQuote = availableQuotes.find((q) => q.amount === quoteAmount) || availableQuotes.find((q) => q.isRecommended) || availableQuotes[0];
+      if (!matchedQuote || !matchedQuote.id) {
+        sm.transition("failed", "Missing verified quote record from issued quotes");
+        session.status = "failed";
+        await repos.sessions.updateStatus(sessionId, "failed");
+        return {
+          sessionId,
+          status: "failed",
+          intent: understanding.intent,
+          confidence: understanding.confidence,
+          message: "ActionOS halted: Missing valid quote record. Authorization requires an issued underwriter quote.",
+          authorizationRequired: false,
+          authorizationDetails: null,
+          events,
+        };
+      }
+
+      const quoteId = matchedQuote.id;
 
       authDetails = {
         quoteId,
@@ -399,6 +415,16 @@ export class ActionOSOrchestrator {
       session.metadata = {
         ...session.metadata,
         authorizationDetails: authDetails,
+        persistedQuote: {
+          quoteId: matchedQuote.id,
+          policyId: activePolicy.id,
+          policyNumber: activePolicy.policy_number,
+          customerId: activeCustomer?.id,
+          amount: matchedQuote.amount,
+          currency: matchedQuote.currency,
+          providerName: matchedQuote.underwriter,
+          expiresAt: authDetails.expiresAt,
+        },
         quoteAmount,
       };
 
@@ -555,9 +581,19 @@ export class ActionOSOrchestrator {
 
     // 1. Guardrail Check on Authorization
     const authDetails = session.metadata?.authorizationDetails as AuthorizationDetails | undefined;
+    const persistedQuote = session.metadata?.persistedQuote as {
+      quoteId: string;
+      policyId?: string;
+      policyNumber: string;
+      customerId?: string;
+      amount: number;
+      currency: string;
+      providerName: string;
+      expiresAt: string;
+    } | undefined;
 
-    if (!authDetails || !authDetails.quoteId || typeof authDetails.amount !== "number" || authDetails.amount <= 0) {
-      sm.transition("failed", "Missing required quote details for authorization");
+    if (!authDetails || !authDetails.quoteId || typeof authDetails.amount !== "number" || authDetails.amount <= 0 || !persistedQuote) {
+      sm.transition("failed", "Missing required persisted quote details for authorization");
       session.status = "failed";
       await repos.sessions.updateStatus(sessionId, "failed");
       return {
@@ -565,7 +601,23 @@ export class ActionOSOrchestrator {
         status: "failed",
         intent: plan.intent,
         confidence: plan.confidence,
-        message: "Guardrail Failure: Authorization must bind to a verified, persisted quote.",
+        message: "Guardrail Failure: Authorization must bind to a verified, persisted quote record.",
+        authorizationRequired: false,
+        authorizationDetails: null,
+        events,
+      };
+    }
+
+    if (authDetails.quoteId !== persistedQuote.quoteId) {
+      sm.transition("failed", "Quote record integrity mismatch between authorization and persisted record");
+      session.status = "failed";
+      await repos.sessions.updateStatus(sessionId, "failed");
+      return {
+        sessionId,
+        status: "failed",
+        intent: plan.intent,
+        confidence: plan.confidence,
+        message: "Guardrail Failure: Quote integrity violation. Authorization quote does not match persisted record.",
         authorizationRequired: false,
         authorizationDetails: null,
         events,

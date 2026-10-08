@@ -106,4 +106,24 @@ describe("ActionOS Cryptographic Action Ledger (Tamper-Evidence & Integrity)", (
     assert.equal(check.tamperedIndex, 1);
     assert.ok(check.reason?.includes("Invalid event hash at index 1"));
   });
+
+  it("should strictly require ACTION_LEDGER_SIGNING_KEY in production mode", () => {
+    const originalMode = process.env.ACTIONOS_RUNTIME_MODE;
+    const originalKey = process.env.ACTION_LEDGER_SIGNING_KEY;
+    try {
+      process.env.ACTIONOS_RUNTIME_MODE = "production";
+      delete process.env.ACTION_LEDGER_SIGNING_KEY;
+      assert.throws(
+        () => signEventHash("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+        /ACTION_LEDGER_SIGNING_KEY is required in production environment/
+      );
+    } finally {
+      process.env.ACTIONOS_RUNTIME_MODE = originalMode;
+      if (originalKey !== undefined) {
+        process.env.ACTION_LEDGER_SIGNING_KEY = originalKey;
+      } else {
+        delete process.env.ACTION_LEDGER_SIGNING_KEY;
+      }
+    }
+  });
 });

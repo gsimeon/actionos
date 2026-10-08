@@ -18,7 +18,7 @@ export const DEMO_CONTEXT: AuthenticatedExecutionContext = {
 
 export class AuthContextError extends Error {
   constructor(
-    public readonly code: "UNAUTHORIZED" | "PROFILE_NOT_FOUND" | "FORBIDDEN" | "AUTH_ERROR",
+    public readonly code: "UNAUTHORIZED" | "PROFILE_NOT_FOUND" | "FORBIDDEN" | "AUTH_ERROR" | "AMBIGUOUS_TENANT",
     message: string
   ) {
     super(message);
@@ -101,25 +101,17 @@ export async function resolveExecutionContext(_req?: Request): Promise<Authentic
       throw new AuthContextError("PROFILE_NOT_FOUND", `User profile not found for auth user ID: ${user.id}`);
     }
 
-    // Resolve organization membership & role with multi-tenant support
+    // Resolve organization membership & role with strict multi-tenant support
     const requestedOrgId =
       _req?.headers.get("x-organization-id") ||
       cookieStore.get("current_organization_id")?.value ||
       cookieStore.get("actionos_org_id")?.value;
 
-    let memberQuery = supabase
+    const { data: members, error: memberError } = await supabase
       .from("organization_members")
       .select("organization_id, role")
       .eq("profile_id", profile.id)
       .eq("status", "active");
-
-    if (requestedOrgId) {
-      memberQuery = memberQuery.eq("organization_id", requestedOrgId);
-    } else {
-      memberQuery = memberQuery.order("created_at", { ascending: false });
-    }
-
-    const { data: members, error: memberError } = await memberQuery;
 
     if (memberError) {
       throw new AuthContextError("AUTH_ERROR", `Failed querying organization membership: ${memberError.message}`);
@@ -134,7 +126,26 @@ export async function resolveExecutionContext(_req?: Request): Promise<Authentic
       );
     }
 
-    const activeMember = members[0];
+    let activeMember: { organization_id: string; role: string };
+
+    if (requestedOrgId) {
+      const match = members.find((m) => m.organization_id === requestedOrgId);
+      if (!match) {
+        throw new AuthContextError(
+          "FORBIDDEN",
+          `User does not have an active membership in requested organization: ${requestedOrgId}`
+        );
+      }
+      activeMember = match;
+    } else {
+      if (members.length > 1) {
+        throw new AuthContextError(
+          "AMBIGUOUS_TENANT",
+          `User belongs to multiple active organizations (${members.map((m) => m.organization_id).join(", ")}). An explicit organization selection is required via the 'x-organization-id' header or 'current_organization_id' cookie.`
+        );
+      }
+      activeMember = members[0];
+    }
 
     // Resolve linked customer strictly scoped to the active organization
     const { data: customer } = await supabase

@@ -28,6 +28,13 @@ import type {
 import type { ActionLedgerEvent } from "@/types/actionos";
 import { getStore } from "@/lib/actionos/mock-store";
 
+let demoEntitySequence = 0;
+function generateDemoId(prefix: string): string {
+  demoEntitySequence += 1;
+  const rand = Math.random().toString(36).substring(2, 7);
+  return `${prefix}_${Date.now()}_${demoEntitySequence}_${rand}`;
+}
+
 export class DemoCustomerRepository implements ICustomerRepository {
   async findAll(tenant?: TenantContext): Promise<Customer[]> {
     const store = getStore();
@@ -66,7 +73,7 @@ export class DemoCustomerRepository implements ICustomerRepository {
   async create(data: Partial<Customer> & { customer_number: string; full_name: string; phone: string; email: string; organization_id: string }): Promise<Customer> {
     const store = getStore();
     const customer: Customer = {
-      id: data.id || `demo_cus_${Date.now()}`,
+      id: data.id || generateDemoId("demo_cus"),
       organization_id: data.organization_id,
       profile_id: data.profile_id || null,
       customer_number: data.customer_number,
@@ -148,7 +155,7 @@ export class DemoPolicyRepository implements IPolicyRepository {
       }
     }
     const policy: Policy = {
-      id: data.id || `demo_pol_${Date.now()}`,
+      id: data.id || generateDemoId("demo_pol"),
       customer_id: data.customer_id,
       asset_id: data.asset_id || null,
       provider_id: data.provider_id,
@@ -239,7 +246,7 @@ export class DemoRenewalRepository implements IRenewalRepository {
       }
     }
     const renewal: Renewal = {
-      id: data.id || `demo_ren_${Date.now()}`,
+      id: data.id || generateDemoId("demo_ren"),
       policy_id: data.policy_id,
       customer_id: data.customer_id,
       scheduled_for: data.scheduled_for,
@@ -317,7 +324,7 @@ export class DemoActionSessionRepository implements IActionSessionRepository {
       throw new Error(`Tenant authorization violation: customer mismatch on session create`);
     }
     const session: ActionSession = {
-      id: data.id || `demo_ses_${Date.now()}`,
+      id: data.id || generateDemoId("demo_ses"),
       customer_id: data.customer_id || null,
       organization_id: data.organization_id,
       channel: data.channel,
@@ -383,7 +390,7 @@ export class DemoActionPlanRepository implements IActionPlanRepository {
       }
     }
     const plan: ActionPlan = {
-      id: data.id || `demo_plan_${Date.now()}`,
+      id: data.id || generateDemoId("demo_plan"),
       session_id: data.session_id,
       intent: data.intent,
       goal: data.goal,
@@ -440,7 +447,7 @@ export class DemoActionStepRepository implements IActionStepRepository {
   ): Promise<ActionStep[]> {
     const store = getStore();
     const created: ActionStep[] = stepsData.map((s) => ({
-      id: s.id || `demo_step_${Date.now()}_${s.sequence}`,
+      id: s.id || generateDemoId(`demo_step_${s.sequence}`),
       action_plan_id: s.action_plan_id,
       sequence: s.sequence,
       action_type: s.action_type,
@@ -496,7 +503,7 @@ export class DemoTransactionRepository implements ITransactionRepository {
       }
     }
     const tx: Transaction = {
-      id: data.id || `demo_tx_${Date.now()}`,
+      id: data.id || generateDemoId("demo_tx"),
       customer_id: data.customer_id,
       renewal_id: data.renewal_id || null,
       amount: data.amount,
@@ -559,7 +566,7 @@ export class DemoDocumentRepository implements IDocumentRepository {
       }
     }
     const doc: Document = {
-      id: data.id || `demo_doc_${Date.now()}`,
+      id: data.id || generateDemoId("demo_doc"),
       customer_id: data.customer_id,
       renewal_id: data.renewal_id || null,
       document_type: data.document_type,
@@ -610,7 +617,7 @@ export class DemoNotificationRepository implements INotificationRepository {
       }
     }
     const notif: NotificationRecord = {
-      id: data.id || `demo_notif_${Date.now()}`,
+      id: data.id || generateDemoId("demo_notif"),
       customer_id: data.customer_id,
       type: data.type,
       channel: data.channel,
@@ -643,7 +650,7 @@ export class DemoAuditRepository implements IAuditRepository {
       throw new Error(`Tenant authorization violation: organization mismatch on audit log`);
     }
     const entry: AuditLog = {
-      id: data.id || `demo_aud_${Date.now()}`,
+      id: data.id || generateDemoId("demo_aud"),
       organization_id: data.organization_id,
       user_id: data.user_id || null,
       session_id: data.session_id || null,
