@@ -10,6 +10,7 @@ import type {
   Document,
   NotificationRecord,
   AuditLog,
+  Quote,
 } from "@/types/database";
 import type { ActionLedgerEvent } from "@/types/actionos";
 
@@ -18,6 +19,7 @@ export interface ActionOSDataStore {
   assets: Asset[];
   policies: Policy[];
   renewals: Renewal[];
+  quotes: Quote[];
   sessions: ActionSession[];
   plans: ActionPlan[];
   steps: ActionStep[];
@@ -289,6 +291,7 @@ function initializeDefaultData(): ActionOSDataStore {
     assets,
     policies,
     renewals,
+    quotes: [],
     sessions: [],
     plans: [],
     steps: [],

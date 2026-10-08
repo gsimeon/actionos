@@ -11,6 +11,8 @@ export const createActionSchema = z.object({
 
 export const authorizeActionSchema = z.object({
   authorized: z.boolean(),
+  quoteId: z.string().optional(),
+  authorizedQuoteId: z.string().optional(),
   reason: z.string().optional(),
   selectedUnderwriter: z.string().optional(),
   customAmount: z.number().positive().optional(),

@@ -14,9 +14,15 @@ export type RuntimeMode = "demo" | "production";
  * 3. Safe default: "demo" (prevents accidental destructive calls in unconfigured dev)
  */
 export function getRuntimeMode(): RuntimeMode {
-  if (process.env.ACTIONOS_RUNTIME_MODE) {
-    const mode = process.env.ACTIONOS_RUNTIME_MODE.toLowerCase().trim();
-    return mode === "production" ? "production" : "demo";
+  const envMode = process.env.ACTIONOS_RUNTIME_MODE;
+  if (envMode && envMode !== "undefined") {
+    const mode = envMode.toLowerCase().trim();
+    if (mode !== "demo" && mode !== "production") {
+      throw new Error(
+        `Invalid ACTIONOS_RUNTIME_MODE '${envMode}'. Must be either 'demo' or 'production'.`
+      );
+    }
+    return mode;
   }
 
   if (process.env.NODE_ENV === "production") {

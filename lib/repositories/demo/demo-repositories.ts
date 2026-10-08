@@ -2,6 +2,7 @@ import type {
   ICustomerRepository,
   IPolicyRepository,
   IRenewalRepository,
+  IQuoteRepository,
   IActionSessionRepository,
   IActionPlanRepository,
   IActionStepRepository,
@@ -24,6 +25,7 @@ import type {
   Document,
   NotificationRecord,
   AuditLog,
+  Quote,
 } from "@/types/database";
 import type { ActionLedgerEvent } from "@/types/actionos";
 import { getStore } from "@/lib/actionos/mock-store";
@@ -239,8 +241,8 @@ export class DemoRenewalRepository implements IRenewalRepository {
     if (tenant?.customerId && data.customer_id !== tenant.customerId) {
       throw new Error(`Tenant authorization violation: customer mismatch on renewal create`);
     }
+    const cust = store.customers.find((c) => c.id === data.customer_id);
     if (tenant?.organizationId) {
-      const cust = store.customers.find((c) => c.id === data.customer_id);
       if (!cust || cust.organization_id !== tenant.organizationId) {
         throw new Error(`Tenant authorization violation: organization mismatch on renewal create`);
       }
@@ -249,6 +251,7 @@ export class DemoRenewalRepository implements IRenewalRepository {
       id: data.id || generateDemoId("demo_ren"),
       policy_id: data.policy_id,
       customer_id: data.customer_id,
+      organization_id: data.organization_id || cust?.organization_id,
       scheduled_for: data.scheduled_for,
       days_before_expiry: data.days_before_expiry ?? 7,
       status: data.status || "scheduled",
@@ -273,6 +276,9 @@ export class DemoRenewalRepository implements IRenewalRepository {
       throw new Error(`Tenant authorization violation for renewal ${id}`);
     }
     if (tenant?.organizationId) {
+      if (renewal.organization_id && renewal.organization_id !== tenant.organizationId) {
+        throw new Error(`Tenant authorization violation for renewal ${id}`);
+      }
       const cust = store.customers.find((c) => c.id === renewal.customer_id);
       if (!cust || cust.organization_id !== tenant.organizationId) {
         throw new Error(`Tenant authorization violation for renewal ${id}`);
@@ -294,6 +300,9 @@ export class DemoRenewalRepository implements IRenewalRepository {
       throw new Error(`Tenant authorization violation for renewal ${id}`);
     }
     if (tenant?.organizationId) {
+      if (renewal.organization_id && renewal.organization_id !== tenant.organizationId) {
+        throw new Error(`Tenant authorization violation for renewal ${id}`);
+      }
       const cust = store.customers.find((c) => c.id === renewal.customer_id);
       if (!cust || cust.organization_id !== tenant.organizationId) {
         throw new Error(`Tenant authorization violation for renewal ${id}`);
@@ -695,11 +704,93 @@ export class DemoLedgerRepository implements ILedgerRepository {
   }
 }
 
+export class DemoQuoteRepository implements IQuoteRepository {
+  async create(
+    data: Partial<Quote> & {
+      session_id: string;
+      organization_id: string;
+      customer_id: string;
+      policy_id: string;
+      provider_name: string;
+      amount: number;
+      currency?: string;
+      expires_at: string;
+      quote_hash?: string;
+    },
+    tenant?: TenantContext
+  ): Promise<Quote> {
+    const store = getStore();
+    if (tenant?.organizationId && data.organization_id !== tenant.organizationId) {
+      throw new Error(`Tenant authorization violation: organization mismatch on quote create`);
+    }
+    if (tenant?.customerId && data.customer_id !== tenant.customerId) {
+      throw new Error(`Tenant authorization violation: customer mismatch on quote create`);
+    }
+
+    const quote: Quote = {
+      id: data.id || generateDemoId("demo_quo"),
+      session_id: data.session_id,
+      organization_id: data.organization_id,
+      customer_id: data.customer_id,
+      policy_id: data.policy_id,
+      underwriter_id: data.underwriter_id || null,
+      provider_name: data.provider_name,
+      amount: data.amount,
+      currency: data.currency || "NGN",
+      status: data.status || "issued",
+      issued_at: data.issued_at || new Date().toISOString(),
+      expires_at: data.expires_at,
+      quote_hash: data.quote_hash || "demo_hash",
+      provider_reference: data.provider_reference || null,
+      metadata: data.metadata || {},
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    store.quotes.unshift(quote);
+    return quote;
+  }
+
+  async findById(id: string, tenant?: TenantContext): Promise<Quote | null> {
+    const store = getStore();
+    const quote = store.quotes.find((q) => q.id === id);
+    if (!quote) return null;
+    if (tenant?.organizationId && quote.organization_id !== tenant.organizationId) return null;
+    if (tenant?.customerId && quote.customer_id !== tenant.customerId) return null;
+    return quote;
+  }
+
+  async findBySessionId(sessionId: string, tenant?: TenantContext): Promise<Quote[]> {
+    const store = getStore();
+    return store.quotes.filter((q) => {
+      if (q.session_id !== sessionId) return false;
+      if (tenant?.organizationId && q.organization_id !== tenant.organizationId) return false;
+      if (tenant?.customerId && q.customer_id !== tenant.customerId) return false;
+      return true;
+    });
+  }
+
+  async updateStatus(id: string, status: Quote["status"], tenant?: TenantContext): Promise<Quote> {
+    const store = getStore();
+    const quote = store.quotes.find((q) => q.id === id);
+    if (!quote) throw new Error(`Quote not found: ${id}`);
+    if (tenant?.organizationId && quote.organization_id !== tenant.organizationId) {
+      throw new Error(`Tenant authorization violation for quote ${id}`);
+    }
+    if (tenant?.customerId && quote.customer_id !== tenant.customerId) {
+      throw new Error(`Tenant authorization violation for quote ${id}`);
+    }
+    quote.status = status;
+    quote.updated_at = new Date().toISOString();
+    return quote;
+  }
+}
+
 export class DemoRepositoryContainer implements RepositoryContainer {
   public readonly isDemo = true;
   public readonly customers = new DemoCustomerRepository();
   public readonly policies = new DemoPolicyRepository();
   public readonly renewals = new DemoRenewalRepository();
+  public readonly quotes = new DemoQuoteRepository();
   public readonly sessions = new DemoActionSessionRepository();
   public readonly plans = new DemoActionPlanRepository();
   public readonly steps = new DemoActionStepRepository();

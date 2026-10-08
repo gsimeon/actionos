@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
+import crypto from "node:crypto";
 import { orchestrator } from "@/lib/actionos/orchestrator";
 import { createActionSchema } from "@/lib/validations";
 import { resolveExecutionContext, AuthContextError } from "@/lib/security/auth-context";
 
 export async function POST(req: Request) {
+  let callerOrgId: string | undefined;
+
   try {
     const json = await req.json();
     const validated = createActionSchema.safeParse(json);
@@ -24,6 +27,7 @@ export async function POST(req: Request) {
 
     // Resolve verified server-side identity & tenant context
     const context = await resolveExecutionContext(req);
+    callerOrgId = context.organizationId;
 
     // Enforce identity boundaries: never fallback outside demo
     let targetCustomerId = context.customerId;
@@ -75,13 +79,24 @@ export async function POST(req: Request) {
       );
     }
 
-    const message = err instanceof Error ? err.message : "Internal server error";
+    const correlationId = `corr_${crypto.randomUUID()}`;
+    console.error(
+      JSON.stringify({
+        correlationId,
+        endpoint: "POST /api/actions",
+        organizationId: callerOrgId,
+        error: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      })
+    );
+
     return NextResponse.json(
       {
         success: false,
         error: {
           code: "ORCHESTRATION_ERROR",
-          message,
+          message: "We could not complete this action.",
+          correlationId,
         },
       },
       { status: 500 }

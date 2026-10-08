@@ -59,6 +59,13 @@ describe("Supabase Schema, Migration Replayability & Type Alignment Validation",
       /CREATE TABLE IF NOT EXISTS action_ledger_events\b/i.test(ledgerSql),
       "Action Ledger migration must create action_ledger_events table"
     );
+
+    const quotesMigration = path.join(migrationsDir, "20261008010000_quotes.sql");
+    const quotesSql = fs.readFileSync(quotesMigration, "utf-8");
+    assert.ok(
+      /CREATE TABLE IF NOT EXISTS quotes\b/i.test(quotesSql),
+      "Quotes migration must create quotes table"
+    );
   });
 
   it("should verify mandatory Row Level Security (RLS) is enabled on all sensitive tenant tables", () => {
@@ -70,7 +77,11 @@ describe("Supabase Schema, Migration Replayability & Type Alignment Validation",
       path.join(migrationsDir, "20261008000000_action_ledger_events.sql"),
       "utf-8"
     );
-    const allSql = schemaSql + "\n" + ledgerSql;
+    const quotesSql = fs.readFileSync(
+      path.join(migrationsDir, "20261008010000_quotes.sql"),
+      "utf-8"
+    );
+    const allSql = schemaSql + "\n" + ledgerSql + "\n" + quotesSql;
 
     const rlsTables = [
       "organizations",
@@ -80,6 +91,7 @@ describe("Supabase Schema, Migration Replayability & Type Alignment Validation",
       "assets",
       "policies",
       "renewals",
+      "quotes",
       "action_sessions",
       "action_plans",
       "action_steps",

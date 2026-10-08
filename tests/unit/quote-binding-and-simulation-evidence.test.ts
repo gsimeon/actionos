@@ -31,9 +31,18 @@ describe("ActionOS Quote Binding, Expiration & Simulation Evidence Hardening", (
 
     const expiresTime = new Date(auth.expiresAt).getTime();
     assert.ok(expiresTime > Date.now(), "Quote expiresAt must be in the future");
+
+    // Verify first-class quote entity is persisted in the quotes repository
+    const repos = getRepositoryContainer();
+    const persistedQuoteEntity = await repos.quotes.findById(auth.quoteId);
+    assert.ok(persistedQuoteEntity, "First-class quote record must be persisted in repository");
+    assert.equal(persistedQuoteEntity.id, auth.quoteId);
+    assert.equal(persistedQuoteEntity.amount, auth.amount);
+    assert.equal(persistedQuoteEntity.status, "issued");
+    assert.ok(persistedQuoteEntity.quote_hash.length > 0, "Quote hash must be computed");
   });
 
-  it("should strictly reject authorization when quote in session metadata has expired", async () => {
+  it("should strictly reject authorization when quote has expired", async () => {
     resetStore();
     const repos = getRepositoryContainer();
 
@@ -45,11 +54,16 @@ describe("ActionOS Quote Binding, Expiration & Simulation Evidence Hardening", (
 
     assert.ok(startRes.authorizationDetails);
 
-    // Tamper expiration timestamp to 10 minutes in the past while preserving persistedQuote
+    // Expire the quote in repository and session metadata
     const expiredAuth = {
       ...startRes.authorizationDetails,
       expiresAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
     };
+
+    const sessionQuotes = await repos.quotes.findBySessionId(startRes.sessionId);
+    for (const q of sessionQuotes) {
+      q.expires_at = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    }
 
     const sessionRecord = await repos.sessions.findById(startRes.sessionId);
     await repos.sessions.updateMetadata(startRes.sessionId, {
@@ -120,10 +134,93 @@ describe("ActionOS Quote Binding, Expiration & Simulation Evidence Hardening", (
     const execRes = await orchestrator.authorizeAndExecute(
       startRes.sessionId,
       true,
-      DEMO_CONTEXT
+      DEMO_CONTEXT,
+      { authorizedQuoteId: "quo_tampered_fake_999" }
     );
     assert.equal(execRes.status, "failed");
-    assert.match(execRes.message, /Quote integrity violation/);
+    assert.match(execRes.message, /Quote integrity violation|Authorization must bind to a verified, persisted quote record/);
+  });
+
+  it("should update persisted quote status to accepted upon successful authorization", async () => {
+    resetStore();
+    const repos = getRepositoryContainer();
+
+    const startRes = await orchestrator.startWorkflow({
+      inputText: "Renew my Toyota Camry insurance AUTO-2026-00182",
+      channel: "web",
+      executionContext: DEMO_CONTEXT,
+    });
+
+    const quoteId = startRes.authorizationDetails!.quoteId;
+    const initialQuote = await repos.quotes.findById(quoteId);
+    assert.equal(initialQuote?.status, "issued");
+
+    const execRes = await orchestrator.authorizeAndExecute(
+      startRes.sessionId,
+      true,
+      DEMO_CONTEXT,
+      { authorizedQuoteId: quoteId }
+    );
+    assert.equal(execRes.status, "completed");
+
+    const acceptedQuote = await repos.quotes.findById(quoteId);
+    assert.equal(acceptedQuote?.status, "accepted");
+  });
+
+  it("should strictly prohibit simulateSagaFailure in production runtime mode", async () => {
+    resetStore();
+    const originalMode = process.env.ACTIONOS_RUNTIME_MODE;
+    process.env.ACTIONOS_RUNTIME_MODE = "production";
+
+    try {
+      const prodContext = {
+        userId: "user_prod",
+        profileId: "prof_prod",
+        organizationId: "a0000000-0000-0000-0000-000000000001",
+        role: "customer" as const,
+        customerId: "f0000000-0000-0000-0000-000000000001",
+        isDemo: false,
+      };
+
+      await assert.rejects(
+        async () => {
+          await orchestrator.authorizeAndExecute(
+            "sess_prod_123",
+            true,
+            prodContext,
+            { simulateSagaFailure: true }
+          );
+        },
+        /Security enforcement violation: Fault injection \(simulateSagaFailure\) is prohibited in production runtime mode/
+      );
+    } finally {
+      process.env.ACTIONOS_RUNTIME_MODE = originalMode;
+    }
+  });
+
+  it("should fail closed and throw configuration error on invalid ACTIONOS_RUNTIME_MODE values", async () => {
+    const originalMode = process.env.ACTIONOS_RUNTIME_MODE;
+    const { getRuntimeMode } = await import("@/lib/runtime/mode");
+
+    try {
+      process.env.ACTIONOS_RUNTIME_MODE = "prod";
+      assert.throws(
+        () => getRuntimeMode(),
+        /Invalid ACTIONOS_RUNTIME_MODE 'prod'\. Must be either 'demo' or 'production'\./
+      );
+
+      process.env.ACTIONOS_RUNTIME_MODE = "development";
+      assert.throws(
+        () => getRuntimeMode(),
+        /Invalid ACTIONOS_RUNTIME_MODE 'development'\. Must be either 'demo' or 'production'\./
+      );
+    } finally {
+      if (originalMode !== undefined) {
+        process.env.ACTIONOS_RUNTIME_MODE = originalMode;
+      } else {
+        delete process.env.ACTIONOS_RUNTIME_MODE;
+      }
+    }
   });
 
   it("should reject authorization when custom amount does not match any approved quote", async () => {

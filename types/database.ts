@@ -207,6 +207,7 @@ export interface Renewal {
   id: string;
   policy_id: string;
   customer_id: string;
+  organization_id?: string;
   scheduled_for: string;
   days_before_expiry: number;
   status: RenewalStatus;
@@ -219,6 +220,28 @@ export interface Renewal {
   // joined fields
   policy?: Policy;
   customer?: Customer;
+}
+
+export type QuoteStatus = "issued" | "accepted" | "rejected" | "expired";
+
+export interface Quote {
+  id: string;
+  session_id: string;
+  organization_id: string;
+  customer_id: string;
+  policy_id: string;
+  underwriter_id?: string | null;
+  provider_name: string;
+  amount: number;
+  currency: string;
+  status: QuoteStatus;
+  issued_at: string;
+  expires_at: string;
+  quote_hash: string;
+  provider_reference?: string | null;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface ActionSession {

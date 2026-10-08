@@ -2,6 +2,7 @@ import type {
   ICustomerRepository,
   IPolicyRepository,
   IRenewalRepository,
+  IQuoteRepository,
   IActionSessionRepository,
   IActionPlanRepository,
   IActionStepRepository,
@@ -24,6 +25,7 @@ import type {
   Document,
   NotificationRecord,
   AuditLog,
+  Quote,
 } from "@/types/database";
 import type { ActionLedgerEvent } from "@/types/actionos";
 import { createClient as createSupabaseClient, SupabaseClient } from "@supabase/supabase-js";
@@ -378,6 +380,7 @@ export class SupabaseRenewalRepository implements IRenewalRepository {
       .insert({
         policy_id: data.policy_id,
         customer_id: data.customer_id,
+        organization_id: tenant?.organizationId || data.organization_id || undefined,
         scheduled_for: data.scheduled_for,
         days_before_expiry: data.days_before_expiry ?? 7,
         status: data.status ?? "scheduled",
@@ -409,6 +412,9 @@ export class SupabaseRenewalRepository implements IRenewalRepository {
       .update(updatePayload)
       .eq("id", id);
 
+    if (tenant?.organizationId) {
+      query = query.eq("organization_id", tenant.organizationId);
+    }
     if (tenant?.customerId) {
       query = query.eq("customer_id", tenant.customerId);
     }
@@ -433,6 +439,9 @@ export class SupabaseRenewalRepository implements IRenewalRepository {
       })
       .eq("id", id);
 
+    if (tenant?.organizationId) {
+      query = query.eq("organization_id", tenant.organizationId);
+    }
     if (tenant?.customerId) {
       query = query.eq("customer_id", tenant.customerId);
     }
@@ -1027,11 +1036,126 @@ export class SupabaseLedgerRepository implements ILedgerRepository {
   }
 }
 
+export class SupabaseQuoteRepository implements IQuoteRepository {
+  private client = getSupabaseClient();
+
+  async create(
+    data: Partial<Quote> & {
+      session_id: string;
+      organization_id: string;
+      customer_id: string;
+      policy_id: string;
+      provider_name: string;
+      amount: number;
+      currency?: string;
+      expires_at: string;
+      quote_hash?: string;
+    },
+    tenant?: TenantContext
+  ): Promise<Quote> {
+    if (tenant?.organizationId && data.organization_id !== tenant.organizationId) {
+      throw new DatabaseError("Tenant authorization violation: organization mismatch on quote create", "UNAUTHORIZED");
+    }
+    if (tenant?.customerId && data.customer_id !== tenant.customerId) {
+      throw new DatabaseError("Tenant authorization violation: customer mismatch on quote create", "UNAUTHORIZED");
+    }
+
+    const { data: created, error } = await this.client
+      .from("quotes")
+      .insert({
+        session_id: data.session_id,
+        organization_id: data.organization_id,
+        customer_id: data.customer_id,
+        policy_id: data.policy_id,
+        underwriter_id: data.underwriter_id ?? null,
+        provider_name: data.provider_name,
+        amount: data.amount,
+        currency: data.currency ?? "NGN",
+        status: data.status ?? "issued",
+        expires_at: data.expires_at,
+        quote_hash: data.quote_hash ?? "sha256_unhashed",
+        provider_reference: data.provider_reference ?? null,
+        metadata: data.metadata ?? {},
+      })
+      .select("*")
+      .single();
+
+    if (error || !created) {
+      throw new DatabaseError(`Failed to persist quote: ${error?.message}`, error?.code, error);
+    }
+    return created as Quote;
+  }
+
+  async findById(id: string, tenant?: TenantContext): Promise<Quote | null> {
+    let query = this.client
+      .from("quotes")
+      .select("*")
+      .eq("id", id);
+
+    if (tenant?.organizationId) {
+      query = query.eq("organization_id", tenant.organizationId);
+    }
+    if (tenant?.customerId) {
+      query = query.eq("customer_id", tenant.customerId);
+    }
+
+    const { data, error } = await query.maybeSingle();
+    if (error) {
+      throw new DatabaseError(`Quote lookup failed: ${error.message}`, error.code, error);
+    }
+    return (data || null) as Quote | null;
+  }
+
+  async findBySessionId(sessionId: string, tenant?: TenantContext): Promise<Quote[]> {
+    let query = this.client
+      .from("quotes")
+      .select("*")
+      .eq("session_id", sessionId);
+
+    if (tenant?.organizationId) {
+      query = query.eq("organization_id", tenant.organizationId);
+    }
+    if (tenant?.customerId) {
+      query = query.eq("customer_id", tenant.customerId);
+    }
+
+    const { data, error } = await query.order("created_at", { ascending: false });
+    if (error) {
+      throw new DatabaseError(`Quotes query by session ID failed: ${error.message}`, error.code, error);
+    }
+    return (data || []) as Quote[];
+  }
+
+  async updateStatus(id: string, status: Quote["status"], tenant?: TenantContext): Promise<Quote> {
+    let query = this.client
+      .from("quotes")
+      .update({
+        status,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", id);
+
+    if (tenant?.organizationId) {
+      query = query.eq("organization_id", tenant.organizationId);
+    }
+    if (tenant?.customerId) {
+      query = query.eq("customer_id", tenant.customerId);
+    }
+
+    const { data, error } = await query.select("*").single();
+    if (error || !data) {
+      throw new DatabaseError(`Failed to update quote status: ${error?.message}`, error?.code, error);
+    }
+    return data as Quote;
+  }
+}
+
 export class SupabaseRepositoryContainer implements RepositoryContainer {
   public readonly isDemo = false;
   public readonly customers = new SupabaseCustomerRepository();
   public readonly policies = new SupabasePolicyRepository();
   public readonly renewals = new SupabaseRenewalRepository();
+  public readonly quotes = new SupabaseQuoteRepository();
   public readonly sessions = new SupabaseActionSessionRepository();
   public readonly plans = new SupabaseActionPlanRepository();
   public readonly steps = new SupabaseActionStepRepository();

@@ -1,16 +1,22 @@
 import { NextResponse } from "next/server";
+import crypto from "node:crypto";
 import { orchestrator } from "@/lib/actionos/orchestrator";
 import { authorizeActionSchema } from "@/lib/validations";
 import { getRepositoryContainer } from "@/lib/repositories";
 import { resolveExecutionContext } from "@/lib/security/auth-context";
+import { isProductionMode } from "@/lib/runtime/mode";
 import type { AuthorizationDetails } from "@/types/actionos";
 
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  let callerContext: { organizationId?: string; customerId?: string } | undefined;
+  let sessionId: string | undefined;
+
   try {
     const { id } = await params;
+    sessionId = id;
     const json = await req.json();
     const validated = authorizeActionSchema.safeParse(json);
 
@@ -27,8 +33,38 @@ export async function POST(
       );
     }
 
+    // 0. Fault injection check: prohibited in production mode
+    if (isProductionMode() && validated.data.simulateSagaFailure) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: "FORBIDDEN",
+            message: "Fault injection (simulateSagaFailure) is strictly disabled in production mode.",
+          },
+        },
+        { status: 403 }
+      );
+    }
+
     // 1. Resolve authenticated identity & verified RBAC role server-side
     const context = await resolveExecutionContext(req);
+    callerContext = context;
+
+    // In production, reject arbitrary custom amounts that are not tied to a quote
+    const requestedQuoteId = validated.data.authorizedQuoteId || validated.data.quoteId;
+    if (isProductionMode() && validated.data.customAmount && !requestedQuoteId) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: "BAD_REQUEST",
+            message: "Arbitrary customAmount is rejected in production. Authorization must bind to an authorizedQuoteId.",
+          },
+        },
+        { status: 400 }
+      );
+    }
 
     // 2. Query session with defense-in-depth tenant boundary
     const repos = getRepositoryContainer();
@@ -86,6 +122,8 @@ export async function POST(
       validated.data.authorized,
       context,
       {
+        quoteId: requestedQuoteId,
+        authorizedQuoteId: requestedQuoteId,
         selectedUnderwriter: validated.data.selectedUnderwriter,
         customAmount: validated.data.customAmount,
         authMethod: validated.data.authMethod,
@@ -112,13 +150,25 @@ export async function POST(
       );
     }
 
-    const message = err instanceof Error ? err.message : "Authorization processing failed";
+    const correlationId = `corr_${crypto.randomUUID()}`;
+    console.error(
+      JSON.stringify({
+        correlationId,
+        sessionId,
+        organizationId: callerContext?.organizationId,
+        endpoint: "POST /api/actions/[id]/authorize",
+        error: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      })
+    );
+
     return NextResponse.json(
       {
         success: false,
         error: {
-          code: "AUTHORIZATION_ERROR",
-          message,
+          code: "ORCHESTRATION_ERROR",
+          message: "We could not complete this action.",
+          correlationId,
         },
       },
       { status: 500 }

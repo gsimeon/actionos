@@ -9,6 +9,7 @@ import type {
   Document,
   NotificationRecord,
   AuditLog,
+  Quote,
 } from "@/types/database";
 import type { ActionLedgerEvent } from "@/types/actionos";
 
@@ -93,11 +94,32 @@ export interface ILedgerRepository {
   getEventsBySessionId(sessionId: string, tenant?: TenantContext): Promise<ActionLedgerEvent[]>;
 }
 
+export interface IQuoteRepository {
+  create(
+    data: Partial<Quote> & {
+      session_id: string;
+      organization_id: string;
+      customer_id: string;
+      policy_id: string;
+      provider_name: string;
+      amount: number;
+      currency?: string;
+      expires_at: string;
+      quote_hash?: string;
+    },
+    tenant?: TenantContext
+  ): Promise<Quote>;
+  findById(id: string, tenant?: TenantContext): Promise<Quote | null>;
+  findBySessionId(sessionId: string, tenant?: TenantContext): Promise<Quote[]>;
+  updateStatus(id: string, status: Quote["status"], tenant?: TenantContext): Promise<Quote>;
+}
+
 export interface RepositoryContainer {
   readonly isDemo: boolean;
   customers: ICustomerRepository;
   policies: IPolicyRepository;
   renewals: IRenewalRepository;
+  quotes: IQuoteRepository;
   sessions: IActionSessionRepository;
   plans: IActionPlanRepository;
   steps: IActionStepRepository;

@@ -87,6 +87,7 @@ To provide complete transparency for NITDA competition judges and enterprise sec
 | **Action State Machine** | 🟢 **Implemented & Tested** | Deterministic transition graph validated across legal and illegal states in automated test suites (`tests/unit/state-machine.test.ts`). |
 | **Underwriting Guardrails** | 🟢 **Implemented & Tested** | Pure function validations for customer ownership, 30-day renewal windows, quote bounds, and financial ceilings (`tests/unit/guardrails.test.ts`). |
 | **Cryptographic Action Ledger™** | 🟢 **Implemented & Tested** | SHA-256 hash chaining, genesis linking, and HMAC token signing verified for tamper detection (`tests/unit/crypto-ledger.test.ts`). |
+| **First-Class Quote Persistence & Binding** | 🟢 **Implemented & Tested** | Dedicated `quotes` table, SHA-256 tamper-evident payload verification, and immutable `quoteId` authorization binding (`tests/unit/quote-binding-and-simulation-evidence.test.ts`). |
 | **Security Context & Zero Fallback** | 🟢 **Implemented & Tested** | Server-verified `AuthenticatedExecutionContext` and `WorkflowExecutionContext`. Zero production identity fallback (`tests/unit/production-security-hardening.test.ts`). |
 | **Repository Layer & Multi-Tenancy** | 🟢 **Implemented & Tested** | Dual Supabase/Demo container abstraction with hierarchical tenant verification (`tests/unit/repositories.test.ts`). |
 | **Multi-Insurer Quotation Marketplace** | 🟢 **Implemented & Tested** | Actuarial comparison across Leadway, AIICO, AXA Mansard, and Custodian (`tests/integration/marketplace-and-niid.test.ts`). |
@@ -95,7 +96,7 @@ To provide complete transparency for NITDA competition judges and enterprise sec
 | **NIID / Statutory Verification** | 🟠 **Simulated in Demo Sandbox** | Structured adapter simulating Nigerian Insurance Industry Database (NIID) and FRSC plate validation with realistic regulatory schemas. |
 | **Payment Rail (Paystack / Flutterwave)** | 🟠 **Simulated in Demo Sandbox** | Sandboxed provider simulating initialization, webhook callbacks, and independent verification. Live settlement requires production gateway keys. |
 | **Digital NAICOM Certificate Issuance** | 🟠 **Simulated in Demo Sandbox** | Generates verifiable digital certificate records with simulated NAICOM registration numbers and cryptographic hash stamping. |
-| **Official N-ATLAS Inference Endpoint** | 🔵 **Awaiting Official Provider Contract** | Official integration boundary with deterministic multilingual intent parser (English, Pidgin, Yorùbá, Hausa, Igbo) pending official NITDA API specs. |
+| **N-ATLAS Multilingual Adapter** | 🟢 **Adapter Implemented with Reproducible Engine** | ActionOS is model-agnostic. N-ATLAS is the intended Nigerian-language intelligence provider (supporting English, Nigerian Pidgin, Yorùbá, Hausa, and Igbo), while the deterministic provider allows the complete action-execution system to operate 100% reproducibly in competition environments. |
 
 ---
 

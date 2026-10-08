@@ -21,7 +21,8 @@ import type {
   WorkflowExecutionContext,
   UnderwriterQuote,
 } from "@/types/actionos";
-import { isDemoMode } from "@/lib/runtime/mode";
+import crypto from "node:crypto";
+import { isDemoMode, isProductionMode } from "@/lib/runtime/mode";
 import { formatNaira, formatDate } from "@/lib/utils";
 import { createWorkflowExecutionContext } from "@/lib/runtime/execution-context";
 
@@ -112,7 +113,7 @@ export class ActionOSOrchestrator {
    */
   async startWorkflow(input: StartWorkflowInput): Promise<WorkflowStepResult> {
     const repos = getRepositoryContainer();
-    const sessionId = `act_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const sessionId = `act_${crypto.randomUUID()}`;
     const isDemo = isDemoMode();
 
     // Strict authentication enforcement: zero implicit fallback
@@ -146,6 +147,11 @@ export class ActionOSOrchestrator {
 
     const orgId = auth.organizationId;
     const customerId = auth.customerId;
+    const tenantContext: TenantContext = {
+      organizationId: orgId,
+      customerId,
+      role: auth.role,
+    };
 
     const sm = new ActionStateMachine("received");
     const events: ActionLedgerEvent[] = [];
@@ -392,7 +398,67 @@ export class ActionOSOrchestrator {
         };
       }
 
-      const quoteId = matchedQuote.id;
+      const quoteExpiry = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+      const quoteCustId = activeCustomer?.id || customerId || "f0000000-0000-0000-0000-000000000001";
+      const quoteProvider = matchedQuote.underwriter || providerName;
+      const quoteHashPayload = `${sessionId}:${orgId}:${quoteCustId}:${activePolicy.id}:${quoteProvider}:${quoteAmount}:${activePolicy.currency || "NGN"}:${quoteExpiry}`;
+      const quoteHash = crypto.createHash("sha256").update(quoteHashPayload).digest("hex");
+
+      const createdQuote = await repos.quotes.create(
+        {
+          id: matchedQuote.id,
+          session_id: sessionId,
+          organization_id: orgId,
+          customer_id: quoteCustId,
+          policy_id: activePolicy.id,
+          provider_name: quoteProvider,
+          amount: quoteAmount,
+          currency: activePolicy.currency || "NGN",
+          status: "issued",
+          expires_at: quoteExpiry,
+          quote_hash: quoteHash,
+          provider_reference: matchedQuote.id,
+          metadata: {
+            underwriter: matchedQuote.underwriter,
+            policyNumber: activePolicy.policy_number,
+            assetIdentifier,
+          },
+        },
+        tenantContext
+      );
+
+      // Also persist alternative marketplace quotes
+      for (const alt of availableQuotes) {
+        if (alt.id !== matchedQuote.id) {
+          const altProvider = alt.underwriter || providerName;
+          const altHash = crypto.createHash("sha256").update(
+            `${sessionId}:${orgId}:${quoteCustId}:${activePolicy.id}:${altProvider}:${alt.amount}:${alt.currency || "NGN"}:${quoteExpiry}`
+          ).digest("hex");
+          await repos.quotes.create(
+            {
+              id: alt.id,
+              session_id: sessionId,
+              organization_id: orgId,
+              customer_id: quoteCustId,
+              policy_id: activePolicy.id,
+              provider_name: altProvider,
+              amount: alt.amount,
+              currency: alt.currency || "NGN",
+              status: "issued",
+              expires_at: quoteExpiry,
+              quote_hash: altHash,
+              provider_reference: alt.id,
+              metadata: {
+                underwriter: alt.underwriter,
+                policyNumber: activePolicy.policy_number,
+              },
+            },
+            tenantContext
+          );
+        }
+      }
+
+      const quoteId = createdQuote.id;
 
       authDetails = {
         quoteId,
@@ -408,7 +474,7 @@ export class ActionOSOrchestrator {
         currentExpiry: activePolicy.expiry_date,
         newExpiry: nextYearDate.toISOString().split("T")[0],
         requiresExplicitConsent: true,
-        expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(), // 15 mins quote lock
+        expiresAt: quoteExpiry,
         quotes: availableQuotes,
       };
 
@@ -416,14 +482,15 @@ export class ActionOSOrchestrator {
         ...session.metadata,
         authorizationDetails: authDetails,
         persistedQuote: {
-          quoteId: matchedQuote.id,
+          quoteId: createdQuote.id,
           policyId: activePolicy.id,
           policyNumber: activePolicy.policy_number,
-          customerId: activeCustomer?.id,
-          amount: matchedQuote.amount,
-          currency: matchedQuote.currency,
-          providerName: matchedQuote.underwriter,
-          expiresAt: authDetails.expiresAt,
+          customerId: createdQuote.customer_id,
+          amount: createdQuote.amount,
+          currency: createdQuote.currency,
+          providerName: createdQuote.provider_name,
+          expiresAt: createdQuote.expires_at,
+          quoteHash: createdQuote.quote_hash,
         },
         quoteAmount,
       };
@@ -500,8 +567,16 @@ export class ActionOSOrchestrator {
       customAmount?: number;
       simulateSagaFailure?: boolean;
       authMethod?: "pin" | "biometric_webauthn" | "passkey" | "whatsapp_otp";
+      quoteId?: string;
+      authorizedQuoteId?: string;
     }
   ): Promise<WorkflowStepResult> {
+    if (isProductionMode() && options?.simulateSagaFailure) {
+      throw new Error(
+        "Security enforcement violation: Fault injection (simulateSagaFailure) is prohibited in production runtime mode."
+      );
+    }
+
     const isDemo = isDemoMode();
     const auth: AuthenticatedExecutionContext =
       authContext && "auth" in authContext ? authContext.auth : (authContext as AuthenticatedExecutionContext);
@@ -579,9 +654,9 @@ export class ActionOSOrchestrator {
       };
     }
 
-    // 1. Guardrail Check on Authorization
+    // 1. Guardrail Check on Authorization Details
     const authDetails = session.metadata?.authorizationDetails as AuthorizationDetails | undefined;
-    const persistedQuote = session.metadata?.persistedQuote as {
+    const persistedQuoteMeta = session.metadata?.persistedQuote as {
       quoteId: string;
       policyId?: string;
       policyNumber: string;
@@ -590,9 +665,10 @@ export class ActionOSOrchestrator {
       currency: string;
       providerName: string;
       expiresAt: string;
+      quoteHash?: string;
     } | undefined;
 
-    if (!authDetails || !authDetails.quoteId || typeof authDetails.amount !== "number" || authDetails.amount <= 0 || !persistedQuote) {
+    if (!authDetails || !authDetails.quoteId || typeof authDetails.amount !== "number" || authDetails.amount <= 0 || !persistedQuoteMeta) {
       sm.transition("failed", "Missing required persisted quote details for authorization");
       session.status = "failed";
       await repos.sessions.updateStatus(sessionId, "failed");
@@ -608,8 +684,42 @@ export class ActionOSOrchestrator {
       };
     }
 
-    if (authDetails.quoteId !== persistedQuote.quoteId) {
-      sm.transition("failed", "Quote record integrity mismatch between authorization and persisted record");
+    // Determine target quote ID
+    const requestedQuoteId = options?.authorizedQuoteId || options?.quoteId;
+    let targetQuoteId = requestedQuoteId || authDetails.quoteId;
+
+    if (options?.selectedUnderwriter && !requestedQuoteId) {
+      const match = authDetails.quotes?.find(
+        (q) => q.underwriter.toLowerCase() === options.selectedUnderwriter!.toLowerCase()
+      );
+      if (match) {
+        targetQuoteId = match.id;
+      }
+    } else if (options?.customAmount && !requestedQuoteId) {
+      const match = authDetails.quotes?.find((q) => q.amount === options.customAmount);
+      if (match) {
+        targetQuoteId = match.id;
+      } else {
+        sm.transition("failed", "Custom amount does not match any approved underwriter quote");
+        session.status = "failed";
+        await repos.sessions.updateStatus(sessionId, "failed");
+        return {
+          sessionId,
+          status: "failed",
+          intent: plan.intent,
+          confidence: plan.confidence,
+          message: "Guardrail Failure: Requested custom amount does not match any approved underwriter quote.",
+          authorizationRequired: false,
+          authorizationDetails: null,
+          events,
+        };
+      }
+    }
+
+    // 2. Load the quote from the database using immutable quoteId
+    const dbQuote = await repos.quotes.findById(targetQuoteId, tenantContext);
+    if (!dbQuote) {
+      sm.transition("failed", `Missing persisted quote record for quoteId: ${targetQuoteId}`);
       session.status = "failed";
       await repos.sessions.updateStatus(sessionId, "failed");
       return {
@@ -617,15 +727,64 @@ export class ActionOSOrchestrator {
         status: "failed",
         intent: plan.intent,
         confidence: plan.confidence,
-        message: "Guardrail Failure: Quote integrity violation. Authorization quote does not match persisted record.",
+        message: `Guardrail Failure: Authorization must bind to a verified, persisted quote record (quoteId: ${targetQuoteId}).`,
         authorizationRequired: false,
         authorizationDetails: null,
         events,
       };
     }
 
-    // Verify quote expiration
-    if (authDetails.expiresAt && new Date(authDetails.expiresAt).getTime() < Date.now()) {
+    // 3. Verify quote integrity against session and caller context
+    if (dbQuote.session_id !== sessionId) {
+      sm.transition("failed", "Quote session mismatch");
+      session.status = "failed";
+      await repos.sessions.updateStatus(sessionId, "failed");
+      return {
+        sessionId,
+        status: "failed",
+        intent: plan.intent,
+        confidence: plan.confidence,
+        message: "Guardrail Failure: Quote integrity violation. Quote is not associated with this session.",
+        authorizationRequired: false,
+        authorizationDetails: null,
+        events,
+      };
+    }
+
+    if (callerOrgId && dbQuote.organization_id !== callerOrgId) {
+      sm.transition("failed", "Quote tenant mismatch");
+      session.status = "failed";
+      await repos.sessions.updateStatus(sessionId, "failed");
+      return {
+        sessionId,
+        status: "failed",
+        intent: plan.intent,
+        confidence: plan.confidence,
+        message: "Guardrail Failure: Tenant boundary violation on quote authorization.",
+        authorizationRequired: false,
+        authorizationDetails: null,
+        events,
+      };
+    }
+
+    if (callerCustomerId && dbQuote.customer_id !== callerCustomerId) {
+      sm.transition("failed", "Quote customer mismatch");
+      session.status = "failed";
+      await repos.sessions.updateStatus(sessionId, "failed");
+      return {
+        sessionId,
+        status: "failed",
+        intent: plan.intent,
+        confidence: plan.confidence,
+        message: "Guardrail Failure: Customer boundary violation on quote authorization.",
+        authorizationRequired: false,
+        authorizationDetails: null,
+        events,
+      };
+    }
+
+    // Check expiry
+    if (new Date(dbQuote.expires_at).getTime() < Date.now()) {
       sm.transition("failed", "Quote has expired");
       session.status = "failed";
       await repos.sessions.updateStatus(sessionId, "failed");
@@ -641,20 +800,30 @@ export class ActionOSOrchestrator {
       };
     }
 
-    // Check if user selected an alternative underwriter quote from the marketplace
-    const selectedQuote = authDetails.quotes?.find(
-      (q) =>
-        (options?.selectedUnderwriter && q.underwriter.toLowerCase() === options.selectedUnderwriter.toLowerCase()) ||
-        (options?.customAmount && q.amount === options.customAmount)
-    );
+    // In production, reject arbitrary custom amounts that don't match the loaded quote
+    if (isProductionMode() && options?.customAmount && options.customAmount !== dbQuote.amount) {
+      sm.transition("failed", "Arbitrary custom amount is strictly forbidden in production mode");
+      session.status = "failed";
+      await repos.sessions.updateStatus(sessionId, "failed");
+      return {
+        sessionId,
+        status: "failed",
+        intent: plan.intent,
+        confidence: plan.confidence,
+        message: "Guardrail Failure: Arbitrary customAmount is rejected in production. Authorization must bind to an immutable quoteId.",
+        authorizationRequired: false,
+        authorizationDetails: null,
+        events,
+      };
+    }
 
-    let quoteAmount: number;
-    if (selectedQuote) {
-      quoteAmount = selectedQuote.amount;
-    } else if (options?.customAmount) {
-      const validCustom = authDetails.quotes?.find((q) => q.amount === options.customAmount);
-      if (!validCustom && options.customAmount !== authDetails.amount) {
-        sm.transition("failed", "Requested custom amount does not match any verified quote");
+    // Verify cryptographic quote hash if present
+    if (dbQuote.quote_hash && dbQuote.quote_hash !== "demo_hash") {
+      const expectedHash = crypto.createHash("sha256").update(
+        `${dbQuote.session_id}:${dbQuote.organization_id}:${dbQuote.customer_id}:${dbQuote.policy_id}:${dbQuote.provider_name}:${dbQuote.amount}:${dbQuote.currency}:${dbQuote.expires_at}`
+      ).digest("hex");
+      if (dbQuote.quote_hash !== expectedHash) {
+        sm.transition("failed", "Quote hash mismatch");
         session.status = "failed";
         await repos.sessions.updateStatus(sessionId, "failed");
         return {
@@ -662,18 +831,16 @@ export class ActionOSOrchestrator {
           status: "failed",
           intent: plan.intent,
           confidence: plan.confidence,
-          message: "Guardrail Failure: Custom amount does not match any approved underwriter quote.",
+          message: "Guardrail Failure: Quote hash integrity violation. Persisted quote record has been tampered with.",
           authorizationRequired: false,
           authorizationDetails: null,
           events,
         };
       }
-      quoteAmount = options.customAmount;
-    } else {
-      quoteAmount = authDetails.amount;
     }
 
-    const expectedAuthAmount = selectedQuote ? selectedQuote.amount : authDetails.amount;
+    const quoteAmount = dbQuote.amount;
+    const expectedAuthAmount = dbQuote.amount;
 
     const guardCheck = this.guardrails.validateAuthorization(true, quoteAmount, expectedAuthAmount);
     if (!guardCheck.passed) {
@@ -691,6 +858,9 @@ export class ActionOSOrchestrator {
         events,
       };
     }
+
+    // Mark quote as accepted in the database
+    await repos.quotes.updateStatus(dbQuote.id, "accepted", tenantContext);
 
     // 2. Move to EXECUTING
     sm.transition("executing", "Customer authorization confirmed; executing secure payment and renewal");
