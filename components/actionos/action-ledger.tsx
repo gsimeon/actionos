@@ -34,14 +34,38 @@ export function ActionLedger({
   className,
 }: ActionLedgerProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [tamperedEvents, setTamperedEvents] = useState<ActionLedgerEvent[] | null>(null);
   const [verifyStatus, setVerifyStatus] = useState<{ checked: boolean; valid: boolean; reason?: string } | null>(null);
 
+  const activeEvents = tamperedEvents ?? events;
+  const isSimulatedTamper = tamperedEvents !== null;
+
   const handleVerifyChain = () => {
+    const res = verifyLedgerIntegrity(activeEvents);
+    setVerifyStatus({ checked: true, valid: res.valid, reason: res.reason });
+  };
+
+  const handleSimulateTamper = () => {
+    if (events.length < 2) return;
+    const tampered = events.map((e, idx) => {
+      if (idx === 1) {
+        return {
+          ...e,
+          description: "[UNAUTHORIZED TAMPER] Policy renewed for ₦20,000 without underwriter consent",
+          // Intentionally do not recompute hash to prove hash-chaining verification
+        };
+      }
+      return e;
+    });
+    setTamperedEvents(tampered);
+    const res = verifyLedgerIntegrity(tampered);
+    setVerifyStatus({ checked: true, valid: res.valid, reason: res.reason });
+  };
+
+  const handleRestoreChain = () => {
+    setTamperedEvents(null);
     const res = verifyLedgerIntegrity(events);
     setVerifyStatus({ checked: true, valid: res.valid, reason: res.reason });
-    setTimeout(() => {
-      // Keep result visible
-    }, 4000);
   };
 
   const getActorIcon = (actor: ActionLedgerEvent["actor"]) => {
@@ -121,7 +145,7 @@ export function ActionLedger({
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {sessionId && (
             <div className="flex items-center gap-2 font-mono text-[11px] text-slate-600 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 shadow-2xs">
               <span className="text-slate-400 font-bold">SESSION:</span>
@@ -129,15 +153,38 @@ export function ActionLedger({
             </div>
           )}
 
-          {events.length > 0 && (
-            <button
-              type="button"
-              onClick={handleVerifyChain}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 text-xs font-bold transition-all shadow-xs cursor-pointer"
-            >
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Verify Cryptographic Chain</span>
-            </button>
+          {activeEvents.length > 0 && (
+            <>
+              <button
+                type="button"
+                onClick={handleVerifyChain}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 text-xs font-bold transition-all shadow-xs cursor-pointer"
+              >
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Verify Chain</span>
+              </button>
+
+              {!isSimulatedTamper ? (
+                <button
+                  type="button"
+                  onClick={handleSimulateTamper}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 text-xs font-bold transition-all shadow-xs cursor-pointer"
+                  title="Simulate modifying a historical block to test cryptographic tamper detection"
+                >
+                  <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+                  <span>Simulate Tamper</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleRestoreChain}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-300 text-xs font-bold transition-all shadow-xs cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5 text-rose-600" />
+                  <span>Restore Integrity</span>
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -147,31 +194,40 @@ export function ActionLedger({
         <div className={`p-3 rounded-2xl mb-4 text-xs flex items-center justify-between border ${
           verifyStatus.valid
             ? "bg-emerald-50 border-emerald-200 text-emerald-800"
-            : "bg-rose-50 border-rose-200 text-rose-800"
+            : "bg-rose-50 border-rose-300 text-rose-900 ring-2 ring-rose-400/20"
         }`}>
           <div className="flex items-center gap-2 font-semibold">
-            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+            {verifyStatus.valid ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            )}
             <span>
               {verifyStatus.valid
-                ? `Cryptographic Audit Proof: All ${events.length} events are SHA-256 linked with valid Merkle hash integrity.`
-                : `Verification Alert: ${verifyStatus.reason}`}
+                ? `Cryptographic Audit Proof: All ${activeEvents.length} events are SHA-256 linked with valid Merkle hash integrity.`
+                : `Tamper Evidence Alert: ${verifyStatus.reason}. ActionOS has rejected the unverified ledger chain.`}
             </span>
           </div>
-          <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-white border border-emerald-200 font-bold">
-            ZERO_TAMPER_DETECTED
+          <span className={`font-mono text-[10px] px-2 py-0.5 rounded border font-bold ${
+            verifyStatus.valid
+              ? "bg-white border-emerald-200 text-emerald-800"
+              : "bg-rose-100 border-rose-300 text-rose-800"
+          }`}>
+            {verifyStatus.valid ? "ZERO_TAMPER_DETECTED" : "INTEGRITY_VIOLATION"}
           </span>
         </div>
       )}
 
       {/* Events Timeline */}
-      {events.length === 0 ? (
+      {activeEvents.length === 0 ? (
         <div className="text-center py-10 text-slate-400 text-xs font-medium">
           No ledger events recorded yet. Initiate an action to view the atomic execution stream.
         </div>
       ) : (
         <div className="relative pl-6 space-y-4 before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-gradient-to-b before:from-emerald-500 before:via-teal-400 before:to-slate-200">
-          {events.map((event, idx) => {
+          {activeEvents.map((event, idx) => {
             const isExpanded = expandedId === event.id;
+            const isCompromised = isSimulatedTamper && idx === 1;
 
             return (
               <div
@@ -189,7 +245,9 @@ export function ActionLedger({
                 <div
                   onClick={() => setExpandedId(isExpanded ? null : event.id)}
                   className={`rounded-2xl border p-3.5 transition-all cursor-pointer shadow-xs hover:shadow-md ${
-                    event.isCompensating
+                    isCompromised
+                      ? "border-rose-400 bg-rose-50/90 ring-2 ring-rose-500/30"
+                      : event.isCompensating
                       ? "border-rose-200 bg-rose-50/40 hover:bg-rose-50"
                       : "border-slate-200/80 bg-slate-50/80 hover:bg-white hover:border-emerald-300"
                   }`}
@@ -201,9 +259,15 @@ export function ActionLedger({
                         <span>{event.actor}</span>
                       </div>
 
-                      <span className="text-xs font-bold text-slate-900 tracking-wide">
+                      <span className={`text-xs font-bold tracking-wide ${isCompromised ? "text-rose-950 font-black" : "text-slate-900"}`}>
                         {event.description}
                       </span>
+
+                      {isCompromised && (
+                        <span className="rounded-full bg-rose-600 text-white px-2 py-0.5 text-[9px] font-black uppercase tracking-wider animate-pulse">
+                          TAMPER DETECTED
+                        </span>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-2.5 self-end sm:self-auto">

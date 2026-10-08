@@ -83,14 +83,30 @@ export default function DashboardOverviewPage() {
           </p>
         </div>
 
-        <Link
-          href="/actions"
-          className="flex items-center justify-center gap-2 px-6 py-3.5 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-bold transition-all shadow-md shadow-emerald-600/20 active:scale-95 shrink-0"
-        >
-          <Zap className="w-4 h-4" />
-          <span>Open Action Console</span>
-          <ArrowRight className="w-3.5 h-3.5" />
-        </Link>
+        <div className="flex flex-col sm:flex-row items-center gap-3 shrink-0">
+          <Link
+            href="/actions"
+            className="w-full sm:w-auto flex items-center justify-center gap-2 px-5 py-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-bold transition-all shadow-md shadow-emerald-600/20 active:scale-95"
+          >
+            <Zap className="w-4 h-4" />
+            <span>Action Console</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </Link>
+          <Link
+            href="/escalations"
+            className="w-full sm:w-auto flex items-center justify-center gap-1.5 px-4 py-3 rounded-2xl bg-white hover:bg-slate-50 text-rose-700 border border-rose-200 text-xs font-bold transition-all shadow-xs"
+          >
+            <ShieldAlert className="w-4 h-4 text-rose-600" />
+            <span>Escalation Center</span>
+          </Link>
+          <Link
+            href="/ledger"
+            className="w-full sm:w-auto flex items-center justify-center gap-1.5 px-4 py-3 rounded-2xl bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 text-xs font-bold transition-all shadow-xs"
+          >
+            <Activity className="w-4 h-4 text-emerald-600" />
+            <span>Action Ledger</span>
+          </Link>
+        </div>
       </div>
 
       {/* KPI Stats Grid */}
@@ -269,14 +285,14 @@ export default function DashboardOverviewPage() {
               </div>
 
               <div className="pt-3 border-t border-slate-100 grid grid-cols-2 gap-2 text-center text-xs">
-                <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200">
+                <Link href="/escalations" className="p-2.5 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 transition-colors block cursor-pointer">
                   <span className="text-slate-500 block text-[10px] font-bold">FAILED ACTIONS</span>
-                  <span className="font-mono font-bold text-emerald-700">0</span>
-                </div>
-                <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200">
-                  <span className="text-slate-500 block text-[10px] font-bold">ESCALATIONS</span>
-                  <span className="font-mono font-bold text-amber-700">0</span>
-                </div>
+                  <span className="font-mono font-bold text-emerald-700">0 Handled</span>
+                </Link>
+                <Link href="/escalations" className="p-2.5 rounded-xl bg-slate-50 hover:bg-rose-50 border border-slate-200 hover:border-rose-200 transition-colors block cursor-pointer">
+                  <span className="text-slate-500 block text-[10px] font-bold">SAFETY HALTS</span>
+                  <span className="font-mono font-bold text-rose-700">3 Monitored</span>
+                </Link>
               </div>
             </div>
           </div>

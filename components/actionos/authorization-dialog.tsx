@@ -17,6 +17,8 @@ import type { AuthorizationDetails, UnderwriterQuote } from "@/types/actionos";
 export interface AuthorizationOptions {
   selectedUnderwriter?: string;
   customAmount?: number;
+  authorizedQuoteId?: string;
+  quoteId?: string;
   authMethod?: "pin" | "biometric_webauthn";
   simulateSagaFailure?: boolean;
 }
@@ -42,6 +44,7 @@ export function AuthorizationCard({
 
   const activeAmount = selectedQuote ? selectedQuote.amount : details.amount;
   const activeUnderwriter = selectedQuote ? selectedQuote.underwriter : details.providerName;
+  const targetQuoteId = selectedQuote?.id || details.quoteId;
 
   const handleConfirm = () => {
     if (authMethod === "biometric_webauthn") {
@@ -51,6 +54,8 @@ export function AuthorizationCard({
         onAuthorize(true, {
           selectedUnderwriter: activeUnderwriter,
           customAmount: activeAmount,
+          authorizedQuoteId: targetQuoteId,
+          quoteId: targetQuoteId,
           authMethod: "biometric_webauthn",
           simulateSagaFailure,
         });
@@ -59,6 +64,8 @@ export function AuthorizationCard({
       onAuthorize(true, {
         selectedUnderwriter: activeUnderwriter,
         customAmount: activeAmount,
+        authorizedQuoteId: targetQuoteId,
+        quoteId: targetQuoteId,
         authMethod: "pin",
         simulateSagaFailure,
       });

@@ -122,6 +122,8 @@ export function ActionConsole() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           authorized,
+          quoteId: options?.quoteId || authDetails?.quoteId,
+          authorizedQuoteId: options?.authorizedQuoteId || authDetails?.quoteId,
           selectedUnderwriter: options?.selectedUnderwriter,
           customAmount: options?.customAmount,
           authMethod: options?.authMethod,

@@ -41,13 +41,23 @@ export function VoiceActionButton({
         })
       | undefined;
 
+    const BENCHMARK_UTTERANCES: Record<string, string> = {
+      pcm: "My motor insurance wan expire next week o. Help me check am and renew am sharply.",
+      yo: "Inshoranisi moto mi fe pare lose to n bo. Ba mi se atunto re.",
+      ha: "Inshorar mota ta zata kare mako mai zuwa. Da fatan za a duba a sabunta min.",
+      ig: "Inshorans ugbo ala m ga-agwụ n'izu na-abịa. Biko lelee ma mee ka ọ dị ọhụrụ.",
+      "en-NG": "My car insurance expires next week. Check it and renew it for me.",
+    };
+
+    const targetUtterance = BENCHMARK_UTTERANCES[language] || BENCHMARK_UTTERANCES["en-NG"];
+
     if (!SpeechRecognitionClass) {
       // Simulate realistic speech input for demo environment
       setInternalState("listening");
       setTimeout(() => {
         setInternalState("processing");
         setTimeout(() => {
-          onTranscript("My car insurance expires next week. Check it and renew it for me.");
+          onTranscript(targetUtterance);
           setInternalState("idle");
         }, 1200);
       }, 2500);
@@ -74,7 +84,7 @@ export function VoiceActionButton({
         // Fallback to simulated benchmark utterance on permission error or localhost restriction
         setInternalState("processing");
         setTimeout(() => {
-          onTranscript("My car insurance expires next week. Check it and renew it for me.");
+          onTranscript(targetUtterance);
           setInternalState("idle");
         }, 800);
       };

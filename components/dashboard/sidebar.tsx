@@ -14,6 +14,9 @@ import {
   Settings,
   ShieldCheck,
   ChevronRight,
+  Hash,
+  Bell,
+  AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -21,6 +24,9 @@ const NAV_ITEMS = [
   { name: "Overview", href: "/dashboard", icon: LayoutDashboard },
   { name: "Action Console", href: "/actions", icon: Zap, highlight: true },
   { name: "Renewals Pipeline", href: "/renewals", icon: RotateCw },
+  { name: "Escalation Center", href: "/escalations", icon: AlertTriangle },
+  { name: "Action Ledger", href: "/ledger", icon: Hash },
+  { name: "Notifications Hub", href: "/notifications", icon: Bell },
   { name: "Policies", href: "/policies", icon: ShieldAlert },
   { name: "Customers", href: "/customers", icon: Users },
   { name: "Transactions", href: "/transactions", icon: Receipt },
