@@ -1,5 +1,5 @@
--- ACTIONOS REALISTIC NIGERIAN DEMO SEED DATA
--- Clearly labeled as DEMO / SIMULATION DATA for NITDA 2026 AI Innovation Challenge
+-- ACTIONOS SYNTHETIC DEMO SEED DATA (COMPETITION BENCHMARK)
+-- Strictly synthetic test doubles for NITDA 2026 AI Innovation Challenge
 
 -- 1. Organizations
 INSERT INTO organizations (id, name, slug, type, status)
