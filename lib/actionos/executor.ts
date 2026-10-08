@@ -57,7 +57,7 @@ export class ActionOSExecutor {
     }
 
     // 2. Validate permissions with Default-Deny
-    const effectiveRole = context.role || context.auth?.role || "customer";
+    const effectiveRole = context.auth.role;
     const permission = ActionOSPermissions.checkPermission({
       role: effectiveRole,
       toolName: step.tool_name,
@@ -162,7 +162,7 @@ export class ActionOSExecutor {
       id: `exec_${Date.now()}`,
       action_step_id: step.id,
       tool_id: step.tool_name,
-      requested_by: context.userId || null,
+      requested_by: context.auth.userId || null,
       input: mergedInput,
       validated_input: inputValidation.data || mergedInput,
       output: result.data || null,
@@ -189,8 +189,8 @@ export class ActionOSExecutor {
 
     // 8. Record audit log via repository
     await repos.audit.log({
-      organization_id: context.organizationId,
-      user_id: context.userId || null,
+      organization_id: context.auth.organizationId,
+      user_id: context.auth.userId || null,
       session_id: context.sessionId,
       action: `TOOL_EXECUTE_${step.tool_name.toUpperCase()}`,
       resource_type: "action_step",

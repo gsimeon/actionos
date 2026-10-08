@@ -35,20 +35,13 @@ export interface AuthenticatedExecutionContext {
 
 // Tool & Workflow Execution Context carrying verified auth as primary authority
 export interface WorkflowExecutionContext {
-  auth: AuthenticatedExecutionContext;
-  sessionId: string;
-  planId?: string;
-  stepId?: string;
-  channel: ChannelType;
-  language?: string;
-  isSimulated: boolean;
-  // Direct accessors mirroring auth for ergonomic usage in tools
-  organizationId: string;
-  customerId?: string;
-  role: MemberRole;
-  userId?: string;
-  profileId?: string;
-  isDemo?: boolean;
+  readonly auth: AuthenticatedExecutionContext;
+  readonly sessionId: string;
+  readonly planId?: string;
+  readonly stepId?: string;
+  readonly channel: ChannelType;
+  readonly language?: string;
+  readonly isSimulated: boolean;
 }
 
 // Structured Tool Output standard

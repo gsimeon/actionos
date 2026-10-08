@@ -27,11 +27,11 @@ export class GetCustomerTool implements IActionOSTool<GetCustomerInput, Customer
 
   async execute(input: GetCustomerInput, context: WorkflowExecutionContext): Promise<ToolResult<Customer>> {
     const repos = getRepositoryContainer();
-    const targetId = input.customerId || context.customerId;
+    const targetId = input.customerId || context.auth.customerId;
     const tenantContext = {
-      organizationId: context.organizationId,
-      customerId: context.customerId,
-      role: context.role,
+      organizationId: context.auth.organizationId,
+      customerId: context.auth.customerId,
+      role: context.auth.role,
     };
 
     let customer: Customer | null = null;

@@ -37,9 +37,9 @@ export class CheckRenewalEligibilityTool implements IActionOSTool<EligibilityInp
   async execute(input: EligibilityInput, context: WorkflowExecutionContext): Promise<ToolResult<EligibilityOutput>> {
     const repos = getRepositoryContainer();
     const tenantContext = {
-      organizationId: context.organizationId,
-      customerId: context.customerId,
-      role: context.role,
+      organizationId: context.auth.organizationId,
+      customerId: context.auth.customerId,
+      role: context.auth.role,
     };
     let policy = input.policy;
 

@@ -26,11 +26,5 @@ export function createWorkflowExecutionContext(
     channel: options.channel || "web",
     language: options.language,
     isSimulated: options.isSimulated ?? false,
-    organizationId: auth.organizationId,
-    customerId: auth.customerId,
-    role: auth.role,
-    userId: auth.userId,
-    profileId: auth.profileId,
-    isDemo: auth.isDemo,
   };
 }

@@ -42,9 +42,9 @@ export class SendNotificationTool implements IActionOSTool<SendNotificationInput
   async execute(input: SendNotificationInput, context: WorkflowExecutionContext): Promise<ToolResult<NotificationOutput>> {
     const repos = getRepositoryContainer();
     const tenantContext = {
-      organizationId: context.organizationId,
-      customerId: context.customerId,
-      role: context.role,
+      organizationId: context.auth.organizationId,
+      customerId: context.auth.customerId,
+      role: context.auth.role,
     };
     let customer = await repos.customers.findById(input.customerId, tenantContext);
     if (!customer && context.isSimulated) {

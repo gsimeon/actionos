@@ -42,7 +42,7 @@ export class RefundPaymentTool implements IActionOSTool<RefundPaymentInput, Refu
   async execute(input: RefundPaymentInput, context: WorkflowExecutionContext): Promise<ToolResult<RefundPaymentOutput>> {
     const repos = getRepositoryContainer();
     const refundRef = `ref_rev_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    const customerId = context.customerId || (isDemoMode() ? DEMO_CONTEXT.customerId : undefined);
+    const customerId = context.auth.customerId || (isDemoMode() ? DEMO_CONTEXT.customerId : undefined);
 
     if (!customerId) {
       return {
@@ -55,9 +55,9 @@ export class RefundPaymentTool implements IActionOSTool<RefundPaymentInput, Refu
     }
 
     const tenantContext = {
-      organizationId: context.organizationId,
-      customerId: context.customerId,
-      role: context.role,
+      organizationId: context.auth.organizationId,
+      customerId: context.auth.customerId,
+      role: context.auth.role,
     };
 
     // Record reversing transaction via repository

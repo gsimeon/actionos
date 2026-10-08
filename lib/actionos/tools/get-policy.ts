@@ -27,9 +27,9 @@ export class GetPolicyTool implements IActionOSTool<GetPolicyInput, Policy> {
   async execute(input: GetPolicyInput, context: WorkflowExecutionContext): Promise<ToolResult<Policy>> {
     const repos = getRepositoryContainer();
     const tenantContext = {
-      organizationId: context.organizationId,
-      customerId: context.customerId,
-      role: context.role,
+      organizationId: context.auth.organizationId,
+      customerId: context.auth.customerId,
+      role: context.auth.role,
     };
 
     // 1. Try matching policyNumber directly
@@ -41,7 +41,7 @@ export class GetPolicyTool implements IActionOSTool<GetPolicyInput, Policy> {
     }
 
     // 2. Query customer's policies
-    const customerId = input.customerId || context.customerId;
+    const customerId = input.customerId || context.auth.customerId;
     let customerPolicies: Policy[] = [];
     if (customerId) {
       customerPolicies = await repos.policies.findByCustomerId(customerId, tenantContext);

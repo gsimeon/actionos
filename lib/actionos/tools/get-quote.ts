@@ -42,9 +42,9 @@ export class GetQuoteTool implements IActionOSTool<GetQuoteInput, QuoteOutput> {
   async execute(input: GetQuoteInput, context: WorkflowExecutionContext): Promise<ToolResult<QuoteOutput>> {
     const repos = getRepositoryContainer();
     const tenantContext = {
-      organizationId: context.organizationId,
-      customerId: context.customerId,
-      role: context.role,
+      organizationId: context.auth.organizationId,
+      customerId: context.auth.customerId,
+      role: context.auth.role,
     };
     let policy = input.policy;
 

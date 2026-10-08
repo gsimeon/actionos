@@ -38,9 +38,9 @@ export class RenewPolicyTool implements IActionOSTool<RenewPolicyInput, RenewPol
   async execute(input: RenewPolicyInput, context: WorkflowExecutionContext): Promise<ToolResult<RenewPolicyOutput>> {
     const repos = getRepositoryContainer();
     const tenantContext = {
-      organizationId: context.organizationId,
-      customerId: context.customerId,
-      role: context.role,
+      organizationId: context.auth.organizationId,
+      customerId: context.auth.customerId,
+      role: context.auth.role,
     };
     const policy = await repos.policies.findByNumber(input.policyNumber, tenantContext);
 

@@ -38,9 +38,9 @@ export class ScheduleReminderTool implements IActionOSTool<ScheduleReminderInput
   async execute(input: ScheduleReminderInput, context: WorkflowExecutionContext): Promise<ToolResult<ReminderOutput>> {
     const repos = getRepositoryContainer();
     const tenantContext = {
-      organizationId: context.organizationId,
-      customerId: context.customerId,
-      role: context.role,
+      organizationId: context.auth.organizationId,
+      customerId: context.auth.customerId,
+      role: context.auth.role,
     };
     const expiryDate = new Date(input.newExpiry);
     const intervals = [30, 14, 7, 1];

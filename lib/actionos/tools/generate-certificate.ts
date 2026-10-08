@@ -39,9 +39,9 @@ export class GenerateCertificateTool implements IActionOSTool<GenerateCertInput,
   async execute(input: GenerateCertInput, context: WorkflowExecutionContext): Promise<ToolResult<CertOutput>> {
     const repos = getRepositoryContainer();
     const tenantContext = {
-      organizationId: context.organizationId,
-      customerId: context.customerId,
-      role: context.role,
+      organizationId: context.auth.organizationId,
+      customerId: context.auth.customerId,
+      role: context.auth.role,
     };
     const docNumber = `CERT-ACT-${Date.now().toString().slice(-6)}`;
 
