@@ -18,6 +18,7 @@ import type {
   ActionLedgerEvent,
   AuthorizationDetails,
   AuthenticatedExecutionContext,
+  WorkflowExecutionContext,
   UnderwriterQuote,
 } from "@/types/actionos";
 import { isDemoMode } from "@/lib/runtime/mode";
@@ -29,7 +30,7 @@ export interface StartWorkflowInput {
   inputAudioUrl?: string;
   channel: "web" | "voice" | "whatsapp" | "telegram" | "api";
   language?: string;
-  executionContext: AuthenticatedExecutionContext;
+  executionContext: AuthenticatedExecutionContext | WorkflowExecutionContext;
 }
 
 export interface WorkflowStepResult {
@@ -115,7 +116,10 @@ export class ActionOSOrchestrator {
     const isDemo = isDemoMode();
 
     // Strict authentication enforcement: zero implicit fallback
-    const auth = input.executionContext;
+    const auth: AuthenticatedExecutionContext =
+      input.executionContext && "auth" in input.executionContext
+        ? input.executionContext.auth
+        : (input.executionContext as AuthenticatedExecutionContext);
     if (!auth) {
       throw new Error(
         "Security enforcement violation: executionContext is required to execute an ActionOS workflow."
@@ -427,7 +431,7 @@ export class ActionOSOrchestrator {
   async authorizeAndExecute(
     sessionId: string,
     authorized: boolean,
-    authContext: AuthenticatedExecutionContext,
+    authContext: AuthenticatedExecutionContext | WorkflowExecutionContext,
     options?: {
       selectedUnderwriter?: string;
       customAmount?: number;
@@ -436,7 +440,8 @@ export class ActionOSOrchestrator {
     }
   ): Promise<WorkflowStepResult> {
     const isDemo = isDemoMode();
-    const auth = authContext;
+    const auth: AuthenticatedExecutionContext =
+      authContext && "auth" in authContext ? authContext.auth : (authContext as AuthenticatedExecutionContext);
     if (!auth) {
       throw new Error("Security enforcement violation: authContext is required to authorize and execute an ActionOS workflow.");
     }

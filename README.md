@@ -4,6 +4,8 @@
 > **Entry for:** 2026 NITDA National AI Innovation Challenge for Nigerians  
 > **Initial Vertical:** ActionOS Renew (Vehicle Insurance, Vehicle Licenses, Health HMO)
 
+[![CI](https://github.com/gsimeon/actionos/actions/workflows/ci.yml/badge.svg)](https://github.com/gsimeon/actionos/actions/workflows/ci.yml)
+
 ---
 
 ## 1. Product Overview

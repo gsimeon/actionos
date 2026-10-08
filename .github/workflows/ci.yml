@@ -1,0 +1,43 @@
+name: ActionOS Continuous Integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    name: Typecheck, Lint, Test & Build
+    runs-on: ubuntu-latest
+
+    env:
+      ACTIONOS_RUNTIME_MODE: demo
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      NEXT_PUBLIC_SUPABASE_URL: https://demo-project.supabase.co
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: demo-publishable-key-for-ci
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: TypeScript typecheck
+        run: npm run typecheck
+
+      - name: ESLint check
+        run: npm run lint
+
+      - name: Automated Unit, Acceptance & Security Regression Suites
+        run: npm test
+
+      - name: Next.js Production Build
+        run: npm run build
