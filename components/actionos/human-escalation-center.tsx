@@ -82,6 +82,32 @@ const BENCHMARK_ESCALATIONS: EscalationCase[] = [
     timestamp: "2 hrs ago",
     status: "resolved",
   },
+  {
+    id: "esc_2026_005",
+    policyNumber: "AUTO-2026-00182",
+    customerName: "Demo Customer",
+    vehicleName: "Toyota Camry",
+    plateNumber: "ABC-123-XY",
+    guardrailTriggered: "GATEWAY_RECONCILIATION_REQUIRED",
+    reason: "Payment provider timeout during settlement verification. Stored idempotency reference flagged for background reconciliation; duplicate charges prevented.",
+    severity: "high",
+    attemptedAmount: 87500,
+    timestamp: "18 mins ago",
+    status: "open",
+  },
+  {
+    id: "esc_2026_006",
+    policyNumber: "AUTO-2026-33918",
+    customerName: "Babajide Williams",
+    vehicleName: "Honda Accord",
+    plateNumber: "APP-512-AB",
+    guardrailTriggered: "REFUND_EXECUTION_UNCONFIRMED",
+    reason: "Downstream renewal failed; automated refund was dispatched but provider confirmation is unverified. Session escalated with refund_pending status.",
+    severity: "critical",
+    attemptedAmount: 65000,
+    timestamp: "4 mins ago",
+    status: "open",
+  },
 ];
 
 export function HumanEscalationCenter() {
