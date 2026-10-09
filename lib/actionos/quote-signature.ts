@@ -60,8 +60,9 @@ export function computeQuoteSignature(payload: QuoteSignaturePayload): {
 
 /**
  * Cryptographically verifies a persisted quote's signature using timing-safe comparison.
- * In production mode, demo hashes and legacy unkeyed hashes are strictly rejected.
- * Provides a versioned migration plan to safely support existing v0 and transitional quotes.
+ * In production mode, demo hashes, transitional v1, legacy v0, unversioned HMAC, and legacy unkeyed hashes are strictly rejected.
+ * Production accepts ONLY the canonical v1 signature that binds all immutable quote fields, including providerReference and underwriterId.
+ * Legacy compatibility (transitional v1, v0, unversioned HMAC, unkeyed SHA-256, demo_hash) is preserved strictly in explicit demo/test mode.
  */
 export function verifyQuoteSignature(quote: {
   session_id: string;
@@ -107,33 +108,37 @@ export function verifyQuoteSignature(quote: {
     }).quoteHash;
     candidates.push(v1Canonical);
 
-    // 2. Transitional v1 format (with optional suffix delimiters from early v1 rollout)
-    const providerRefPart = quote.provider_reference ? `:${quote.provider_reference}` : "";
-    const underwriterPart = quote.underwriter_id ? `:${quote.underwriter_id}` : "";
-    const transitionalV1 = crypto
-      .createHmac("sha256", secret)
-      .update(
-        `v1:${quote.session_id}:${quote.organization_id}:${quote.customer_id}:${quote.policy_id}:${quote.provider_name}:${quote.amount}:${quote.currency}:${quote.expires_at}${providerRefPart}${underwriterPart}`
-      )
-      .digest("hex");
-    candidates.push(transitionalV1);
+    // In production mode, strictly reject legacy v0, transitional v1, and unversioned formats.
+    // Every production quote MUST bind provider_reference and underwriter_id in canonical v1 layout.
+    if (!isProduction) {
+      // 2. Transitional v1 format (with optional suffix delimiters from early v1 rollout in demo/test)
+      const providerRefPart = quote.provider_reference ? `:${quote.provider_reference}` : "";
+      const underwriterPart = quote.underwriter_id ? `:${quote.underwriter_id}` : "";
+      const transitionalV1 = crypto
+        .createHmac("sha256", secret)
+        .update(
+          `v1:${quote.session_id}:${quote.organization_id}:${quote.customer_id}:${quote.policy_id}:${quote.provider_name}:${quote.amount}:${quote.currency}:${quote.expires_at}${providerRefPart}${underwriterPart}`
+        )
+        .digest("hex");
+      candidates.push(transitionalV1);
 
-    // 3. Legacy v0 format migration (for existing quotes signed prior to provider_reference and underwriter_id binding)
-    const v0Hmac = crypto
-      .createHmac("sha256", secret)
-      .update(
-        `v0:${quote.session_id}:${quote.organization_id}:${quote.customer_id}:${quote.policy_id}:${quote.provider_name}:${quote.amount}:${quote.currency}:${quote.expires_at}`
-      )
-      .digest("hex");
-    candidates.push(v0Hmac);
+      // 3. Legacy v0 format migration (only for non-production demo/test fixtures)
+      const v0Hmac = crypto
+        .createHmac("sha256", secret)
+        .update(
+          `v0:${quote.session_id}:${quote.organization_id}:${quote.customer_id}:${quote.policy_id}:${quote.provider_name}:${quote.amount}:${quote.currency}:${quote.expires_at}`
+        )
+        .digest("hex");
+      candidates.push(v0Hmac);
 
-    const legacyUnversionedHmac = crypto
-      .createHmac("sha256", secret)
-      .update(
-        `${quote.session_id}:${quote.organization_id}:${quote.customer_id}:${quote.policy_id}:${quote.provider_name}:${quote.amount}:${quote.currency}:${quote.expires_at}`
-      )
-      .digest("hex");
-    candidates.push(legacyUnversionedHmac);
+      const legacyUnversionedHmac = crypto
+        .createHmac("sha256", secret)
+        .update(
+          `${quote.session_id}:${quote.organization_id}:${quote.customer_id}:${quote.policy_id}:${quote.provider_name}:${quote.amount}:${quote.currency}:${quote.expires_at}`
+        )
+        .digest("hex");
+      candidates.push(legacyUnversionedHmac);
+    }
   } catch {
     // If key is missing or invalid in production, fail closed immediately
     return false;
