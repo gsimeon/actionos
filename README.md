@@ -22,10 +22,10 @@ ActionOS autonomously:
 3. Checks expiry dates and validates underwriting eligibility.
 4. Generates an actuarial renewal quote (`₦87,500`).
 5. Halts at an uncompromising **Authorization Gate** for explicit customer confirmation.
-6. Initiates settlement through an audited payment rail (Paystack/Flutterwave).
-7. Independently verifies settlement out-of-band with the issuing provider.
+6. Initiates settlement through a payment rail adapter (simulated via mock rail in sandbox; external provider credentials required in production).
+7. Independently verifies settlement out-of-band (simulated verification in sandbox; external provider verification in production).
 8. Executes policy renewal in the database, rolling forward coverage to 2027.
-9. Produces a verifiable digital NAICOM certificate.
+9. Produces a verifiable digital certificate record (explicitly labeled as simulated non-statutory document in sandbox mode).
 10. Dispatches customer notices across in-app, SMS, and email.
 11. Cascades future reminders at 30, 14, 7, and 1 days before new expiry.
 12. Records every millisecond, actor, tool, and cryptographic token in the **Action Ledger™**.
@@ -48,7 +48,7 @@ ActionOS autonomously:
 - **Frontend:** Next.js (App Router), TypeScript, Tailwind CSS, Lucide Icons
 - **Backend & Database:** Supabase PostgreSQL with `pgcrypto`, Row Level Security (RLS) on all tables, Supabase Edge Functions
 - **AI Engine:** N-ATLAS Provider Adapter with deterministic fallback and multilingual normalization
-- **Payment Gateway:** Sandboxed mock payment provider ready for Paystack & Flutterwave webhooks
+- **Payment Gateway:** Sandboxed mock payment provider with adapter interface ready for Paystack & Flutterwave webhooks
 - **Testing:** Node.js native test runner (`tsx --test`) with automated unit, integration, and security regression suites (validated via continuous verification)
 
 ---
@@ -78,27 +78,27 @@ Visit [http://localhost:3000/actions](http://localhost:3000/actions) for the Act
 
 ---
 
-## 5. Integration Status Matrix (Live vs. Sandbox vs. Planned)
+## 5. Integration Status Matrix (Live Guarantees vs. Sandbox Simulation vs. Planned)
 
-To maintain absolute credibility and transparency for NITDA competition judges and enterprise security auditors, ActionOS explicitly labels the production readiness of every capability across three tiers:
+To maintain absolute credibility and transparency for NITDA competition judges and enterprise security auditors, ActionOS explicitly labels the operational status of every subsystem across three tiers:
 
-- **LIVE:** Fully implemented, cryptographically verified, and continuously validated against test suites.
-- **SANDBOX:** Realistic end-to-end simulation environment operating in deterministic sandbox mode for reproducible demonstration.
-- **PLANNED:** Live production credentials/contracts scheduled for deployment once institutional keys and official APIs are provisioned.
+- **LIVE:** Core application domain logic, cryptographic integrity, and database-level invariants fully implemented, enforced, and continuously validated against test suites.
+- **SANDBOX:** Realistic end-to-end simulation environment operating without external production network access for reproducible, verifiable demonstration.
+- **PLANNED:** Live production credentials, external regulatory gateways, and live bank integrations scheduled for deployment once institutional API keys are provisioned.
 
 | Subsystem / Capability | Status | Implementation Details & Proof of Validation |
 | :--- | :--- | :--- |
-| **Action State Machine** | 🟢 **LIVE** | Deterministic transition graph validated across legal and illegal states in automated test suites (`tests/unit/state-machine.test.ts`). |
-| **Underwriting Guardrails** | 🟢 **LIVE** | Pure function validations for customer ownership, 30-day renewal windows, quote bounds, and financial ceilings (`tests/unit/guardrails.test.ts`). |
-| **Cryptographic Action Ledger™** | 🟢 **LIVE** | SHA-256 hash chaining, genesis linking, and HMAC token signing verified for tamper detection (`tests/unit/crypto-ledger.test.ts`). |
-| **First-Class Quote Persistence & Binding** | 🟢 **LIVE** | Dedicated `quotes` table, keyed HMAC-SHA256 signatures binding `provider_reference` and `underwriter_id`, atomic authorization claims via single-transaction PostgreSQL RPC with `FOR UPDATE` locks, and immutable `quoteId` binding (`tests/unit/quote-binding-and-simulation-evidence.test.ts`, `tests/unit/atomic-authorization-and-recoverable-execution.test.ts`). |
-| **Multi-Tenancy & Tenant-Scoped Mutations** | 🟢 **LIVE** | Database-level tenant ownership enforced in update mutations across transactions, sessions, quotes, and steps with RLS policies (`tests/unit/repositories.test.ts`). |
-| **Security Context & Zero Fallback** | 🟢 **LIVE** | Server-verified `AuthenticatedExecutionContext` and `WorkflowExecutionContext`. Production configuration fails closed on missing Supabase credentials or demo URLs (`tests/unit/production-security-hardening.test.ts`, `tests/unit/atomic-authorization-and-recoverable-execution.test.ts`). |
-| **Distributed Saga & Verified Auto-Refund** | 🟢 **LIVE** | Truthful refund validation via `executeVerifiedSagaRefund`, persisting explicit states (`refund_confirmed`, `refund_pending`, `refund_failed`, `refund_unknown`), provider reversal verification, and durable reconciliation (`tests/unit/atomic-authorization-and-recoverable-execution.test.ts`). |
-| **Multi-Underwriter Marketplace** | 🟡 **SANDBOX** | Actuarial comparison across Leadway, AIICO, AXA Mansard, and Custodian with deterministic quote entities. *(Live underwriter API connectors: PLANNED)* |
-| **Payment Rail (Paystack / Flutterwave)** | 🟡 **SANDBOX** | Idempotent mock payment rail simulating initialization, webhook retries, and independent verification. *(Live merchant banking credentials: PLANNED)* |
-| **NIID / Statutory Verification** | 🟡 **SANDBOX** | Structured adapter simulating Nigerian Insurance Industry Database (NIID) and FRSC plate validation with realistic regulatory schemas. *(Official NAICOM portal gateway: PLANNED)* |
-| **Digital NAICOM Certificate Issuance** | 🟡 **SANDBOX** | Generates verifiable digital certificate records with simulated NAICOM registration numbers and cryptographic hash stamping. *(Official regulator PKI: PLANNED)* |
+| **Action State Machine** | 🟢 **LIVE (Domain Logic)** | Deterministic transition graph validated across legal and illegal states in automated test suites (`tests/unit/state-machine.test.ts`). |
+| **Underwriting Guardrails** | 🟢 **LIVE (Deterministic Rules)** | Pure function validations for customer ownership, 30-day renewal windows, quote bounds, and financial ceilings (`tests/unit/guardrails.test.ts`). |
+| **Cryptographic Action Ledger™** | 🟢 **LIVE (Cryptographic Audit Trail)** | SHA-256 hash chaining, genesis linking, and HMAC token signing verified for tamper detection (`tests/unit/crypto-ledger.test.ts`). |
+| **First-Class Quote Persistence & Canonical Binding** | 🟢 **LIVE (Hardened Quote Integrity)** | Dedicated `quotes` table, canonical `v1` HMAC-SHA256 signatures binding `provider_reference` and `underwriter_id` (legacy formats strictly rejected in production mode), atomic authorization claims via single-transaction PostgreSQL RPC with `FOR UPDATE` locks, and immutable `quoteId` binding (`tests/unit/quote-signature-verification.test.ts`, `tests/unit/quote-binding-and-simulation-evidence.test.ts`). |
+| **Multi-Tenancy & Tenant-Scoped Access Control** | 🟢 **LIVE (Database Invariant)** | Database-level tenant ownership enforced in update mutations across transactions, sessions, quotes, and steps with Supabase RLS policies (`tests/unit/repositories.test.ts`). |
+| **Security Context & Zero Fallback** | 🟢 **LIVE (Security Boundary)** | Server-verified `AuthenticatedExecutionContext` and `WorkflowExecutionContext`. Production configuration fails closed on missing Supabase credentials or demo URLs (`tests/unit/production-security-hardening.test.ts`). |
+| **Distributed Saga & Reversal Orchestration** | 🟡 **HYBRID (Live Orchestration / Simulated Rail)** | Truthful compensation state machine persisting explicit states (`refund_confirmed`, `refund_pending`, `refund_failed`, `refund_unknown`) and amount/currency verification. Fund reversal currently executes against simulated gateway adapters until live provider credentials are configured (`tests/unit/atomic-authorization-and-recoverable-execution.test.ts`). *(Live gateway settlement & authoritative reversal: PLANNED)* |
+| **Payment Rail (Paystack / Flutterwave)** | 🟡 **SANDBOX (Mock Rail)** | Idempotent mock payment rail simulating initialization, webhook retries, and independent verification. Production execution requires configured gateway secrets. *(Live merchant banking credentials: PLANNED)* |
+| **Multi-Underwriter Marketplace** | 🟡 **SANDBOX (Actuarial Simulation)** | Actuarial comparison across Leadway, AIICO, AXA Mansard, and Custodian with deterministic quote entities. *(Live underwriter API connectors: PLANNED)* |
+| **NIID / Statutory Verification** | 🟡 **SANDBOX (Simulated Regulatory Registry)** | Structured adapter simulating Nigerian Insurance Industry Database (NIID) and FRSC plate validation with realistic regulatory schemas. *(Official NAICOM portal gateway: PLANNED)* |
+| **Digital NAICOM Certificate Issuance** | 🟡 **SANDBOX (Simulated Non-Statutory Records)** | Generates digital certificate records with simulated NAICOM registration numbers and cryptographic hash stamping, explicitly watermarked as non-statutory in demo mode (`tests/unit/quote-binding-and-simulation-evidence.test.ts`). *(Official regulator PKI: PLANNED)* |
 | **N-ATLAS Multilingual Engine** | 🟡 **SANDBOX / ADAPTER** | Model-agnostic adapter supporting English, Nigerian Pidgin (`pcm`), Yorùbá (`yo`), Hausa (`ha`), and Igbo (`ig`) with deterministic reproducible sandbox. *(Official N-ATLAS Cloud API model slot: PLANNED)* |
 
 ---
