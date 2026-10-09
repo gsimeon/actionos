@@ -1416,7 +1416,7 @@ describe("Atomic Authorization, Recoverable Execution & Security Hardening", () 
       }
     });
 
-    it("should verify legacy v0 quote signature format for backward compatibility without invalidating existing quotes", () => {
+    it("should reject untrusted legacy v0 quote and require server-side reSignLegacyQuote migration", async () => {
       const secret = process.env.ACTIONOS_QUOTE_SIGNING_KEY || "actionos_sandbox_quote_signing_key_demo";
       const payload = {
         session_id: "sess_legacy_v0_test",
@@ -1434,12 +1434,21 @@ describe("Atomic Authorization, Recoverable Execution & Security Hardening", () 
         .update(`v0:${payload.session_id}:${payload.organization_id}:${payload.customer_id}:${payload.policy_id}:${payload.provider_name}:${payload.amount}:${payload.currency}:${payload.expires_at}`)
         .digest("hex");
 
-      const valid = verifyQuoteSignature({
+      // 1. Untrusted legacy v0 hash must be rejected by runtime verification
+      const rejectedDirect = verifyQuoteSignature({
         ...payload,
         quote_hash: v0Hash,
       });
+      assert.equal(rejectedDirect, false, "Untrusted legacy v0 quote hash must be rejected by verifyQuoteSignature");
 
-      assert.equal(valid, true, "Legacy v0 quote hash must verify successfully under migration plan");
+      // 2. Must be re-signed through trusted server-side migration process
+      const { reSignLegacyQuote } = await import("@/lib/actionos/quote-signature");
+      const reSigned = reSignLegacyQuote(payload);
+      const verifiedAfterMigration = verifyQuoteSignature({
+        ...payload,
+        quote_hash: reSigned.quote_hash,
+      });
+      assert.equal(verifiedAfterMigration, true, "Re-signed quote must verify successfully with canonical signature");
     });
   });
 });

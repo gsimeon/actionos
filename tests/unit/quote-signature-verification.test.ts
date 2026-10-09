@@ -343,7 +343,7 @@ describe("Quote Signature Production Hardening & Regression Suite", () => {
       assert.equal(isValid, true, "demo_hash must be accepted in demo mode");
     });
 
-    it("should accept transitional v1 signature in demo mode", () => {
+    it("should reject transitional v1 signature and require reSignLegacyQuote migration", async () => {
       process.env.ACTIONOS_RUNTIME_MODE = "demo";
       const secret = "actionos_sandbox_quote_signing_key_demo";
 
@@ -354,7 +354,7 @@ describe("Quote Signature Production Hardening & Regression Suite", () => {
       const transitionalPayload = `v1:${transitionalQuote.sessionId}:${transitionalQuote.organizationId}:${transitionalQuote.customerId}:${transitionalQuote.policyId}:${transitionalQuote.providerName}:${transitionalQuote.amount}:${transitionalQuote.currency}:${transitionalQuote.expiresAt}:${transitionalQuote.providerReference}`;
       const transitionalHash = crypto.createHmac("sha256", secret).update(transitionalPayload).digest("hex");
 
-      const isValid = verifyQuoteSignature({
+      const quoteInput = {
         session_id: transitionalQuote.sessionId,
         organization_id: transitionalQuote.organizationId,
         customer_id: transitionalQuote.customerId,
@@ -365,42 +365,62 @@ describe("Quote Signature Production Hardening & Regression Suite", () => {
         expires_at: transitionalQuote.expiresAt,
         provider_reference: transitionalQuote.providerReference,
         underwriter_id: undefined,
+      };
+
+      // 1. Direct verification must reject legacy transitional format
+      const isValid = verifyQuoteSignature({
+        ...quoteInput,
         quote_hash: transitionalHash,
       });
+      assert.equal(isValid, false, "Transitional v1 signature must be rejected by verifyQuoteSignature");
 
-      assert.equal(isValid, true, "Transitional v1 signature must be supported in demo mode");
+      // 2. Trusted server-side migration generates canonical v1 signature
+      const { reSignLegacyQuote } = await import("@/lib/actionos/quote-signature");
+      const migrated = reSignLegacyQuote(quoteInput);
+      const isMigratedValid = verifyQuoteSignature({
+        ...quoteInput,
+        quote_hash: migrated.quote_hash,
+      });
+      assert.equal(isMigratedValid, true, "Migrated quote must verify cleanly with canonical signature");
     });
 
-    it("should accept v0 signature in demo mode for backward compatibility migration", () => {
+    it("should reject legacy v0 signature and require reSignLegacyQuote migration", async () => {
       process.env.ACTIONOS_RUNTIME_MODE = "demo";
       const secret = "actionos_sandbox_quote_signing_key_demo";
+
+      const quoteInput = {
+        session_id: demoQuote.sessionId,
+        organization_id: demoQuote.organizationId,
+        customer_id: demoQuote.customerId,
+        policy_id: demoQuote.policyId,
+        provider_name: demoQuote.providerName,
+        amount: demoQuote.amount,
+        currency: demoQuote.currency,
+        expires_at: demoQuote.expiresAt,
+        provider_reference: demoQuote.providerReference,
+        underwriter_id: demoQuote.underwriterId,
+      };
 
       const v0Payload = `v0:${demoQuote.sessionId}:${demoQuote.organizationId}:${demoQuote.customerId}:${demoQuote.policyId}:${demoQuote.providerName}:${demoQuote.amount}:${demoQuote.currency}:${demoQuote.expiresAt}`;
       const v0Hash = crypto.createHmac("sha256", secret).update(v0Payload).digest("hex");
 
       const isValid = verifyQuoteSignature({
-        session_id: demoQuote.sessionId,
-        organization_id: demoQuote.organizationId,
-        customer_id: demoQuote.customerId,
-        policy_id: demoQuote.policyId,
-        provider_name: demoQuote.providerName,
-        amount: demoQuote.amount,
-        currency: demoQuote.currency,
-        expires_at: demoQuote.expiresAt,
+        ...quoteInput,
         quote_hash: v0Hash,
       });
+      assert.equal(isValid, false, "v0 signature must be rejected by verifyQuoteSignature");
 
-      assert.equal(isValid, true, "v0 signature must be supported in demo mode");
+      const { reSignLegacyQuote } = await import("@/lib/actionos/quote-signature");
+      const migrated = reSignLegacyQuote(quoteInput);
+      const isMigratedValid = verifyQuoteSignature({
+        ...quoteInput,
+        quote_hash: migrated.quote_hash,
+      });
+      assert.equal(isMigratedValid, true, "Migrated v0 quote must verify cleanly");
     });
 
-    it("should accept legacy unversioned HMAC signature in demo mode", () => {
-      process.env.ACTIONOS_RUNTIME_MODE = "demo";
-      const secret = "actionos_sandbox_quote_signing_key_demo";
-
-      const unversionedPayload = `${demoQuote.sessionId}:${demoQuote.organizationId}:${demoQuote.customerId}:${demoQuote.policyId}:${demoQuote.providerName}:${demoQuote.amount}:${demoQuote.currency}:${demoQuote.expiresAt}`;
-      const unversionedHash = crypto.createHmac("sha256", secret).update(unversionedPayload).digest("hex");
-
-      const isValid = verifyQuoteSignature({
+    it("should reject malformed or invalid-length signatures", () => {
+      const quoteInput = {
         session_id: demoQuote.sessionId,
         organization_id: demoQuote.organizationId,
         customer_id: demoQuote.customerId,
@@ -409,31 +429,16 @@ describe("Quote Signature Production Hardening & Regression Suite", () => {
         amount: demoQuote.amount,
         currency: demoQuote.currency,
         expires_at: demoQuote.expiresAt,
-        quote_hash: unversionedHash,
-      });
+      };
 
-      assert.equal(isValid, true, "Unversioned HMAC signature must be supported in demo mode");
-    });
+      // 1. Truncated hash (not 64 chars)
+      assert.equal(verifyQuoteSignature({ ...quoteInput, quote_hash: "abc123" }), false);
 
-    it("should accept legacy unkeyed SHA-256 hash in demo mode for mock fixture compatibility", () => {
-      process.env.ACTIONOS_RUNTIME_MODE = "demo";
+      // 2. Non-hex characters
+      assert.equal(verifyQuoteSignature({ ...quoteInput, quote_hash: "z".repeat(64) }), false);
 
-      const unkeyedPayload = `${demoQuote.sessionId}:${demoQuote.organizationId}:${demoQuote.customerId}:${demoQuote.policyId}:${demoQuote.providerName}:${demoQuote.amount}:${demoQuote.currency}:${demoQuote.expiresAt}`;
-      const unkeyedHash = crypto.createHash("sha256").update(unkeyedPayload).digest("hex");
-
-      const isValid = verifyQuoteSignature({
-        session_id: demoQuote.sessionId,
-        organization_id: demoQuote.organizationId,
-        customer_id: demoQuote.customerId,
-        policy_id: demoQuote.policyId,
-        provider_name: demoQuote.providerName,
-        amount: demoQuote.amount,
-        currency: demoQuote.currency,
-        expires_at: demoQuote.expiresAt,
-        quote_hash: unkeyedHash,
-      });
-
-      assert.equal(isValid, true, "Unkeyed SHA-256 hash must be supported in demo mode");
+      // 3. Empty string
+      assert.equal(verifyQuoteSignature({ ...quoteInput, quote_hash: "" }), false);
     });
   });
 
