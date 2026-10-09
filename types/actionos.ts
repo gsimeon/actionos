@@ -122,6 +122,7 @@ export interface UnderwriterQuote {
   id: string;
   provider_reference?: string;
   underwriter: string;
+  underwriter_id?: string | null;
   tier: "comprehensive" | "third_party" | "executive";
   tierLabel: string;
   amount: number;

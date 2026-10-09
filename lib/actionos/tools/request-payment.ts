@@ -7,6 +7,8 @@ export interface RequestPaymentInput {
   currency?: string;
   policyNumber: string;
   renewalId?: string;
+  quoteId?: string;
+  idempotencyKey?: string;
 }
 
 export interface PaymentRequestOutput {
@@ -15,6 +17,8 @@ export interface PaymentRequestOutput {
   currency: string;
   status: string;
   gatewayUrl?: string;
+  providerReference?: string;
+  idempotencyKey: string;
 }
 
 export class RequestPaymentTool implements IActionOSTool<RequestPaymentInput, PaymentRequestOutput> {
@@ -37,10 +41,16 @@ export class RequestPaymentTool implements IActionOSTool<RequestPaymentInput, Pa
   }
 
   async execute(input: RequestPaymentInput, context: WorkflowExecutionContext): Promise<ToolResult<PaymentRequestOutput>> {
-    // Deterministic idempotency reference per session and policy to prevent duplicate debits
+    // Durable idempotency reference tied to session and quote to guarantee exactly-once payment
     const sanitizedSession = context.sessionId.replace(/-/g, "").substring(0, 16);
-    const sanitizedPolicy = input.policyNumber.replace(/[^a-zA-Z0-9]/g, "");
-    const reference = `act_${sanitizedSession}_pay_${sanitizedPolicy}`;
+    const sanitizedQuote = input.quoteId ? input.quoteId.replace(/-/g, "").substring(0, 16) : "";
+    const sanitizedPolicy = input.policyNumber ? input.policyNumber.replace(/[^a-zA-Z0-9]/g, "") : "unknown";
+
+    const reference =
+      input.idempotencyKey ||
+      (sanitizedQuote
+        ? `act_${sanitizedSession}_q_${sanitizedQuote}`
+        : `act_${sanitizedSession}_pay_${sanitizedPolicy}`);
 
     try {
       const res = await mockPaymentProvider.requestPayment({
@@ -52,6 +62,8 @@ export class RequestPaymentTool implements IActionOSTool<RequestPaymentInput, Pa
           sessionId: context.sessionId,
           policyNumber: input.policyNumber,
           renewalId: input.renewalId,
+          quoteId: input.quoteId,
+          idempotencyKey: reference,
         },
       });
 
@@ -63,6 +75,8 @@ export class RequestPaymentTool implements IActionOSTool<RequestPaymentInput, Pa
           currency: input.currency || "NGN",
           status: res.status,
           gatewayUrl: res.gatewayUrl,
+          providerReference: res.providerReference,
+          idempotencyKey: reference,
         },
       };
     } catch (err: unknown) {

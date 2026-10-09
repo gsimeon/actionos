@@ -18,39 +18,116 @@ DECLARE
   v_session RECORD;
   v_quote RECORD;
 BEGIN
-  -- 1. Conditionally lock and update session from awaiting_authorization -> executing
-  UPDATE action_sessions
-  SET status = 'executing',
-      updated_at = NOW()
+  -- 1. Explicitly lock session row to serialize concurrent authorization attempts
+  SELECT * INTO v_session
+  FROM action_sessions
   WHERE id = p_session_id
-    AND status = 'awaiting_authorization'
-    AND (p_organization_id IS NULL OR organization_id = p_organization_id)
-    AND (p_customer_id IS NULL OR customer_id IS NULL OR customer_id = p_customer_id)
-  RETURNING * INTO v_session;
+  FOR UPDATE;
 
   IF NOT FOUND THEN
     RETURN jsonb_build_object(
       'success', false,
-      'error', 'SESSION_CLAIM_FAILED',
-      'message', 'Session is not in awaiting_authorization status or tenant mismatch'
+      'error', 'SESSION_NOT_FOUND',
+      'message', 'Session does not exist'
     );
   END IF;
 
-  -- 2. Conditionally lock and update quote from issued -> accepted
-  UPDATE quotes
-  SET status = 'accepted',
-      updated_at = NOW()
+  -- Verify session status is awaiting_authorization
+  IF v_session.status != 'awaiting_authorization' THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'SESSION_CLAIM_FAILED',
+      'message', format('Session is in status %s, expected awaiting_authorization', v_session.status)
+    );
+  END IF;
+
+  -- Verify session tenant ownership
+  IF p_organization_id IS NOT NULL AND v_session.organization_id != p_organization_id THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'TENANT_MISMATCH',
+      'message', 'Session does not belong to specified organization'
+    );
+  END IF;
+
+  IF p_customer_id IS NOT NULL AND v_session.customer_id IS NOT NULL AND v_session.customer_id != p_customer_id THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'TENANT_MISMATCH',
+      'message', 'Session does not belong to specified customer'
+    );
+  END IF;
+
+  -- 2. Explicitly lock quote row and verify binding, status, and expiry before any updates
+  SELECT * INTO v_quote
+  FROM quotes
   WHERE id = p_quote_id
-    AND session_id = p_session_id
-    AND status = 'issued'
-    AND (p_organization_id IS NULL OR organization_id = p_organization_id)
-    AND (p_customer_id IS NULL OR customer_id IS NULL OR customer_id = p_customer_id)
-  RETURNING * INTO v_quote;
+  FOR UPDATE;
 
   IF NOT FOUND THEN
-    -- Roll back entire transaction if quote acceptance fails: session is never left in executing!
-    RAISE EXCEPTION 'QUOTE_ACCEPTANCE_FAILED: Quote % is not in issued status for session %', p_quote_id, p_session_id;
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'QUOTE_NOT_FOUND',
+      'message', 'Quote does not exist'
+    );
   END IF;
+
+  -- Verify quote belongs to the claimed session
+  IF v_quote.session_id != p_session_id THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'QUOTE_SESSION_MISMATCH',
+      'message', 'Quote is not bound to specified session'
+    );
+  END IF;
+
+  -- Verify quote status is issued
+  IF v_quote.status != 'issued' THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'QUOTE_ACCEPTANCE_FAILED',
+      'message', format('Quote is in status %s, expected issued', v_quote.status)
+    );
+  END IF;
+
+  -- Atomically verify quote has not expired
+  IF v_quote.expires_at <= timezone('utc'::text, now()) THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'QUOTE_EXPIRED',
+      'message', 'Quote has expired. Refreshed quote is required.'
+    );
+  END IF;
+
+  -- Verify quote tenant ownership matches
+  IF p_organization_id IS NOT NULL AND v_quote.organization_id != p_organization_id THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'TENANT_MISMATCH',
+      'message', 'Quote does not belong to specified organization'
+    );
+  END IF;
+
+  IF p_customer_id IS NOT NULL AND v_quote.customer_id IS NOT NULL AND v_quote.customer_id != p_customer_id THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'TENANT_MISMATCH',
+      'message', 'Quote does not belong to specified customer'
+    );
+  END IF;
+
+  -- 3. Both records verified: atomically execute forward transitions within single transaction
+  UPDATE action_sessions
+  SET status = 'executing',
+      updated_at = timezone('utc'::text, now())
+  WHERE id = p_session_id
+  RETURNING * INTO v_session;
+
+  UPDATE quotes
+  SET status = 'accepted',
+      updated_at = timezone('utc'::text, now())
+  WHERE id = p_quote_id
+  RETURNING * INTO v_quote;
 
   RETURN jsonb_build_object(
     'success', true,

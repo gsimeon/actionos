@@ -30,19 +30,56 @@ import type {
 import type { ActionLedgerEvent } from "@/types/actionos";
 import { createClient as createSupabaseClient, SupabaseClient } from "@supabase/supabase-js";
 import { DatabaseError } from "@/lib/repositories/errors";
-import { isProductionMode } from "@/lib/runtime/mode";
+import { isProductionMode, isDemoMode } from "@/lib/runtime/mode";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function getSupabaseClient(): SupabaseClient<any> {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://demo.supabase.co";
-  const key =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
-    "demo-key";
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return createSupabaseClient<any>(url, key, {
-    auth: { persistSession: false },
-  });
+export function assertSupabaseProductionConfig(): void {
+  if (isProductionMode()) {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+    if (!url || !url.trim() || url.includes("demo.supabase.co")) {
+      throw new Error(
+        "Supabase production configuration error: A valid NEXT_PUBLIC_SUPABASE_URL is strictly required in production mode. Fallback to demo URL is prohibited."
+      );
+    }
+    if (!serviceRoleKey || !serviceRoleKey.trim() || serviceRoleKey === "demo-key" || serviceRoleKey === "demo-anon-key" || serviceRoleKey === "demo-service-key") {
+      throw new Error(
+        "Supabase production configuration error: SUPABASE_SERVICE_ROLE_KEY is strictly required for repository operations in production mode. Fallback to demo keys is prohibited."
+      );
+    }
+  }
+}
+
+export function getSupabaseClient(): SupabaseClient {
+  assertSupabaseProductionConfig();
+
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const publishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const key = serviceRoleKey || publishableKey;
+
+  if (isProductionMode()) {
+    return createSupabaseClient(url!, serviceRoleKey!, {
+      auth: { persistSession: false },
+    });
+  }
+
+  // Non-production: demo credentials strictly isolated to explicit demo mode
+  if (!url || !key || url.includes("demo.supabase.co") || key === "demo-key" || key === "demo-anon-key") {
+    if (!isDemoMode()) {
+      throw new Error(
+        "Supabase configuration error: NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be defined. Fallback to demo credentials is only permitted when ACTIONOS_RUNTIME_MODE is explicitly set to 'demo'."
+      );
+    }
+  }
+
+  return createSupabaseClient(
+    url || "https://demo.supabase.co",
+    key || "demo-key",
+    {
+      auth: { persistSession: false },
+    }
+  );
 }
 
 export class SupabaseCustomerRepository implements ICustomerRepository {
@@ -587,112 +624,51 @@ export class SupabaseActionSessionRepository implements IActionSessionRepository
   ): Promise<{ session: ActionSession; quote: Quote } | null> {
     const isProduction = isProductionMode();
 
-    // 1. Attempt Postgres RPC for single-transaction atomic execution
-    try {
-      const { data: rpcResult, error: rpcError } = await this.client.rpc("claim_and_accept_quote", {
-        p_session_id: sessionId,
-        p_quote_id: quoteId,
-        p_organization_id: tenant?.organizationId ?? null,
-        p_customer_id: tenant?.customerId ?? null,
-      });
+    // PostgreSQL RPC for single-transaction atomic execution
+    const { data: rpcResult, error: rpcError } = await this.client.rpc("claim_and_accept_quote", {
+      p_session_id: sessionId,
+      p_quote_id: quoteId,
+      p_organization_id: tenant?.organizationId ?? null,
+      p_customer_id: tenant?.customerId ?? null,
+    });
 
-      if (!rpcError && rpcResult && rpcResult.success) {
-        return {
-          session: rpcResult.session as ActionSession,
-          quote: rpcResult.quote as Quote,
-        };
-      }
-
-      if (rpcError) {
-        const msg = rpcError.message || "";
-        const code = rpcError.code || "";
-        // If the error was a deliberate failure in status/lock during atomic execution:
-        if (msg.includes("QUOTE_ACCEPTANCE_FAILED") || msg.includes("SESSION_CLAIM_FAILED")) {
-          return null;
-        }
-
-        // In production mode: strictly fail closed! Non-atomic fallback is prohibited.
-        if (isProduction) {
-          throw new DatabaseError(
-            `Atomic authorization claim RPC 'claim_and_accept_quote' failed in production: ${msg}`,
-            code,
-            rpcError
-          );
-        }
-
-        // In non-production (e.g. offline dev/mock without RPC installed), allow CAS fallback only if function is not defined
-        if (code !== "PGRST202" && code !== "42883" && !msg.includes("Could not find the function")) {
-          return null;
-        }
-      } else if (rpcResult && !rpcResult.success) {
-        return null;
-      }
-    } catch (err) {
-      if (isProduction) {
-        throw err;
-      }
-      // Fallback to application-level transactional CAS ONLY in non-production environments
+    if (!rpcError && rpcResult && rpcResult.success) {
+      return {
+        session: rpcResult.session as ActionSession,
+        quote: rpcResult.quote as Quote,
+      };
     }
 
-    if (isProduction) {
+    if (rpcError) {
+      const msg = rpcError.message || "";
+      const code = rpcError.code || "";
+      // If the error was a deliberate validation failure in status, lock, expiry, or tenant check:
+      if (
+        msg.includes("QUOTE_ACCEPTANCE_FAILED") ||
+        msg.includes("SESSION_CLAIM_FAILED") ||
+        msg.includes("QUOTE_EXPIRED") ||
+        msg.includes("TENANT_MISMATCH") ||
+        msg.includes("SESSION_NOT_FOUND") ||
+        msg.includes("QUOTE_NOT_FOUND")
+      ) {
+        return null;
+      }
+
+      // Strictly fail closed! Non-atomic fallbacks are prohibited.
       throw new DatabaseError(
-        "Atomic authorization claim RPC 'claim_and_accept_quote' is strictly required in production mode. Non-atomic fallback is prohibited.",
-        "MISSING_RPC"
+        isProduction
+          ? `Atomic authorization claim RPC 'claim_and_accept_quote' failed in production: ${msg}`
+          : `Atomic authorization claim RPC 'claim_and_accept_quote' failed: ${msg}`,
+        code || "RPC_ERROR",
+        rpcError
       );
     }
 
-    // Step 1: Conditionally claim session awaiting_authorization -> executing (Non-production fallback only)
-    const claimedSession = await this.claimAuthorization(sessionId, tenant);
-    if (!claimedSession) {
+    if (rpcResult && !rpcResult.success) {
       return null;
     }
 
-    // Step 2: Conditionally accept quote issued -> accepted
-    let quoteQuery = this.client
-      .from("quotes")
-      .update({
-        status: "accepted",
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", quoteId)
-      .eq("session_id", sessionId)
-      .eq("status", "issued");
-
-    if (tenant?.organizationId) {
-      quoteQuery = quoteQuery.eq("organization_id", tenant.organizationId);
-    }
-    if (tenant?.customerId) {
-      quoteQuery = quoteQuery.eq("customer_id", tenant.customerId);
-    }
-
-    const { data: quoteData, error: quoteError } = await quoteQuery.select("*").maybeSingle();
-
-    if (quoteError || !quoteData) {
-      // ROLLBACK: Revert session claim back to awaiting_authorization with tenant filters
-      let rollbackQuery = this.client
-        .from("action_sessions")
-        .update({
-          status: "awaiting_authorization",
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", sessionId)
-        .eq("status", "executing");
-
-      if (tenant?.organizationId) {
-        rollbackQuery = rollbackQuery.eq("organization_id", tenant.organizationId);
-      }
-      if (tenant?.customerId) {
-        rollbackQuery = rollbackQuery.eq("customer_id", tenant.customerId);
-      }
-
-      await rollbackQuery;
-      return null;
-    }
-
-    return {
-      session: claimedSession,
-      quote: quoteData as Quote,
-    };
+    return null;
   }
 }
 

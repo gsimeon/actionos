@@ -412,6 +412,7 @@ export class DemoActionSessionRepository implements IActionSessionRepository {
     if (tenant?.organizationId && quote.organization_id !== tenant.organizationId) return null;
     if (tenant?.customerId && quote.customer_id && quote.customer_id !== tenant.customerId) return null;
     if (quote.status !== "issued") return null;
+    if (new Date(quote.expires_at).getTime() <= Date.now()) return null;
 
     session.status = "executing";
     quote.status = "accepted";

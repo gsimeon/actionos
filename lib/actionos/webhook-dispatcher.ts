@@ -3,7 +3,13 @@ import { isProductionMode } from "@/lib/runtime/mode";
 
 export interface OutboundWebhookPayload<T = Record<string, unknown>> {
   id: string;
-  event: "action.started" | "authorization.required" | "payment.verified" | "policy.renewed" | "saga.compensated";
+  event:
+    | "action.started"
+    | "authorization.required"
+    | "payment.verified"
+    | "policy.renewed"
+    | "saga.compensated"
+    | "saga.compensation_failed";
   timestamp: string;
   data: T;
   signature?: string;

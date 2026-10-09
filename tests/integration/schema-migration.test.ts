@@ -200,6 +200,14 @@ describe("Supabase Schema, Migration Replayability & Type Alignment Validation",
       /p_customer_id UUID DEFAULT NULL/i.test(sql),
       "claim_and_accept_quote must accept customer tenant filter"
     );
+    assert.ok(
+      /FOR UPDATE/i.test(sql),
+      "claim_and_accept_quote must use FOR UPDATE row locks to serialize concurrent authorization attempts"
+    );
+    assert.ok(
+      /expires_at\s*<=\s*timezone/i.test(sql) || /expires_at\s*>/i.test(sql),
+      "claim_and_accept_quote must atomically verify quote expiration before updating"
+    );
 
     // 2. Role permissions
     assert.ok(

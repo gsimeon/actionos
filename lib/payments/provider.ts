@@ -10,6 +10,7 @@ export interface PaymentInitiationResult {
   status: "processing" | "succeeded" | "failed";
   reference: string;
   gatewayUrl?: string;
+  providerReference?: string;
 }
 
 export interface PaymentVerificationResult {
@@ -24,11 +25,12 @@ export interface PaymentRefundResult {
   status: "refunded" | "failed";
   refundReference: string;
   amount: number;
+  error?: string;
 }
 
 export interface IPaymentProvider {
   readonly name: string;
   requestPayment(input: PaymentInitiationInput): Promise<PaymentInitiationResult>;
   verifyPayment(reference: string): Promise<PaymentVerificationResult>;
-  refundPayment?(reference: string, amount?: number): Promise<PaymentRefundResult>;
+  refundPayment?(reference: string, amount?: number, options?: { simulateRefundFailure?: boolean }): Promise<PaymentRefundResult>;
 }

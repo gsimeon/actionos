@@ -2,12 +2,14 @@ import type { IActionOSTool, ToolResult, WorkflowExecutionContext } from "@/type
 import { getRepositoryContainer } from "@/lib/repositories";
 import { isDemoMode } from "@/lib/runtime/mode";
 import { DEMO_CONTEXT } from "@/lib/security/auth-context";
+import { mockPaymentProvider } from "@/lib/payments/mock";
 
 export interface RefundPaymentInput {
   reference: string;
   amount: number;
   currency?: string;
   reason: string;
+  simulateRefundFailure?: boolean;
 }
 
 export interface RefundPaymentOutput {
@@ -41,7 +43,6 @@ export class RefundPaymentTool implements IActionOSTool<RefundPaymentInput, Refu
 
   async execute(input: RefundPaymentInput, context: WorkflowExecutionContext): Promise<ToolResult<RefundPaymentOutput>> {
     const repos = getRepositoryContainer();
-    const refundRef = `ref_rev_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const customerId = context.auth.customerId || (isDemoMode() ? DEMO_CONTEXT.customerId : undefined);
 
     if (!customerId) {
@@ -60,7 +61,24 @@ export class RefundPaymentTool implements IActionOSTool<RefundPaymentInput, Refu
       role: context.auth.role,
     };
 
-    // Record reversing transaction via repository
+    // 1. Process refund directly through payment rail provider
+    const refundProviderRes = await mockPaymentProvider.refundPayment(input.reference, input.amount, {
+      simulateRefundFailure: input.simulateRefundFailure,
+    });
+
+    if (refundProviderRes.status !== "refunded") {
+      return {
+        success: false,
+        error: {
+          code: "REFUND_REJECTED",
+          message: refundProviderRes.error || "Payment gateway rail declined refund reversal",
+        },
+      };
+    }
+
+    const refundRef = refundProviderRes.refundReference || `ref_rev_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+
+    // 2. ONLY record reversing transaction in DB after provider confirms refund
     await repos.transactions.create(
       {
         customer_id: customerId,
@@ -75,6 +93,7 @@ export class RefundPaymentTool implements IActionOSTool<RefundPaymentInput, Refu
           originalReference: input.reference,
           reason: input.reason,
           isSagaCompensating: true,
+          gatewayVerified: true,
         },
       },
       tenantContext

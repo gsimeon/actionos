@@ -4,9 +4,10 @@ import { SupabaseRepositoryContainer } from "./supabase/supabase-repositories";
 
 export * from "./interfaces";
 export { DemoRepositoryContainer } from "./demo/demo-repositories";
-export { SupabaseRepositoryContainer } from "./supabase/supabase-repositories";
+export { SupabaseRepositoryContainer, assertSupabaseProductionConfig } from "./supabase/supabase-repositories";
 
 import { isDemoMode } from "@/lib/runtime/mode";
+import { assertSupabaseProductionConfig } from "./supabase/supabase-repositories";
 
 let cachedContainer: RepositoryContainer | null = null;
 
@@ -22,6 +23,7 @@ export function getRepositoryContainer(forceDemo?: boolean): RepositoryContainer
   if (isDemoMode()) {
     cachedContainer = new DemoRepositoryContainer();
   } else {
+    assertSupabaseProductionConfig();
     cachedContainer = new SupabaseRepositoryContainer();
   }
 

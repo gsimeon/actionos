@@ -34,17 +34,22 @@ export interface QuoteSignaturePayload {
   amount: number;
   currency: string;
   expiresAt: string;
+  providerReference?: string | null;
+  underwriterId?: string | null;
 }
 
 /**
  * Computes a keyed quote-integrity signature using HMAC-SHA256 for an immutable quote.
  * Protects against database-level tampering by requiring the server's private signing key.
+ * Binds provider_reference and underwriterId into canonical payload to protect settlement provider identity.
  */
 export function computeQuoteSignature(payload: QuoteSignaturePayload): {
   quoteHash: string;
   signatureVersion: string;
 } {
-  const canonicalString = `${QUOTE_SIGNATURE_VERSION}:${payload.sessionId}:${payload.organizationId}:${payload.customerId}:${payload.policyId}:${payload.providerName}:${payload.amount}:${payload.currency}:${payload.expiresAt}`;
+  const providerRef = payload.providerReference || "";
+  const underwriterId = payload.underwriterId || "";
+  const canonicalString = `${QUOTE_SIGNATURE_VERSION}:${payload.sessionId}:${payload.organizationId}:${payload.customerId}:${payload.policyId}:${payload.providerName}:${payload.amount}:${payload.currency}:${payload.expiresAt}:${providerRef}:${underwriterId}`;
   const hmac = crypto.createHmac("sha256", getQuoteSigningSecret());
   const quoteHash = hmac.update(canonicalString).digest("hex");
   return {
@@ -56,6 +61,7 @@ export function computeQuoteSignature(payload: QuoteSignaturePayload): {
 /**
  * Cryptographically verifies a persisted quote's signature using timing-safe comparison.
  * In production mode, demo hashes and legacy unkeyed hashes are strictly rejected.
+ * Provides a versioned migration plan to safely support existing v0 and transitional quotes.
  */
 export function verifyQuoteSignature(quote: {
   session_id: string;
@@ -67,6 +73,8 @@ export function verifyQuoteSignature(quote: {
   currency: string;
   expires_at: string;
   quote_hash: string;
+  provider_reference?: string | null;
+  underwriter_id?: string | null;
 }): boolean {
   if (!quote.quote_hash) return false;
 
@@ -80,9 +88,12 @@ export function verifyQuoteSignature(quote: {
     return true;
   }
 
-  let expectedQuoteHash: string;
+  const candidates: string[] = [];
   try {
-    const { quoteHash } = computeQuoteSignature({
+    const secret = getQuoteSigningSecret();
+
+    // 1. Primary v1 canonical signature with fixed positional fields (covers all immutable fields including provider_reference and underwriter_id)
+    const v1Canonical = computeQuoteSignature({
       sessionId: quote.session_id,
       organizationId: quote.organization_id,
       customerId: quote.customer_id,
@@ -91,8 +102,38 @@ export function verifyQuoteSignature(quote: {
       amount: quote.amount,
       currency: quote.currency,
       expiresAt: quote.expires_at,
-    });
-    expectedQuoteHash = quoteHash;
+      providerReference: quote.provider_reference,
+      underwriterId: quote.underwriter_id,
+    }).quoteHash;
+    candidates.push(v1Canonical);
+
+    // 2. Transitional v1 format (with optional suffix delimiters from early v1 rollout)
+    const providerRefPart = quote.provider_reference ? `:${quote.provider_reference}` : "";
+    const underwriterPart = quote.underwriter_id ? `:${quote.underwriter_id}` : "";
+    const transitionalV1 = crypto
+      .createHmac("sha256", secret)
+      .update(
+        `v1:${quote.session_id}:${quote.organization_id}:${quote.customer_id}:${quote.policy_id}:${quote.provider_name}:${quote.amount}:${quote.currency}:${quote.expires_at}${providerRefPart}${underwriterPart}`
+      )
+      .digest("hex");
+    candidates.push(transitionalV1);
+
+    // 3. Legacy v0 format migration (for existing quotes signed prior to provider_reference and underwriter_id binding)
+    const v0Hmac = crypto
+      .createHmac("sha256", secret)
+      .update(
+        `v0:${quote.session_id}:${quote.organization_id}:${quote.customer_id}:${quote.policy_id}:${quote.provider_name}:${quote.amount}:${quote.currency}:${quote.expires_at}`
+      )
+      .digest("hex");
+    candidates.push(v0Hmac);
+
+    const legacyUnversionedHmac = crypto
+      .createHmac("sha256", secret)
+      .update(
+        `${quote.session_id}:${quote.organization_id}:${quote.customer_id}:${quote.policy_id}:${quote.provider_name}:${quote.amount}:${quote.currency}:${quote.expires_at}`
+      )
+      .digest("hex");
+    candidates.push(legacyUnversionedHmac);
   } catch {
     // If key is missing or invalid in production, fail closed immediately
     return false;
@@ -100,14 +141,11 @@ export function verifyQuoteSignature(quote: {
 
   try {
     const actual = Buffer.from(quote.quote_hash, "hex");
-    const expected = Buffer.from(expectedQuoteHash, "hex");
-
-    if (actual.length !== expected.length) {
-      return false;
-    }
-
-    if (crypto.timingSafeEqual(actual, expected)) {
-      return true;
+    for (const expectedHash of candidates) {
+      const expected = Buffer.from(expectedHash, "hex");
+      if (actual.length === expected.length && crypto.timingSafeEqual(actual, expected)) {
+        return true;
+      }
     }
 
     // In demo/test mode only: check legacy unkeyed SHA-256 for backward compatibility with mock fixtures

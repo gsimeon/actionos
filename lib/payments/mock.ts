@@ -29,6 +29,7 @@ export class MockPaymentProvider implements IPaymentProvider {
         status: cached.status,
         reference: cached.reference,
         gatewayUrl: `https://checkout.actionos.ng/pay/sim/${cached.reference}`,
+        providerReference: cached.providerReference,
       };
     }
 
@@ -49,6 +50,7 @@ export class MockPaymentProvider implements IPaymentProvider {
         status: "succeeded",
         reference: existing.reference,
         gatewayUrl: `https://checkout.actionos.ng/pay/sim/${existing.reference}`,
+        providerReference: recoveredEntry.providerReference,
       };
     }
 
@@ -93,6 +95,7 @@ export class MockPaymentProvider implements IPaymentProvider {
       status: "succeeded",
       reference: input.reference,
       gatewayUrl: `https://checkout.actionos.ng/pay/sim/${input.reference}`,
+      providerReference: providerRef,
     };
   }
 
@@ -134,7 +137,20 @@ export class MockPaymentProvider implements IPaymentProvider {
     };
   }
 
-  async refundPayment(reference: string, amount?: number): Promise<PaymentRefundResult> {
+  async refundPayment(
+    reference: string,
+    amount?: number,
+    options?: { simulateRefundFailure?: boolean }
+  ): Promise<PaymentRefundResult> {
+    if (options?.simulateRefundFailure) {
+      return {
+        status: "failed",
+        refundReference: "",
+        amount: amount || 0,
+        error: "Payment rail rejected refund reversal: Gateway simulation declined reversal",
+      };
+    }
+
     const record = this.simulatedPayments.get(reference);
     const refundRef = `ref_sim_${Date.now()}`;
 

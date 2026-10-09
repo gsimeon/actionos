@@ -26,6 +26,8 @@ import { isDemoMode, isProductionMode } from "@/lib/runtime/mode";
 import { formatNaira, formatDate } from "@/lib/utils";
 import { createWorkflowExecutionContext } from "@/lib/runtime/execution-context";
 import { computeQuoteSignature, verifyQuoteSignature } from "@/lib/actionos/quote-signature";
+import { mockPaymentProvider } from "@/lib/payments/mock";
+import type { RefundPaymentInput } from "./tools/refund-payment";
 
 export interface StartWorkflowInput {
   inputText: string;
@@ -48,6 +50,13 @@ export interface WorkflowStepResult {
   events: ActionLedgerEvent[];
 }
 
+export interface SagaRefundOutcome {
+  success: boolean;
+  refundReference?: string;
+  error?: string;
+  refundState?: "refund_confirmed" | "refund_pending" | "refund_failed" | "refund_unknown";
+}
+
 /**
  * Redacts sensitive customer details (cards, phone numbers, BVN, NIN, emails) from logged audit events.
  */
@@ -57,7 +66,30 @@ export function redactSensitiveInput(text?: string): string {
     .replace(/\b(?:\d[ -]*?){13,19}\b/g, "[REDACTED_CARD]")
     .replace(/\b(?:\+?234|0)[789][01]\d{8}\b/g, "[REDACTED_PHONE]")
     .replace(/\b\d{11}\b/g, "[REDACTED_IDENTIFIER]")
-    .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g, "[REDACTED_EMAIL]");
+    .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g, "[REDACTED_EMAIL]")
+    .replace(/\b(?:POL|AUTO|MOT|INS|REN)[A-Z0-9-]{4,}\b/gi, "[REDACTED_POLICY]")
+    .replace(/\b[A-Z]{3}[-\s]?\d{3}[-\s]?[A-Z]{2}\b/gi, "[REDACTED_PLATE]");
+}
+
+/**
+ * Recursively redacts sensitive values (cards, phones, identifiers, emails, policies, plates)
+ * from arbitrary metadata objects before audit trail persistence.
+ */
+export function redactSensitiveObject<T>(obj: T): T {
+  if (typeof obj === "string") {
+    return redactSensitiveInput(obj) as unknown as T;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(redactSensitiveObject) as unknown as T;
+  }
+  if (obj && typeof obj === "object") {
+    const res: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(obj)) {
+      res[k] = redactSensitiveObject(v);
+    }
+    return res as unknown as T;
+  }
+  return obj;
 }
 
 export class ActionOSOrchestrator {
@@ -75,12 +107,20 @@ export class ActionOSOrchestrator {
     events: ActionLedgerEvent[],
     ev: Omit<ActionLedgerEvent, "previousHash" | "hash" | "signature">
   ): Promise<ActionLedgerEvent> {
+    const sanitizedDescription = redactSensitiveInput(ev.description);
+    const sanitizedMetadata = ev.metadata ? redactSensitiveObject(ev.metadata) : undefined;
+    const sanitizedEv = {
+      ...ev,
+      description: sanitizedDescription,
+      ...(sanitizedMetadata !== undefined ? { metadata: sanitizedMetadata } : {}),
+    };
+
     const previousHash =
       events.length > 0 && events[events.length - 1].hash
         ? events[events.length - 1].hash!
         : GENESIS_LEDGER_HASH;
 
-    const hash = computeEventHash(ev, previousHash);
+    const hash = computeEventHash(sanitizedEv, previousHash);
     const signature = signEventHash(hash);
 
     const eventClass =
@@ -95,7 +135,7 @@ export class ActionOSOrchestrator {
         : "informational");
 
     const completeEvent: ActionLedgerEvent = {
-      ...ev,
+      ...sanitizedEv,
       sequenceNumber: events.length + 1,
       previousHash,
       hash,
@@ -176,11 +216,20 @@ export class ActionOSOrchestrator {
       organization_id: orgId,
       channel: input.channel,
       language: input.language || "en-NG",
-      input_text: input.inputText,
+      input_text: redactSensitiveInput(input.inputText),
       input_audio_url: input.inputAudioUrl || null,
       intent: null,
       status: "received",
-      metadata: { aiProvider: this.nAtlas.name },
+      metadata: {
+        aiProvider: this.nAtlas.name,
+        retentionPolicy: {
+          rawInputRetained: false,
+          piiRedacted: true,
+          auditRetentionDays: 90,
+          retentionPeriodDays: 90,
+          piiClass: "redacted-financial-identities",
+        },
+      },
     });
 
     // Outbound webhook dispatch with minimal non-PII payload
@@ -220,10 +269,10 @@ export class ActionOSOrchestrator {
       sessionId,
       timestamp: new Date().toISOString(),
       action: "n_atlas_intent_extraction",
-      description: `N-ATLAS Intent: '${understanding.intent}' (${Math.round(understanding.confidence * 100)}% confidence). ${understanding.normalizedText}`,
+      description: `N-ATLAS Intent: '${understanding.intent}' (${Math.round(understanding.confidence * 100)}% confidence). ${redactSensitiveInput(understanding.normalizedText)}`,
       status: "verified",
       actor: "N-ATLAS AI",
-      metadata: { entities: understanding.entities },
+      metadata: { entities: redactSensitiveObject(understanding.entities) },
     });
 
     // 2. Move to PLANNING
@@ -439,6 +488,7 @@ export class ActionOSOrchestrator {
       }
 
       const quoteProvider = matchedQuote.underwriter || providerName;
+      const quoteUnderwriterId = matchedQuote.underwriter_id || matchedQuote.underwriter || activePolicy.provider_id || null;
       const { quoteHash } = computeQuoteSignature({
         sessionId,
         organizationId: orgId,
@@ -448,6 +498,8 @@ export class ActionOSOrchestrator {
         amount: matchedQuote.amount,
         currency: targetCurrency,
         expiresAt: quoteExpiry,
+        providerReference: matchedQuote.id,
+        underwriterId: quoteUnderwriterId,
       });
 
       // Persist primary quote - let repository generate canonical database ID
@@ -464,6 +516,7 @@ export class ActionOSOrchestrator {
           expires_at: quoteExpiry,
           quote_hash: quoteHash,
           provider_reference: matchedQuote.id,
+          underwriter_id: quoteUnderwriterId,
           metadata: {
             underwriter: matchedQuote.underwriter,
             policyNumber: activePolicy.policy_number,
@@ -493,6 +546,7 @@ export class ActionOSOrchestrator {
         if (alt.id !== matchedQuote.id) {
           const altProvider = alt.underwriter || providerName;
           const altCurrency = alt.currency || targetCurrency;
+          const altUnderwriterId = alt.underwriter_id || alt.underwriter || activePolicy.provider_id || null;
           const { quoteHash: altHash } = computeQuoteSignature({
             sessionId,
             organizationId: orgId,
@@ -502,6 +556,8 @@ export class ActionOSOrchestrator {
             amount: alt.amount,
             currency: altCurrency,
             expiresAt: quoteExpiry,
+            providerReference: alt.id,
+            underwriterId: altUnderwriterId,
           });
           const createdAltQuote = await repos.quotes.create(
             {
@@ -516,6 +572,7 @@ export class ActionOSOrchestrator {
               expires_at: quoteExpiry,
               quote_hash: altHash,
               provider_reference: alt.id,
+              underwriter_id: altUnderwriterId,
               metadata: {
                 underwriter: alt.underwriter,
                 policyNumber: activePolicy.policy_number,
@@ -639,6 +696,176 @@ export class ActionOSOrchestrator {
   }
 
   /**
+   * Executes and independently verifies a Saga compensating refund.
+   * Never marks a refund as verified unless confirmed by the payment rail.
+   * If the refund fails or is uncertain, records the failure in the ledger,
+   * flags the session as 'refund_pending' / 'escalated', and notifies human escalation.
+   */
+  private async executeVerifiedSagaRefund(params: {
+    sessionId: string;
+    paymentReference: string;
+    amount: number;
+    currency: string;
+    reason: string;
+    execContext: WorkflowExecutionContext;
+    events: ActionLedgerEvent[];
+    tenantContext?: TenantContext;
+    simulateRefundFailure?: boolean;
+  }): Promise<SagaRefundOutcome> {
+    const {
+      sessionId,
+      paymentReference,
+      amount,
+      currency,
+      reason,
+      execContext,
+      events,
+      tenantContext,
+      simulateRefundFailure,
+    } = params;
+
+    const repos = getRepositoryContainer();
+    const refundTool = toolRegistry.get("refund_payment");
+
+    if (!refundTool) {
+      await this.appendLedgerEvent(events, {
+        id: `ev_${Date.now()}_saga_rollback_failed`,
+        sessionId,
+        timestamp: new Date().toISOString(),
+        action: "saga_compensating_refund_failed",
+        description: `Saga Rollback Failed: Refund tool not registered. Escalated for manual refund of ${formatNaira(amount)}.`,
+        status: "failed",
+        actor: "Saga Compensator",
+        isCompensating: true,
+        metadata: { paymentReference, reason, error: "TOOL_NOT_FOUND" },
+      });
+
+      await repos.sessions.updateMetadata(
+        sessionId,
+        {
+          refundState: "refund_pending",
+          refundFailureReason: "Refund tool not registered",
+          requiresManualRefund: true,
+        },
+        tenantContext
+      );
+
+      return { success: false, error: "Refund tool not registered", refundState: "refund_failed" };
+    }
+
+    try {
+      const refundRes = await refundTool.execute(
+        {
+          reference: paymentReference,
+          amount,
+          currency,
+          reason,
+          simulateRefundFailure,
+        } as unknown as RefundPaymentInput,
+        execContext
+      );
+
+      if (refundRes.success && refundRes.data?.status === "refunded") {
+        await this.appendLedgerEvent(events, {
+          id: `ev_${Date.now()}_saga_rollback`,
+          sessionId,
+          timestamp: new Date().toISOString(),
+          action: "saga_compensating_refund",
+          description: `Saga Rollback Verified: Automatic reversal of ${formatNaira(amount)} confirmed by gateway (Ref: ${refundRes.data.refundReference})`,
+          status: "verified",
+          actor: "Saga Compensator",
+          isCompensating: true,
+          metadata: refundRes.data,
+        });
+
+        await repos.sessions.updateMetadata(
+          sessionId,
+          {
+            refundState: "refund_confirmed",
+            refundStatus: "refund_confirmed",
+            isRefundConfirmed: true,
+            refundReference: refundRes.data.refundReference,
+            refundedAt: refundRes.data.refundedAt,
+          },
+          tenantContext
+        );
+
+        webhookDispatcher.broadcast("saga.compensated", {
+          sessionId,
+          reason,
+          refundReference: refundRes.data.refundReference,
+          amount,
+        });
+
+        return { success: true, refundReference: refundRes.data.refundReference, refundState: "refund_confirmed" };
+      } else {
+        const failureReason = refundRes.error?.message || "Refund was not confirmed by gateway";
+
+        await this.appendLedgerEvent(events, {
+          id: `ev_${Date.now()}_saga_rollback_failed`,
+          sessionId,
+          timestamp: new Date().toISOString(),
+          action: "saga_compensating_refund_failed",
+          description: `Saga Rollback Failed: Reversal of ${formatNaira(amount)} could not be verified (${failureReason}). Escalated for supervisor refund.`,
+          status: "failed",
+          actor: "Saga Compensator",
+          isCompensating: true,
+          metadata: { paymentReference, reason, error: failureReason },
+        });
+
+        const refundState = refundRes.data?.status === "failed" || !refundRes.success ? "refund_failed" : "refund_pending";
+        await repos.sessions.updateMetadata(
+          sessionId,
+          {
+            refundState,
+            refundStatus: refundState,
+            refundFailureReason: failureReason,
+            requiresManualRefund: true,
+          },
+          tenantContext
+        );
+
+        webhookDispatcher.broadcast("saga.compensation_failed", {
+          sessionId,
+          reason,
+          paymentReference,
+          amount,
+          error: failureReason,
+        });
+
+        return { success: false, error: failureReason, refundState: refundState as "refund_failed" | "refund_pending" };
+      }
+    } catch (refundErr) {
+      const failureReason = refundErr instanceof Error ? refundErr.message : String(refundErr);
+
+      await this.appendLedgerEvent(events, {
+        id: `ev_${Date.now()}_saga_rollback_failed`,
+        sessionId,
+        timestamp: new Date().toISOString(),
+        action: "saga_compensating_refund_failed",
+        description: `Saga Rollback Failed: Exception during reversal (${failureReason}). Escalated for supervisor refund.`,
+        status: "failed",
+        actor: "Saga Compensator",
+        isCompensating: true,
+        metadata: { paymentReference, reason, error: failureReason },
+      });
+
+      await repos.sessions.updateMetadata(
+        sessionId,
+        {
+          refundState: "refund_unknown",
+          refundStatus: "refund_unknown",
+          refundFailureReason: failureReason,
+          requiresManualRefund: true,
+        },
+        tenantContext
+      );
+
+      return { success: false, error: failureReason, refundState: "refund_unknown" };
+    }
+  }
+
+  /**
    * Resume and complete workflow after user confirms or declines authorization.
    * Includes distributed Saga transaction rollback with compensating actions.
    */
@@ -650,15 +877,23 @@ export class ActionOSOrchestrator {
       selectedUnderwriter?: string;
       customAmount?: number;
       simulateSagaFailure?: boolean;
+      simulateRefundFailure?: boolean;
       authMethod?: "pin" | "biometric_webauthn" | "passkey" | "whatsapp_otp";
       quoteId?: string;
       authorizedQuoteId?: string;
     }
   ): Promise<WorkflowStepResult> {
-    if (isProductionMode() && options?.simulateSagaFailure) {
-      throw new Error(
-        "Security enforcement violation: Fault injection (simulateSagaFailure) is prohibited in production runtime mode."
-      );
+    if (isProductionMode()) {
+      if (options?.simulateSagaFailure) {
+        throw new Error(
+          "Security enforcement violation: Fault injection (simulateSagaFailure) is prohibited in production runtime mode."
+        );
+      }
+      if (options?.simulateRefundFailure) {
+        throw new Error(
+          "Security enforcement violation: Fault injection (simulateRefundFailure) is prohibited in production runtime mode."
+        );
+      }
     }
 
     const isDemo = isDemoMode();
@@ -990,6 +1225,7 @@ export class ActionOSOrchestrator {
     }
 
     const quoteAmount = dbQuote.amount;
+    const quoteCurrency = dbQuote.currency || "NGN";
     const expectedAuthAmount = hasCustomAmount ? options.customAmount! : dbQuote.amount;
 
     const guardCheck = this.guardrails.validateAuthorization(true, quoteAmount, expectedAuthAmount);
@@ -1023,7 +1259,7 @@ export class ActionOSOrchestrator {
         status: "failed",
         intent: plan.intent,
         confidence: plan.confidence,
-        message: `Guardrail Failure: Atomic authorization conflict. Session or quote '${dbQuote.id}' could not be claimed and accepted atomically. Current status may not be 'issued' or session is already executing.`,
+        message: `Guardrail Failure: Concurrent authorization detected. Session or quote '${dbQuote.id}' has already been claimed or cannot be accepted atomically. Current status may not be 'issued' or session is already executing.`,
         authorizationRequired: false,
         authorizationDetails: null,
         events,
@@ -1095,229 +1331,391 @@ export class ActionOSOrchestrator {
     let renewalOutput: { newExpiry?: string; policyNumber?: string } = {};
     const executedMutations: Array<{ tool: string; input: Record<string, unknown> }> = [];
 
-    // Execute remaining steps (steps 5 through 10)
-    for (const step of steps) {
-      if (step.status === "completed") continue; // skip already run steps
+    try {
+      // Execute remaining steps (steps 5 through 10)
+      for (const step of steps) {
+        if (step.status === "completed") continue; // skip already run steps
 
-      // Simulate fault injection for Saga testing if requested
-      if (options?.simulateSagaFailure && step.tool_name === "generate_certificate") {
-        // Force failure at certificate generation to trigger automated refund
-        step.status = "failed";
-        step.error = "Simulated network failure on NAICOM document dispatch";
+        // Simulate fault injection for Saga testing if requested
+        if (options?.simulateSagaFailure && step.tool_name === "generate_certificate") {
+          // Force failure at certificate generation to trigger automated refund
+          step.status = "failed";
+          step.error = "Simulated network failure on NAICOM document dispatch";
 
-        // TRIGGER SAGA COMPENSATING TRANSACTIONS
-        const refundTool = toolRegistry.get("refund_payment");
-        if (refundTool && paymentReference) {
-          const refundRes = await refundTool.execute(
-            {
-              reference: paymentReference,
+          // TRIGGER SAGA COMPENSATING TRANSACTIONS WITH VERIFICATION
+          let refundOutcome: SagaRefundOutcome = { success: false };
+          if (paymentReference) {
+            refundOutcome = await this.executeVerifiedSagaRefund({
+              sessionId,
+              paymentReference,
               amount: quoteAmount,
-              currency: "NGN",
+              currency: quoteCurrency,
               reason: "Saga Compensation: Document generation failed after payment settlement",
+              execContext,
+              events,
+              tenantContext,
+              simulateRefundFailure: options?.simulateRefundFailure,
+            });
+          }
+
+          sm.transition("escalated", refundOutcome.success ? "Saga rollback completed: Customer charge was reversed" : "Saga rollback incomplete: Refund unverified");
+          session.status = "escalated";
+          await repos.sessions.updateStatus(sessionId, "escalated", undefined, tenantContext);
+
+          return {
+            sessionId,
+            status: "escalated",
+            intent: plan.intent,
+            confidence: plan.confidence,
+            message: refundOutcome.success
+              ? `Saga Rollback Triggered: Certificate generation failed, but your payment of ${formatNaira(quoteAmount)} was automatically refunded.`
+              : `Saga Rollback Incomplete: Certificate generation failed and automatic refund could not be verified (${refundOutcome.error || "Gateway rejected"}). Your account was NOT credited. Escalated for manual supervisor refund.`,
+            authorizationRequired: false,
+            authorizationDetails: null,
+            events,
+          };
+        }
+
+        const stepOverride: Record<string, unknown> = {};
+
+        if (step.tool_name === "request_payment") {
+          stepOverride.customerId = targetCustomerId;
+          stepOverride.amount = dbQuote.amount;
+          stepOverride.currency = dbQuote.currency || "NGN";
+          stepOverride.policyNumber = policyNumber;
+          stepOverride.quoteId = dbQuote.id;
+          const sanitizedSession = sessionId.replace(/-/g, "").substring(0, 16);
+          const sanitizedQuote = dbQuote.id.replace(/-/g, "").substring(0, 16);
+          stepOverride.idempotencyKey = `act_${sanitizedSession}_q_${sanitizedQuote}`;
+        } else if (step.tool_name === "verify_payment") {
+          stepOverride.reference = paymentReference;
+          stepOverride.expectedAmount = dbQuote.amount;
+        } else if (step.tool_name === "renew_policy") {
+          stepOverride.policyNumber = policyNumber;
+          stepOverride.paymentReference = paymentReference;
+          stepOverride.underwriter = dbQuote.provider_name;
+        } else if (step.tool_name === "generate_certificate") {
+          stepOverride.customerId = targetCustomerId;
+          stepOverride.policyNumber = policyNumber;
+          if (currentExpiry) {
+            stepOverride.previousExpiry = currentExpiry;
+          }
+          stepOverride.newExpiry = renewalOutput.newExpiry || targetNewExpiry;
+          stepOverride.amount = dbQuote.amount;
+          stepOverride.underwriter = dbQuote.provider_name;
+        } else if (step.tool_name === "send_notification") {
+          stepOverride.customerId = targetCustomerId;
+          stepOverride.policyNumber = policyNumber;
+          stepOverride.newExpiry = renewalOutput.newExpiry || targetNewExpiry;
+          stepOverride.amount = dbQuote.amount;
+          stepOverride.underwriter = dbQuote.provider_name;
+        } else if (step.tool_name === "schedule_reminder") {
+          stepOverride.customerId = targetCustomerId;
+          stepOverride.policyNumber = policyNumber;
+          stepOverride.newExpiry = renewalOutput.newExpiry || targetNewExpiry;
+        }
+
+        const { result, ledgerEvent } = await this.executor.executeStep(
+          step,
+          execContext,
+          stepOverride
+        );
+
+        await this.appendLedgerEvent(events, ledgerEvent);
+
+        if (!result.success) {
+          // Rollback via Saga if payment occurred
+          let refundOutcome: SagaRefundOutcome = { success: false };
+          if (paymentReference) {
+            refundOutcome = await this.executeVerifiedSagaRefund({
+              sessionId,
+              paymentReference,
+              amount: quoteAmount,
+              currency: quoteCurrency,
+              reason: `Saga Compensation: Execution halted at ${step.tool_name}`,
+              execContext,
+              events,
+              tenantContext,
+              simulateRefundFailure: options?.simulateRefundFailure,
+            });
+          }
+
+          const resolvedStatus = refundOutcome.success ? "failed" : "escalated";
+          sm.transition(resolvedStatus, result.error?.message);
+          session.status = resolvedStatus;
+          await repos.sessions.updateStatus(sessionId, resolvedStatus, undefined, tenantContext);
+          return {
+            sessionId,
+            status: resolvedStatus,
+            intent: plan.intent,
+            confidence: plan.confidence,
+            message: refundOutcome.success
+              ? `Execution halted at step '${step.tool_name}': ${result.error?.message}. Payment of ${formatNaira(quoteAmount)} was automatically refunded.`
+              : `Execution halted at step '${step.tool_name}': ${result.error?.message}. Automated refund of ${formatNaira(quoteAmount)} could not be verified. Escalated for supervisor review.`,
+            authorizationRequired: false,
+            authorizationDetails: null,
+            events,
+          };
+        }
+
+        executedMutations.push({ tool: step.tool_name, input: stepOverride });
+
+        if (step.tool_name === "request_payment") {
+          paymentReference = (result.data?.reference as string) || "";
+          const providerRef = (result.data?.providerReference as string) || "";
+          const sanitizedSession = sessionId.replace(/-/g, "").substring(0, 16);
+          const sanitizedQuote = dbQuote.id.replace(/-/g, "").substring(0, 16);
+          const durableKey = `act_${sanitizedSession}_q_${sanitizedQuote}`;
+
+          // Persist payment attempt immediately into durable session metadata
+          session.metadata = {
+            ...session.metadata,
+            paymentReference,
+            paymentAttempt: {
+              reference: paymentReference,
+              paymentReference,
+              providerReference: providerRef,
+              quoteId: dbQuote.id,
+              amount: dbQuote.amount,
+              currency: dbQuote.currency || "NGN",
+              provider: dbQuote.provider_name,
+              gatewayUrl: result.data?.gatewayUrl,
+              status: result.success ? "succeeded" : "failed",
+              attemptedAt: new Date().toISOString(),
+              idempotencyKey: durableKey,
             },
-            execContext
-          );
-
-          await this.appendLedgerEvent(events, {
-            id: `ev_${Date.now()}_saga_rollback`,
-            sessionId,
-            timestamp: new Date().toISOString(),
-            action: "saga_compensating_refund",
-            description: `Saga Rollback: Automatic reversal of ${formatNaira(quoteAmount)} executed (Ref: ${refundRes.data?.refundReference})`,
-            status: "verified",
-            actor: "Saga Compensator",
-            isCompensating: true,
-            metadata: refundRes.data,
-          });
-
-          webhookDispatcher.broadcast("saga.compensated", {
-            sessionId,
-            reason: "Simulated NAICOM certificate failure",
-            refundReference: refundRes.data?.refundReference,
-            amount: quoteAmount,
-          });
+            lastPaymentAttempt: {
+              reference: paymentReference,
+              providerReference: providerRef,
+              quoteId: dbQuote.id,
+              amount: dbQuote.amount,
+              currency: dbQuote.currency || "NGN",
+              provider: dbQuote.provider_name,
+              gatewayUrl: result.data?.gatewayUrl,
+              status: result.success ? "succeeded" : "failed",
+              attemptedAt: new Date().toISOString(),
+              idempotencyKey: durableKey,
+            },
+          };
+          await repos.sessions.updateMetadata(sessionId, session.metadata, tenantContext);
+        } else if (step.tool_name === "verify_payment") {
+          if (result.success) {
+            session.metadata = {
+              ...session.metadata,
+              paymentVerification: {
+                reference: paymentReference,
+                verified: true,
+                verifiedAt: new Date().toISOString(),
+                amount: result.data?.amount,
+                currency: result.data?.currency,
+                providerReference: result.data?.providerReference,
+                gatewayChannel: result.data?.gatewayChannel,
+              },
+            };
+            await repos.sessions.updateMetadata(sessionId, session.metadata, tenantContext);
+          }
+        } else if (step.tool_name === "renew_policy") {
+          renewalOutput = result.data as { newExpiry: string; policyNumber: string };
         }
-
-        sm.transition("escalated", "Saga rollback completed: Customer charged was reversed");
-        session.status = "escalated";
-        await repos.sessions.updateStatus(sessionId, "escalated");
-
-        return {
-          sessionId,
-          status: "escalated",
-          intent: plan.intent,
-          confidence: plan.confidence,
-          message: `Saga Rollback Triggered: Certificate generation failed, but your payment of ${formatNaira(quoteAmount)} was automatically refunded.`,
-          authorizationRequired: false,
-          authorizationDetails: null,
-          events,
-        };
       }
 
-      const stepOverride: Record<string, unknown> = {};
+      // 3. Move to VERIFYING (Independent Verification)
+      sm.transition("verifying", "Independently verifying policy state rolled forward");
+      session.status = "verifying";
+      await repos.sessions.updateStatus(sessionId, "verifying");
 
-      if (step.tool_name === "request_payment") {
-        stepOverride.customerId = targetCustomerId;
-        stepOverride.amount = dbQuote.amount;
-        stepOverride.currency = dbQuote.currency || "NGN";
-        stepOverride.policyNumber = policyNumber;
-      } else if (step.tool_name === "verify_payment") {
-        stepOverride.reference = paymentReference;
-        stepOverride.expectedAmount = dbQuote.amount;
-      } else if (step.tool_name === "renew_policy") {
-        stepOverride.policyNumber = policyNumber;
-        stepOverride.paymentReference = paymentReference;
-        stepOverride.underwriter = dbQuote.provider_name;
-      } else if (step.tool_name === "generate_certificate") {
-        stepOverride.customerId = targetCustomerId;
-        stepOverride.policyNumber = policyNumber;
-        if (currentExpiry) {
-          stepOverride.previousExpiry = currentExpiry;
-        }
-        stepOverride.newExpiry = renewalOutput.newExpiry || targetNewExpiry;
-        stepOverride.amount = dbQuote.amount;
-        stepOverride.underwriter = dbQuote.provider_name;
-      } else if (step.tool_name === "send_notification") {
-        stepOverride.customerId = targetCustomerId;
-        stepOverride.policyNumber = policyNumber;
-        stepOverride.newExpiry = renewalOutput.newExpiry || targetNewExpiry;
-        stepOverride.amount = dbQuote.amount;
-        stepOverride.underwriter = dbQuote.provider_name;
-      } else if (step.tool_name === "schedule_reminder") {
-        stepOverride.customerId = targetCustomerId;
-        stepOverride.policyNumber = policyNumber;
-        stepOverride.newExpiry = renewalOutput.newExpiry || targetNewExpiry;
-      }
+      const effectiveNewExpiry = renewalOutput.newExpiry || targetNewExpiry;
+      const expectedYear = new Date(effectiveNewExpiry).getFullYear();
 
-      const { result, ledgerEvent } = await this.executor.executeStep(
-        step,
-        execContext,
-        stepOverride
+      const verifyRenewalResult = await this.verifier.verifyRenewal(
+        policyNumber,
+        expectedYear
       );
 
-      await this.appendLedgerEvent(events, ledgerEvent);
+      await this.appendLedgerEvent(events, {
+        id: `ev_${Date.now()}_ver`,
+        sessionId,
+        timestamp: new Date().toISOString(),
+        action: "independent_verification",
+        description: verifyRenewalResult.passed
+          ? `Database roll-forward verified: Expiry successfully updated to ${effectiveNewExpiry}.`
+          : `Verification check failed: ${verifyRenewalResult.reason}`,
+        status: verifyRenewalResult.passed ? "verified" : "failed",
+        actor: "Policy Guardrail",
+      });
 
-      if (!result.success) {
-        // Rollback via Saga if payment occurred
+      if (!verifyRenewalResult.passed) {
+        // Query authoritative policy state and payment status before making financial determination
+        let authoritativePolicy: Policy | null = null;
+        if (policyNumber) {
+          authoritativePolicy = await repos.policies.findByNumber(policyNumber, tenantContext);
+        }
+
+        let isPaymentSettled = false;
         if (paymentReference) {
-          const refundTool = toolRegistry.get("refund_payment");
-          if (refundTool) {
-            const refundRes = await refundTool.execute(
-              {
-                reference: paymentReference,
-                amount: quoteAmount,
-                currency: "NGN",
-                reason: `Saga Compensation: Execution halted at ${step.tool_name}`,
-              },
-              execContext
-            );
-
-            await this.appendLedgerEvent(events, {
-              id: `ev_${Date.now()}_saga_rollback`,
-              sessionId,
-              timestamp: new Date().toISOString(),
-              action: "saga_compensating_refund",
-              description: `Saga Rollback: Automatic reversal of ${formatNaira(quoteAmount)} executed (Ref: ${refundRes.data?.refundReference})`,
-              status: "verified",
-              actor: "Saga Compensator",
-              isCompensating: true,
-              metadata: refundRes.data,
-            });
+          const tx = await repos.transactions.findByReference(paymentReference, tenantContext);
+          if (tx?.status === "succeeded") {
+            isPaymentSettled = true;
+          } else {
+            const providerVerify = await mockPaymentProvider.verifyPayment(paymentReference).catch(() => null);
+            if (providerVerify?.status === "succeeded") {
+              isPaymentSettled = true;
+            }
           }
         }
 
-        sm.transition("failed", result.error?.message);
-        session.status = "failed";
-        await repos.sessions.updateStatus(sessionId, "failed");
-        return {
-          sessionId,
-          status: "failed",
-          intent: plan.intent,
-          confidence: plan.confidence,
-          message: `Execution halted at step '${step.tool_name}': ${result.error?.message}`,
-          authorizationRequired: false,
-          authorizationDetails: null,
-          events,
-        };
+        const isPolicyAuthoritativelyRenewed =
+          authoritativePolicy?.status === "renewed" &&
+          new Date(authoritativePolicy.expiry_date).getFullYear() >= expectedYear;
+
+        if (isPolicyAuthoritativelyRenewed) {
+          // Authoritative policy state confirms renewal was successful despite verifier alert
+          await this.appendLedgerEvent(events, {
+            id: `ev_${Date.now()}_auth_rec`,
+            sessionId,
+            timestamp: new Date().toISOString(),
+            action: "independent_verification_reconciled",
+            description: `Authoritative policy database inspection confirms policy is renewed (${authoritativePolicy?.policy_number}, expiry: ${authoritativePolicy?.expiry_date}). Proceeding with completion.`,
+            status: "verified",
+            actor: "Policy Guardrail",
+          });
+        } else if (isPaymentSettled) {
+          // Payment settled, but renewal did not occur: execute verified saga refund compensation
+          let refundOutcome: SagaRefundOutcome = { success: false };
+          if (paymentReference) {
+            refundOutcome = await this.executeVerifiedSagaRefund({
+              sessionId,
+              paymentReference,
+              amount: quoteAmount,
+              currency: quoteCurrency,
+              reason: `Saga Compensation: Post-renewal verification failed (${verifyRenewalResult.reason}) and policy is not renewed`,
+              execContext,
+              events,
+              tenantContext,
+              simulateRefundFailure: options?.simulateRefundFailure,
+            });
+          }
+
+          sm.transition("escalated", `Post-payment verification failure: ${verifyRenewalResult.reason}. Safe compensation applied.`);
+          session.status = "escalated";
+          await repos.sessions.updateStatus(sessionId, "escalated", undefined, tenantContext);
+          await repos.sessions.updateMetadata(
+            sessionId,
+            {
+              postPaymentVerificationFailure: true,
+              verificationFailureReason: verifyRenewalResult.reason,
+              reconciliation_required: !refundOutcome.success,
+              requiresManualRefund: !refundOutcome.success,
+            },
+            tenantContext
+          );
+
+          return {
+            sessionId,
+            status: "escalated",
+            intent: plan.intent,
+            confidence: plan.confidence,
+            message: refundOutcome.success
+              ? `Verification check failed: ${verifyRenewalResult.reason}. Your payment of ${formatNaira(quoteAmount)} was automatically refunded and verified.`
+              : `Verification check failed: ${verifyRenewalResult.reason}. An automated refund could not be verified. Escalated for human supervisor reconciliation.`,
+            authorizationRequired: false,
+            authorizationDetails: null,
+            events,
+          };
+        } else {
+          // Outcome is ambiguous (e.g. payment unconfirmed): move to recoverable escalated state
+          sm.transition("escalated", `Ambiguous post-payment verification: ${verifyRenewalResult.reason}`);
+          session.status = "escalated";
+          await repos.sessions.updateStatus(sessionId, "escalated", undefined, tenantContext);
+          await repos.sessions.updateMetadata(
+            sessionId,
+            {
+              postPaymentVerificationFailure: true,
+              verificationFailureReason: verifyRenewalResult.reason,
+              reconciliation_required: true,
+              reconciliationState: "reconciliation_required",
+            },
+            tenantContext
+          );
+
+          return {
+            sessionId,
+            status: "escalated",
+            intent: plan.intent,
+            confidence: plan.confidence,
+            message: `Post-payment verification could not confirm renewal (${verifyRenewalResult.reason}). Session escalated for reconciliation.`,
+            authorizationRequired: false,
+            authorizationDetails: null,
+            events,
+          };
+        }
       }
 
-      executedMutations.push({ tool: step.tool_name, input: stepOverride });
+      // 4. Move to COMPLETED
+      sm.transition("completed", "Workflow finished with certified policy renewal and NAICOM certificate");
+      session.status = "completed";
+      session.completed_at = new Date().toISOString();
+      await repos.sessions.updateStatus(sessionId, "completed", session.completed_at);
 
-      if (step.tool_name === "request_payment") {
-        paymentReference = (result.data?.reference as string) || "";
-      } else if (step.tool_name === "renew_policy") {
-        renewalOutput = result.data as { newExpiry: string; policyNumber: string };
-      }
-    }
+      webhookDispatcher.broadcast("policy.renewed", {
+        sessionId,
+        policyNumber,
+        amount: quoteAmount,
+        expiryDate: effectiveNewExpiry,
+      });
 
-    // 3. Move to VERIFYING (Independent Verification)
-    sm.transition("verifying", "Independently verifying policy state rolled forward");
-    session.status = "verifying";
-    await repos.sessions.updateStatus(sessionId, "verifying");
+      const assetDesc = authDetails.assetName
+        ? `${authDetails.assetName}${authDetails.assetIdentifier ? ` (${authDetails.assetIdentifier})` : ""}`
+        : policyNumber;
 
-    const effectiveNewExpiry = renewalOutput.newExpiry || targetNewExpiry;
-    const expectedYear = new Date(effectiveNewExpiry).getFullYear();
-
-    const verifyRenewalResult = await this.verifier.verifyRenewal(
-      policyNumber,
-      expectedYear
-    );
-
-    await this.appendLedgerEvent(events, {
-      id: `ev_${Date.now()}_ver`,
-      sessionId,
-      timestamp: new Date().toISOString(),
-      action: "independent_verification",
-      description: verifyRenewalResult.passed
-        ? `Database roll-forward verified: Expiry successfully updated to ${effectiveNewExpiry}.`
-        : `Verification check failed: ${verifyRenewalResult.reason}`,
-      status: verifyRenewalResult.passed ? "verified" : "failed",
-      actor: "Policy Guardrail",
-    });
-
-    if (!verifyRenewalResult.passed) {
-      sm.transition("failed", verifyRenewalResult.reason);
-      session.status = "failed";
-      await repos.sessions.updateStatus(sessionId, "failed");
       return {
         sessionId,
-        status: "failed",
+        status: "completed",
         intent: plan.intent,
         confidence: plan.confidence,
-        message: `Independent verification failed: ${verifyRenewalResult.reason}`,
+        message: `Success! Your insurance for ${assetDesc} has been renewed to ${formatDate(effectiveNewExpiry)}. Your certified certificate is ready.`,
+        authorizationRequired: false,
+        authorizationDetails: null,
+        events,
+      };
+    } catch (unhandledErr: unknown) {
+      const errMsg = unhandledErr instanceof Error ? unhandledErr.message : String(unhandledErr);
+      let refundSuccess = false;
+      if (paymentReference) {
+        try {
+          const refundOutcome = await this.executeVerifiedSagaRefund({
+            sessionId,
+            paymentReference,
+            amount: quoteAmount,
+            currency: quoteCurrency,
+            reason: `Saga Compensation: Execution exception (${errMsg})`,
+            execContext,
+            events,
+            tenantContext,
+          });
+          refundSuccess = refundOutcome.success;
+        } catch (refundErr) {
+          console.error(`[ActionOS] Recovery refund failed: ${refundErr}`);
+        }
+      }
+
+      sm.transition("escalated", `Execution failed: ${errMsg}`);
+      session.status = "escalated";
+      await repos.sessions.updateStatus(sessionId, "escalated", undefined, tenantContext);
+
+      return {
+        sessionId,
+        status: "escalated",
+        intent: plan.intent,
+        confidence: plan.confidence,
+        message: refundSuccess
+          ? `We ran into an issue executing your action: ${errMsg}. Your payment of ${formatNaira(quoteAmount)} was automatically refunded.`
+          : `We ran into an issue executing your action: ${errMsg}. An automated refund could not be verified. A supervisor has been alerted to review your account.`,
         authorizationRequired: false,
         authorizationDetails: null,
         events,
       };
     }
-
-    // 4. Move to COMPLETED
-    sm.transition("completed", "Workflow finished with certified policy renewal and NAICOM certificate");
-    session.status = "completed";
-    session.completed_at = new Date().toISOString();
-    await repos.sessions.updateStatus(sessionId, "completed", session.completed_at);
-
-    webhookDispatcher.broadcast("policy.renewed", {
-      sessionId,
-      policyNumber,
-      amount: quoteAmount,
-      expiryDate: effectiveNewExpiry,
-    });
-
-    const assetDesc = authDetails.assetName
-      ? `${authDetails.assetName}${authDetails.assetIdentifier ? ` (${authDetails.assetIdentifier})` : ""}`
-      : policyNumber;
-
-      return {
-      sessionId,
-      status: "completed",
-      intent: plan.intent,
-      confidence: plan.confidence,
-      message: `Success! Your insurance for ${assetDesc} has been renewed to ${formatDate(effectiveNewExpiry)}. Your certified certificate is ready.`,
-      authorizationRequired: false,
-      authorizationDetails: null,
-      events,
-    };
   }
 
   /**
@@ -1331,7 +1729,14 @@ export class ActionOSOrchestrator {
   ): Promise<{
     sessionId: string;
     resolvedStatus: ActionSession["status"];
-    reconciliationAction: "completed_renewal" | "refunded_uncompleted" | "cancelled_unpaid" | "escalated";
+    reconciliationAction:
+      | "completed_renewal"
+      | "refunded_uncompleted"
+      | "cancelled_unpaid"
+      | "escalated"
+      | "payment_uncertain_escalated"
+      | "refund_pending_escalated"
+      | "reconciliation_required";
     message: string;
   }> {
     const repos = getRepositoryContainer();
@@ -1353,12 +1758,117 @@ export class ActionOSOrchestrator {
     const policyNumber = authDetails?.policyNumber;
     const sanitizedSession = sessionId.replace(/-/g, "").substring(0, 16);
     const sanitizedPolicy = policyNumber ? policyNumber.replace(/[^a-zA-Z0-9]/g, "") : "unknown";
-    const deterministicRef = `act_${sanitizedSession}_pay_${sanitizedPolicy}`;
+    const sessionMeta = (session.metadata || {}) as Record<string, unknown>;
+    const consentRecord = sessionMeta.consentRecord as Record<string, unknown> | undefined;
+    const quoteId = (consentRecord?.quoteId || authDetails?.quoteId) as string | undefined;
+    const sanitizedQuote = quoteId ? quoteId.replace(/-/g, "").substring(0, 16) : "";
+    const quoteRef = sanitizedQuote ? `act_${sanitizedSession}_q_${sanitizedQuote}` : undefined;
+    const legacyRef = policyNumber ? `act_${sanitizedSession}_pay_${sanitizedPolicy}` : undefined;
+    const persistedRef = sessionMeta.paymentReference as string | undefined;
+    const paymentAttempt = sessionMeta.paymentAttempt as Record<string, unknown> | undefined;
+    const attemptRef = paymentAttempt?.reference as string | undefined;
+    const attemptPaymentRef = paymentAttempt?.paymentReference as string | undefined;
+    const attemptProviderRef = paymentAttempt?.providerReference as string | undefined;
+    const attemptIdempotencyKey = paymentAttempt?.idempotencyKey as string | undefined;
 
-    // Inspect payment provider transactions
-    const tx = await repos.transactions.findByReference(deterministicRef, tenantContext);
+    // Check all candidate references: persisted attempt, durable quote key, idempotency keys, or legacy policy key
+    const candidateRefs = Array.from(
+      new Set(
+        [
+          persistedRef,
+          attemptRef,
+          attemptPaymentRef,
+          attemptProviderRef,
+          attemptIdempotencyKey,
+          quoteRef,
+          legacyRef,
+        ].filter(Boolean) as string[]
+      )
+    );
 
-    if (tx && tx.status === "succeeded") {
+    if (candidateRefs.length === 0) {
+      await repos.sessions.updateStatus(sessionId, "escalated", undefined, tenantContext);
+      await repos.sessions.updateMetadata(
+        sessionId,
+        {
+          paymentReconciliationState: "unknown_reference",
+          reconciliation_required: true,
+        },
+        tenantContext
+      );
+      return {
+        sessionId,
+        resolvedStatus: "escalated",
+        reconciliationAction: "payment_uncertain_escalated",
+        message: "No payment reference or idempotency key found for executing session. Outcome is unknown; escalated for reconciliation.",
+      };
+    }
+
+    let tx = null;
+    let effectiveRef = candidateRefs[0];
+    for (const ref of candidateRefs) {
+      tx = await repos.transactions.findByReference(ref, tenantContext);
+      if (tx) {
+        effectiveRef = ref;
+        break;
+      }
+    }
+
+    let isSettled = tx?.status === "succeeded";
+    let settledAmount = tx?.amount;
+    let settledCurrency = tx?.currency || "NGN";
+
+    // If transaction not found in DB, reconcile directly against payment provider
+    let isPaymentPending = false;
+    let isGatewayUnreachable = false;
+    let providerConfirmedUnpaidCount = 0;
+
+    if (!isSettled) {
+      for (const ref of candidateRefs) {
+        try {
+          const verifyRes = await mockPaymentProvider.verifyPayment(ref);
+          if (verifyRes.status === "succeeded") {
+            isSettled = true;
+            effectiveRef = ref;
+            settledAmount = verifyRes.amount;
+            settledCurrency = verifyRes.currency;
+            break;
+          } else if (verifyRes.status === "pending") {
+            isPaymentPending = true;
+            effectiveRef = ref;
+            break;
+          } else if (verifyRes.status === "failed") {
+            providerConfirmedUnpaidCount++;
+          }
+        } catch {
+          isGatewayUnreachable = true;
+          effectiveRef = ref;
+          break;
+        }
+      }
+    }
+
+    if (isPaymentPending || isGatewayUnreachable) {
+      await repos.sessions.updateStatus(sessionId, "escalated", undefined, tenantContext);
+      await repos.sessions.updateMetadata(
+        sessionId,
+        {
+          paymentReconciliationState: isGatewayUnreachable ? "gateway_unreachable" : "payment_pending",
+          candidateReference: effectiveRef,
+          requiresDeferredReconciliation: true,
+          reconciliation_required: true,
+        },
+        tenantContext
+      );
+      return {
+        sessionId,
+        resolvedStatus: "escalated",
+        reconciliationAction: "payment_uncertain_escalated",
+        message: "Payment status is currently uncertain with the gateway rail. Session escalated for deferred reconciliation without duplicate charge.",
+      };
+    }
+
+    if (isSettled) {
       // Payment was settled! Check if policy renewal was finished:
       let policy = null;
       if (policyNumber) {
@@ -1377,47 +1887,99 @@ export class ActionOSOrchestrator {
       }
 
       // Payment succeeded but policy renewal failed: perform compensating refund
-      const refundTool = toolRegistry.get("refund_payment");
-      if (refundTool) {
-        const refundExecCtx = createWorkflowExecutionContext(
-          {
-            userId: session.customer_id || "recovery_agent",
-            profileId: "recovery_profile",
-            organizationId: session.organization_id,
-            customerId: session.customer_id || undefined,
-            role: "manager",
-            isDemo: false,
-          },
-          { sessionId, planId: "recovery_plan", channel: session.channel, language: session.language }
-        );
+      const recoveryExecCtx = createWorkflowExecutionContext(
+        {
+          userId: session.customer_id || "recovery_agent",
+          profileId: "recovery_profile",
+          organizationId: session.organization_id,
+          customerId: session.customer_id || undefined,
+          role: "manager",
+          isDemo: false,
+        },
+        { sessionId, planId: "recovery_plan", channel: session.channel, language: session.language }
+      );
 
-        await refundTool.execute(
-          {
-            reference: deterministicRef,
-            amount: tx.amount,
-            currency: tx.currency,
-            reason: "Reconciliation Recovery: Payment settled but renewal was uncompleted.",
-          },
-          refundExecCtx
-        );
-      }
+      const refundOutcome = await this.executeVerifiedSagaRefund({
+        sessionId,
+        paymentReference: effectiveRef,
+        amount: settledAmount || 0,
+        currency: settledCurrency,
+        reason: "Reconciliation Recovery: Payment settled but renewal was uncompleted.",
+        execContext: recoveryExecCtx,
+        events: [],
+        tenantContext,
+      });
 
       await repos.sessions.updateStatus(sessionId, "escalated", undefined, tenantContext);
+      if (refundOutcome.success && refundOutcome.refundState === "refund_confirmed") {
+        return {
+          sessionId,
+          resolvedStatus: "escalated",
+          reconciliationAction: "refunded_uncompleted",
+          message: "Payment was settled but downstream renewal failed. Customer refund was verified and session escalated.",
+        };
+      } else if (refundOutcome.refundState === "refund_failed") {
+        await repos.sessions.updateMetadata(
+          sessionId,
+          {
+            refundState: "refund_failed",
+            reconciliation_required: true,
+            requiresManualRefund: true,
+          },
+          tenantContext
+        );
+        return {
+          sessionId,
+          resolvedStatus: "escalated",
+          reconciliationAction: "refund_pending_escalated",
+          message: "Payment was settled and renewal failed, but automated refund could not be verified. Session escalated with refund_pending status.",
+        };
+      } else {
+        await repos.sessions.updateMetadata(
+          sessionId,
+          {
+            refundState: refundOutcome.refundState || "refund_unknown",
+            reconciliation_required: true,
+            requiresManualRefund: true,
+          },
+          tenantContext
+        );
+        return {
+          sessionId,
+          resolvedStatus: "escalated",
+          reconciliationAction: "reconciliation_required",
+          message: "Payment was settled and renewal failed, but refund outcome is uncertain. Session escalated for supervisor reconciliation.",
+        };
+      }
+    }
+
+    // Only fail closed if provider explicitly confirmed unpaid across all candidate references
+    if (providerConfirmedUnpaidCount === candidateRefs.length) {
+      await repos.sessions.updateStatus(sessionId, "failed", undefined, tenantContext);
       return {
         sessionId,
-        resolvedStatus: "escalated",
-        reconciliationAction: "refunded_uncompleted",
-        message: "Payment was settled but downstream renewal failed. Customer was refunded and session escalated.",
+        resolvedStatus: "failed",
+        reconciliationAction: "cancelled_unpaid",
+        message: "No settled payment found with gateway across all verified references. Session safely failed closed without charging customer.",
       };
     }
 
-    // Payment never succeeded or transaction does not exist. Do NOT retry blindly!
-    await repos.sessions.updateStatus(sessionId, "failed", undefined, tenantContext);
+    // Outcome is ambiguous; do NOT close as failed! Keep open for manual reconciliation.
+    await repos.sessions.updateStatus(sessionId, "escalated", undefined, tenantContext);
+    await repos.sessions.updateMetadata(
+      sessionId,
+      {
+        paymentReconciliationState: "payment_uncertain",
+        candidateReference: effectiveRef,
+        reconciliation_required: true,
+      },
+      tenantContext
+    );
     return {
       sessionId,
-      resolvedStatus: "failed",
-      reconciliationAction: "cancelled_unpaid",
-      message: "No settled payment found with gateway. Session safely failed closed without charging customer.",
+      resolvedStatus: "escalated",
+      reconciliationAction: "reconciliation_required",
+      message: "Payment status could not be conclusively determined with the gateway rail. Session kept open for manual reconciliation.",
     };
   }
 }
