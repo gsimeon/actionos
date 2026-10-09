@@ -30,6 +30,7 @@ import type {
 import type { ActionLedgerEvent } from "@/types/actionos";
 import { createClient as createSupabaseClient, SupabaseClient } from "@supabase/supabase-js";
 import { DatabaseError } from "@/lib/repositories/errors";
+import { isProductionMode } from "@/lib/runtime/mode";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function getSupabaseClient(): SupabaseClient<any> {
@@ -456,7 +457,13 @@ export class SupabaseRenewalRepository implements IRenewalRepository {
 }
 
 export class SupabaseActionSessionRepository implements IActionSessionRepository {
-  private client = getSupabaseClient();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private client: SupabaseClient<any>;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  constructor(client: SupabaseClient<any> = getSupabaseClient()) {
+    this.client = client;
+  }
 
   async findById(id: string, tenant?: TenantContext): Promise<ActionSession | null> {
     let query = this.client
@@ -578,12 +585,14 @@ export class SupabaseActionSessionRepository implements IActionSessionRepository
     quoteId: string,
     tenant?: TenantContext
   ): Promise<{ session: ActionSession; quote: Quote } | null> {
-    // Attempt Postgres RPC first for single-transaction atomic execution
+    const isProduction = isProductionMode();
+
+    // 1. Attempt Postgres RPC for single-transaction atomic execution
     try {
       const { data: rpcResult, error: rpcError } = await this.client.rpc("claim_and_accept_quote", {
         p_session_id: sessionId,
         p_quote_id: quoteId,
-        p_organization_id: tenant?.organizationId,
+        p_organization_id: tenant?.organizationId ?? null,
         p_customer_id: tenant?.customerId ?? null,
       });
 
@@ -601,18 +610,38 @@ export class SupabaseActionSessionRepository implements IActionSessionRepository
         if (msg.includes("QUOTE_ACCEPTANCE_FAILED") || msg.includes("SESSION_CLAIM_FAILED")) {
           return null;
         }
-        // If RPC function is not installed/defined, allow CAS fallback; otherwise fail closed
+
+        // In production mode: strictly fail closed! Non-atomic fallback is prohibited.
+        if (isProduction) {
+          throw new DatabaseError(
+            `Atomic authorization claim RPC 'claim_and_accept_quote' failed in production: ${msg}`,
+            code,
+            rpcError
+          );
+        }
+
+        // In non-production (e.g. offline dev/mock without RPC installed), allow CAS fallback only if function is not defined
         if (code !== "PGRST202" && code !== "42883" && !msg.includes("Could not find the function")) {
           return null;
         }
       } else if (rpcResult && !rpcResult.success) {
         return null;
       }
-    } catch {
-      // Fallback to application-level transactional CAS if RPC is not available in environment
+    } catch (err) {
+      if (isProduction) {
+        throw err;
+      }
+      // Fallback to application-level transactional CAS ONLY in non-production environments
     }
 
-    // Step 1: Conditionally claim session awaiting_authorization -> executing
+    if (isProduction) {
+      throw new DatabaseError(
+        "Atomic authorization claim RPC 'claim_and_accept_quote' is strictly required in production mode. Non-atomic fallback is prohibited.",
+        "MISSING_RPC"
+      );
+    }
+
+    // Step 1: Conditionally claim session awaiting_authorization -> executing (Non-production fallback only)
     const claimedSession = await this.claimAuthorization(sessionId, tenant);
     if (!claimedSession) {
       return null;
@@ -639,8 +668,8 @@ export class SupabaseActionSessionRepository implements IActionSessionRepository
     const { data: quoteData, error: quoteError } = await quoteQuery.select("*").maybeSingle();
 
     if (quoteError || !quoteData) {
-      // ROLLBACK: Revert session claim back to awaiting_authorization so it is never left in executing!
-      await this.client
+      // ROLLBACK: Revert session claim back to awaiting_authorization with tenant filters
+      let rollbackQuery = this.client
         .from("action_sessions")
         .update({
           status: "awaiting_authorization",
@@ -649,6 +678,14 @@ export class SupabaseActionSessionRepository implements IActionSessionRepository
         .eq("id", sessionId)
         .eq("status", "executing");
 
+      if (tenant?.organizationId) {
+        rollbackQuery = rollbackQuery.eq("organization_id", tenant.organizationId);
+      }
+      if (tenant?.customerId) {
+        rollbackQuery = rollbackQuery.eq("customer_id", tenant.customerId);
+      }
+
+      await rollbackQuery;
       return null;
     }
 

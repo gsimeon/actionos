@@ -37,7 +37,7 @@ export interface QuoteSignaturePayload {
 }
 
 /**
- * Computes a keyed HMAC-SHA256 non-repudiation signature for an immutable quote.
+ * Computes a keyed quote-integrity signature using HMAC-SHA256 for an immutable quote.
  * Protects against database-level tampering by requiring the server's private signing key.
  */
 export function computeQuoteSignature(payload: QuoteSignaturePayload): {

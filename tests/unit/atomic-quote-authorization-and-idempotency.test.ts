@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { orchestrator } from "@/lib/actionos/orchestrator";
+import { orchestrator, redactSensitiveInput } from "@/lib/actionos/orchestrator";
 import { resetStore, getStore } from "@/lib/actionos/mock-store";
 import { DEMO_CONTEXT, type AuthenticatedExecutionContext } from "@/lib/security/auth-context";
 import { getRepositoryContainer } from "@/lib/repositories";
@@ -11,6 +11,9 @@ import { computeQuoteSignature, verifyQuoteSignature, getQuoteSigningSecret } fr
 import { verifyLedgerIntegrity } from "@/lib/actionos/crypto-ledger";
 import type { GetQuoteInput } from "@/lib/actionos/tools/get-quote";
 import type { WorkflowExecutionContext } from "@/types/actionos";
+import { SupabaseActionSessionRepository } from "@/lib/repositories/supabase/supabase-repositories";
+import { DatabaseError } from "@/lib/repositories/errors";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 describe("Atomic Quote Authorization, Idempotency & Financial Execution Integrity", () => {
   it("should fail closed when calculated quote amount has no exact match in issued quotes", async () => {
@@ -686,6 +689,166 @@ describe("Atomic Quote Authorization, Idempotency & Financial Execution Integrit
       if (originalWebhookKey) process.env.ACTIONOS_WEBHOOK_SIGNING_SECRET = originalWebhookKey;
       else delete process.env.ACTIONOS_WEBHOOK_SIGNING_SECRET;
     }
+  });
+
+  it("should fail closed in production if claim_and_accept_quote RPC is missing or fails on Supabase repository", async () => {
+    const originalMode = process.env.ACTIONOS_RUNTIME_MODE;
+    process.env.ACTIONOS_RUNTIME_MODE = "production";
+
+    try {
+      // 1. Mock Supabase client returning RPC missing error
+      let fallbackQueryExecuted = false;
+      const mockClient = {
+        rpc: async (_fn: string, _args: Record<string, unknown>) => {
+          return {
+            data: null,
+            error: {
+              message: "Could not find the function public.claim_and_accept_quote in the schema cache",
+              code: "PGRST202",
+              details: "",
+              hint: "",
+            },
+          };
+        },
+        from: (_table: string) => {
+          fallbackQueryExecuted = true;
+          return {
+            update: () => ({
+              eq: () => ({ eq: () => ({ select: () => ({ maybeSingle: async () => ({ data: null }) }) }) }),
+            }),
+          };
+        },
+      } as unknown as SupabaseClient;
+
+      const repo = new SupabaseActionSessionRepository(mockClient);
+
+      await assert.rejects(
+        async () => {
+          await repo.claimAuthorizationAndAcceptQuote(
+            "00000000-0000-0000-0000-000000000001",
+            "00000000-0000-0000-0000-000000000002",
+            {
+              organizationId: "00000000-0000-0000-0000-000000000003",
+              customerId: "00000000-0000-0000-0000-000000000004",
+            }
+          );
+        },
+        (err: unknown) => {
+          const dbErr = err as DatabaseError;
+          assert.equal(dbErr.name, "DatabaseError");
+          assert.match(
+            dbErr.message,
+            /Atomic authorization claim RPC 'claim_and_accept_quote' failed in production/
+          );
+          return true;
+        }
+      );
+
+      assert.equal(
+        fallbackQueryExecuted,
+        false,
+        "Production must strictly fail closed without attempting non-atomic fallback query"
+      );
+    } finally {
+      process.env.ACTIONOS_RUNTIME_MODE = originalMode;
+    }
+  });
+
+  it("should reject customAmount when not a positive numeric value", async () => {
+    resetStore();
+
+    // 1. Negative customAmount
+    const startRes1 = await orchestrator.startWorkflow({
+      inputText: "Renew my insurance policy AUTO-2026-00182",
+      channel: "web",
+      executionContext: DEMO_CONTEXT,
+    });
+    assert.equal(startRes1.status, "awaiting_authorization");
+
+    const negRes = await orchestrator.authorizeAndExecute(
+      startRes1.sessionId,
+      true,
+      DEMO_CONTEXT,
+      {
+        customAmount: -5000,
+      }
+    );
+    assert.equal(negRes.status, "failed");
+    assert.match(negRes.message, /customAmount must be a positive numeric value/);
+
+    // 2. Zero customAmount
+    const startRes2 = await orchestrator.startWorkflow({
+      inputText: "Renew my insurance policy AUTO-2026-00182",
+      channel: "web",
+      executionContext: DEMO_CONTEXT,
+    });
+    assert.equal(startRes2.status, "awaiting_authorization");
+
+    const zeroRes = await orchestrator.authorizeAndExecute(
+      startRes2.sessionId,
+      true,
+      DEMO_CONTEXT,
+      {
+        customAmount: 0,
+      }
+    );
+    assert.equal(zeroRes.status, "failed");
+    assert.match(zeroRes.message, /customAmount must be a positive numeric value/);
+
+    // 3. NaN customAmount
+    const startRes3 = await orchestrator.startWorkflow({
+      inputText: "Renew my insurance policy AUTO-2026-00182",
+      channel: "web",
+      executionContext: DEMO_CONTEXT,
+    });
+    assert.equal(startRes3.status, "awaiting_authorization");
+
+    const nanRes = await orchestrator.authorizeAndExecute(
+      startRes3.sessionId,
+      true,
+      DEMO_CONTEXT,
+      {
+        customAmount: NaN,
+      }
+    );
+    assert.equal(nanRes.status, "failed");
+    assert.match(nanRes.message, /customAmount must be a positive numeric value/);
+  });
+
+  it("should redact sensitive cards, Nigerian phone numbers, NIN/BVN, and emails from customer input in ledger descriptions", async () => {
+    resetStore();
+
+    // 1. Direct unit verification of redactSensitiveInput helper
+    const rawPiiText =
+      "Please pay using card 4532 0150 1234 5678 or call 08031234567 / +2348098765432, email me at test.customer@actionos.ng, my NIN is 12345678901.";
+    const sanitized = redactSensitiveInput(rawPiiText);
+
+    assert.ok(!sanitized.includes("4532 0150 1234 5678"), "Card number must be redacted");
+    assert.ok(sanitized.includes("[REDACTED_CARD]"));
+
+    assert.ok(!sanitized.includes("08031234567"), "Phone must be redacted");
+    assert.ok(!sanitized.includes("+2348098765432"), "International phone must be redacted");
+    assert.ok(sanitized.includes("[REDACTED_PHONE]"));
+
+    assert.ok(!sanitized.includes("test.customer@actionos.ng"), "Email must be redacted");
+    assert.ok(sanitized.includes("[REDACTED_EMAIL]"));
+
+    assert.ok(!sanitized.includes("12345678901"), "NIN/BVN identifier must be redacted");
+    assert.ok(sanitized.includes("[REDACTED_IDENTIFIER]"));
+
+    // 2. Integration check in workflow execution ledger
+    const startRes = await orchestrator.startWorkflow({
+      inputText: "Renew policy AUTO-2026-00182 with card 4123 4567 8901 2345 and notify me at user@example.com",
+      channel: "web",
+      executionContext: DEMO_CONTEXT,
+    });
+
+    const initEvent = startRes.events.find((e) => e.action === "intent_detection");
+    assert.ok(initEvent, "Intent detection event must be logged");
+    assert.ok(!initEvent.description.includes("4123 4567 8901 2345"), "Ledger description must not expose raw card");
+    assert.ok(!initEvent.description.includes("user@example.com"), "Ledger description must not expose raw email");
+    assert.match(initEvent.description, /\[REDACTED_CARD\]/);
+    assert.match(initEvent.description, /\[REDACTED_EMAIL\]/);
   });
 });
 

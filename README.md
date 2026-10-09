@@ -91,7 +91,7 @@ To maintain absolute credibility and transparency for NITDA competition judges a
 | **Action State Machine** | 🟢 **LIVE** | Deterministic transition graph validated across legal and illegal states in automated test suites (`tests/unit/state-machine.test.ts`). |
 | **Underwriting Guardrails** | 🟢 **LIVE** | Pure function validations for customer ownership, 30-day renewal windows, quote bounds, and financial ceilings (`tests/unit/guardrails.test.ts`). |
 | **Cryptographic Action Ledger™** | 🟢 **LIVE** | SHA-256 hash chaining, genesis linking, and HMAC token signing verified for tamper detection (`tests/unit/crypto-ledger.test.ts`). |
-| **First-Class Quote Persistence & Binding** | 🟢 **LIVE** | Dedicated `quotes` table, keyed HMAC-SHA256 non-repudiation signatures, atomic authorization claims, and immutable `quoteId` binding (`tests/unit/quote-binding-and-simulation-evidence.test.ts`). |
+| **First-Class Quote Persistence & Binding** | 🟢 **LIVE** | Dedicated `quotes` table, keyed quote-integrity signatures (HMAC-SHA256), atomic authorization claims, and immutable `quoteId` binding (`tests/unit/quote-binding-and-simulation-evidence.test.ts`). |
 | **Multi-Tenancy & Tenant-Scoped Mutations** | 🟢 **LIVE** | Database-level tenant ownership enforced in update mutations across transactions, sessions, quotes, and steps with RLS policies (`tests/unit/repositories.test.ts`). |
 | **Security Context & Zero Fallback** | 🟢 **LIVE** | Server-verified `AuthenticatedExecutionContext` and `WorkflowExecutionContext`. Zero production identity fallback (`tests/unit/production-security-hardening.test.ts`). |
 | **Distributed Saga & Auto-Refund** | 🟢 **LIVE** | Automated compensating transaction triggered upon downstream document failure (`tests/integration/renewal-workflow.test.ts`). |
@@ -103,18 +103,29 @@ To maintain absolute credibility and transparency for NITDA competition judges a
 
 ---
 
-## 6. Automated Test Suite Execution
+## 6. Automated Test Suite & Verification Execution
 
-Run the automated test harness from the repository root:
+Run the complete verification pipeline from the repository root:
 ```bash
+# 1. Typecheck TypeScript declarations and strict types
+npm run typecheck
+
+# 2. Lint code style and ESLint best practices
+npm run lint
+
+# 3. Execute unit, integration, and security regression test suites
 npm test
+
+# 4. Compile and validate production Next.js build bundle
+npm run build
 ```
-The test suite validates:
-- The Action State Machine transitions
-- Deterministic underwriting guardrails
+
+The test suites validate:
+- The Action State Machine transitions and illegal transition rejections
+- Deterministic underwriting guardrails (customAmount validation, renewal windows, pricing ceilings)
 - RBAC role permissions & financial caps
 - Complete renewal workflow from natural language utterance to certificate issuance and Action Ledger generation
-- Security regression suite (zero-fallback, cross-tenant isolation, demo isolation)
+- Security regression suite (zero-fallback, cross-tenant isolation, demo isolation, fail-closed atomic authorization)
 
 ---
 

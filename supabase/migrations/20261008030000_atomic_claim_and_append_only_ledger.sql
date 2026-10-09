@@ -6,7 +6,7 @@
 CREATE OR REPLACE FUNCTION claim_and_accept_quote(
   p_session_id UUID,
   p_quote_id UUID,
-  p_organization_id UUID,
+  p_organization_id UUID DEFAULT NULL,
   p_customer_id UUID DEFAULT NULL
 )
 RETURNS JSONB
@@ -24,7 +24,7 @@ BEGIN
       updated_at = NOW()
   WHERE id = p_session_id
     AND status = 'awaiting_authorization'
-    AND organization_id = p_organization_id
+    AND (p_organization_id IS NULL OR organization_id = p_organization_id)
     AND (p_customer_id IS NULL OR customer_id IS NULL OR customer_id = p_customer_id)
   RETURNING * INTO v_session;
 
@@ -43,7 +43,7 @@ BEGIN
   WHERE id = p_quote_id
     AND session_id = p_session_id
     AND status = 'issued'
-    AND organization_id = p_organization_id
+    AND (p_organization_id IS NULL OR organization_id = p_organization_id)
     AND (p_customer_id IS NULL OR customer_id IS NULL OR customer_id = p_customer_id)
   RETURNING * INTO v_quote;
 
@@ -59,6 +59,9 @@ BEGIN
   );
 END;
 $$;
+
+GRANT EXECUTE ON FUNCTION claim_and_accept_quote(UUID, UUID, UUID, UUID) TO authenticated, service_role;
+REVOKE EXECUTE ON FUNCTION claim_and_accept_quote(UUID, UUID, UUID, UUID) FROM anon, public;
 
 -- 2. Enforce strict append-only immutability on action_ledger_events
 CREATE OR REPLACE FUNCTION prevent_action_ledger_tampering()

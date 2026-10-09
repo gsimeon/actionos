@@ -48,6 +48,18 @@ export interface WorkflowStepResult {
   events: ActionLedgerEvent[];
 }
 
+/**
+ * Redacts sensitive customer details (cards, phone numbers, BVN, NIN, emails) from logged audit events.
+ */
+export function redactSensitiveInput(text?: string): string {
+  if (!text) return "";
+  return text
+    .replace(/\b(?:\d[ -]*?){13,19}\b/g, "[REDACTED_CARD]")
+    .replace(/\b(?:\+?234|0)[789][01]\d{8}\b/g, "[REDACTED_PHONE]")
+    .replace(/\b\d{11}\b/g, "[REDACTED_IDENTIFIER]")
+    .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g, "[REDACTED_EMAIL]");
+}
+
 export class ActionOSOrchestrator {
   private nAtlas = createNAtlasProvider();
   private planner = new ActionOSPlanner();
@@ -190,7 +202,7 @@ export class ActionOSOrchestrator {
       sessionId,
       timestamp: new Date().toISOString(),
       action: "intent_detection",
-      description: `Input received via ${input.channel}: "${input.inputText}"`,
+      description: `Input received via ${input.channel}: "${redactSensitiveInput(input.inputText)}"`,
       status: "verified",
       actor: "User",
     });
@@ -771,6 +783,26 @@ export class ActionOSOrchestrator {
       targetQuoteId = quoteMap[targetQuoteId];
     }
 
+    // Explicit null/undefined and numeric range check for customAmount
+    const hasCustomAmount = options?.customAmount !== undefined && options?.customAmount !== null;
+    if (hasCustomAmount) {
+      if (typeof options.customAmount !== "number" || isNaN(options.customAmount) || options.customAmount <= 0) {
+        sm.transition("failed", "Invalid custom amount: must be a positive numeric value");
+        session.status = "failed";
+        await repos.sessions.updateStatus(sessionId, "failed", undefined, tenantContext);
+        return {
+          sessionId,
+          status: "failed",
+          intent: plan.intent,
+          confidence: plan.confidence,
+          message: "Guardrail Failure: customAmount must be a positive numeric value.",
+          authorizationRequired: false,
+          authorizationDetails: null,
+          events,
+        };
+      }
+    }
+
     if (options?.selectedUnderwriter && !requestedQuoteId) {
       const match = authDetails.quotes?.find(
         (q) => q.underwriter.toLowerCase() === options.selectedUnderwriter!.toLowerCase()
@@ -778,7 +810,7 @@ export class ActionOSOrchestrator {
       if (match) {
         targetQuoteId = match.id;
       }
-    } else if (options?.customAmount && !requestedQuoteId) {
+    } else if (hasCustomAmount && !requestedQuoteId) {
       const match = authDetails.quotes?.find((q) => q.amount === options.customAmount);
       if (match) {
         targetQuoteId = match.id;
@@ -907,7 +939,7 @@ export class ActionOSOrchestrator {
     }
 
     // In production, reject arbitrary custom amounts that don't match the loaded quote
-    if (isProductionMode() && options?.customAmount && options.customAmount !== dbQuote.amount) {
+    if (isProductionMode() && hasCustomAmount && options.customAmount !== dbQuote.amount) {
       sm.transition("failed", "Arbitrary custom amount is strictly forbidden in production mode");
       session.status = "failed";
       await repos.sessions.updateStatus(sessionId, "failed");
@@ -958,7 +990,7 @@ export class ActionOSOrchestrator {
     }
 
     const quoteAmount = dbQuote.amount;
-    const expectedAuthAmount = options?.customAmount ?? dbQuote.amount;
+    const expectedAuthAmount = hasCustomAmount ? options.customAmount! : dbQuote.amount;
 
     const guardCheck = this.guardrails.validateAuthorization(true, quoteAmount, expectedAuthAmount);
     if (!guardCheck.passed) {

@@ -177,4 +177,52 @@ describe("Supabase Schema, Migration Replayability & Type Alignment Validation",
     });
     assert.equal(crossTenantRenewal, null, "Cross-tenant renewal query must return null");
   });
+
+  it("should verify atomic claim and append-only ledger migration defines claim_and_accept_quote RPC and immutability trigger", () => {
+    const atomicMigrationFile = path.join(migrationsDir, "20261008030000_atomic_claim_and_append_only_ledger.sql");
+    assert.ok(fs.existsSync(atomicMigrationFile), "Atomic claim migration must exist");
+    const sql = fs.readFileSync(atomicMigrationFile, "utf-8");
+
+    // 1. Function definition
+    assert.ok(
+      /CREATE OR REPLACE FUNCTION claim_and_accept_quote/i.test(sql),
+      "Migration must define claim_and_accept_quote function"
+    );
+    assert.ok(
+      /SECURITY DEFINER/i.test(sql),
+      "claim_and_accept_quote must be declared as SECURITY DEFINER"
+    );
+    assert.ok(
+      /p_organization_id UUID DEFAULT NULL/i.test(sql),
+      "claim_and_accept_quote must accept organization tenant filter"
+    );
+    assert.ok(
+      /p_customer_id UUID DEFAULT NULL/i.test(sql),
+      "claim_and_accept_quote must accept customer tenant filter"
+    );
+
+    // 2. Role permissions
+    assert.ok(
+      /GRANT EXECUTE ON FUNCTION claim_and_accept_quote.*TO authenticated, service_role/i.test(sql),
+      "Function execution must be granted to authenticated and service_role"
+    );
+    assert.ok(
+      /REVOKE EXECUTE ON FUNCTION claim_and_accept_quote.*FROM anon, public/i.test(sql),
+      "Function execution must be revoked from anon and public"
+    );
+
+    // 3. Append-only ledger trigger
+    assert.ok(
+      /CREATE OR REPLACE FUNCTION prevent_action_ledger_tampering/i.test(sql),
+      "Migration must define prevent_action_ledger_tampering trigger function"
+    );
+    assert.ok(
+      /CREATE TRIGGER trg_action_ledger_immutable/i.test(sql),
+      "Migration must create immutable trigger on action_ledger_events"
+    );
+    assert.ok(
+      /BEFORE UPDATE OR DELETE ON action_ledger_events/i.test(sql),
+      "Trigger must fire BEFORE UPDATE OR DELETE"
+    );
+  });
 });

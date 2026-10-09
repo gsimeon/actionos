@@ -53,17 +53,32 @@ export async function POST(
 
     // In production, reject arbitrary custom amounts that are not tied to a quote
     const requestedQuoteId = validated.data.authorizedQuoteId || validated.data.quoteId;
-    if (isProductionMode() && validated.data.customAmount && !requestedQuoteId) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: {
-            code: "BAD_REQUEST",
-            message: "Arbitrary customAmount is rejected in production. Authorization must bind to an authorizedQuoteId.",
+    const hasCustomAmount = validated.data.customAmount !== undefined && validated.data.customAmount !== null;
+    if (hasCustomAmount) {
+      if (typeof validated.data.customAmount !== "number" || isNaN(validated.data.customAmount) || validated.data.customAmount <= 0) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: {
+              code: "BAD_REQUEST",
+              message: "customAmount must be a positive numeric value.",
+            },
           },
-        },
-        { status: 400 }
-      );
+          { status: 400 }
+        );
+      }
+      if (isProductionMode() && !requestedQuoteId) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: {
+              code: "BAD_REQUEST",
+              message: "Arbitrary customAmount is rejected in production. Authorization must bind to an authorizedQuoteId.",
+            },
+          },
+          { status: 400 }
+        );
+      }
     }
 
     // 2. Query session with defense-in-depth tenant boundary
@@ -98,11 +113,18 @@ export async function POST(
       );
     }
 
-    // 4. Quote has not expired check
-    const authDetails = session.metadata?.authorizationDetails as AuthorizationDetails | undefined;
-    if (authDetails?.expiresAt) {
-      const expiresAtTime = new Date(authDetails.expiresAt).getTime();
-      if (Date.now() > expiresAtTime) {
+    // 4. Authoritative quote expiry check against persisted quote entity
+    const targetQuoteId = requestedQuoteId || (session.metadata?.authorizationDetails as AuthorizationDetails | undefined)?.quoteId;
+    if (targetQuoteId) {
+      const quoteMap = session.metadata?.providerToCanonicalQuoteMap as Record<string, string> | undefined;
+      const canonicalQuoteId = quoteMap?.[targetQuoteId] || targetQuoteId;
+      const persistedQuote = await repos.quotes.findById(canonicalQuoteId, {
+        organizationId: context.organizationId,
+        customerId: context.customerId,
+        role: context.role,
+      });
+
+      if (persistedQuote && new Date(persistedQuote.expires_at).getTime() < Date.now()) {
         return NextResponse.json(
           {
             success: false,
