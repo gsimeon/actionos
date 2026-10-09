@@ -153,10 +153,72 @@ export async function POST(
       }
     );
 
-    return NextResponse.json({
-      success: true,
-      data: result,
-    });
+    if (result.status === "completed") {
+      return NextResponse.json(
+        {
+          success: true,
+          actionStatus: "completed",
+          message: result.message,
+          data: result,
+        },
+        { status: 200 }
+      );
+    }
+
+    if (result.status === "awaiting_authorization" || result.status === "executing" || result.status === "verifying") {
+      return NextResponse.json(
+        {
+          success: true,
+          actionStatus: result.status,
+          message: result.message,
+          data: result,
+        },
+        { status: 202 }
+      );
+    }
+
+    if (result.status === "cancelled") {
+      return NextResponse.json(
+        {
+          success: false,
+          actionStatus: "cancelled",
+          error: {
+            code: "ACTION_CANCELLED",
+            message: result.message,
+          },
+          data: result,
+        },
+        { status: 422 }
+      );
+    }
+
+    if (result.status === "escalated") {
+      return NextResponse.json(
+        {
+          success: false,
+          actionStatus: "escalated",
+          error: {
+            code: "ACTION_ESCALATED",
+            message: result.message,
+          },
+          data: result,
+        },
+        { status: 422 }
+      );
+    }
+
+    return NextResponse.json(
+      {
+        success: false,
+        actionStatus: result.status,
+        error: {
+          code: "ACTION_FAILED",
+          message: result.message,
+        },
+        data: result,
+      },
+      { status: 422 }
+    );
   } catch (err: unknown) {
     const { AuthContextError } = await import("@/lib/security/auth-context");
     if (err instanceof AuthContextError) {

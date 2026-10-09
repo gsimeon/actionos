@@ -61,10 +61,29 @@ export async function POST(req: Request) {
       },
     });
 
-    return NextResponse.json({
-      success: true,
-      data: result,
-    });
+    if (result.status === "failed") {
+      return NextResponse.json(
+        {
+          success: false,
+          actionStatus: "failed",
+          error: {
+            code: "ACTION_FAILED",
+            message: result.message,
+          },
+          data: result,
+        },
+        { status: 422 }
+      );
+    }
+
+    return NextResponse.json(
+      {
+        success: true,
+        actionStatus: result.status,
+        data: result,
+      },
+      { status: 200 }
+    );
   } catch (err: unknown) {
     if (err instanceof AuthContextError) {
       return NextResponse.json(

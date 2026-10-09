@@ -334,11 +334,14 @@ export function RenewalOperationsCenter() {
       });
 
       const json = await res.json();
-      if (!json.success || !json.data) {
+      if (!json.data) {
         throw new Error(json.error?.message || "Authorization processing failed");
       }
 
-      const isCompensated = options?.simulateSagaFailure || json.data.status === "failed";
+      const isCompensated =
+        options?.simulateSagaFailure ||
+        json.data.status === "failed" ||
+        json.data.status === "escalated";
 
       setSagaState((prev) => ({
         ...prev,
