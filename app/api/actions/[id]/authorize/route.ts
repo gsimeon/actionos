@@ -113,9 +113,9 @@ export async function POST(
       );
     }
 
-    // 4. Authoritative quote expiry check against persisted quote entity
+    // 4. Authoritative quote validation & expiry check against persisted quote entity
     const targetQuoteId = requestedQuoteId || (session.metadata?.authorizationDetails as AuthorizationDetails | undefined)?.quoteId;
-    if (targetQuoteId) {
+    if (targetQuoteId && validated.data.authorized) {
       const quoteMap = session.metadata?.providerToCanonicalQuoteMap as Record<string, string> | undefined;
       const canonicalQuoteId = quoteMap?.[targetQuoteId] || targetQuoteId;
       const persistedQuote = await repos.quotes.findById(canonicalQuoteId, {
@@ -124,7 +124,20 @@ export async function POST(
         role: context.role,
       });
 
-      if (persistedQuote && new Date(persistedQuote.expires_at).getTime() < Date.now()) {
+      if (!persistedQuote) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: {
+              code: "QUOTE_NOT_FOUND",
+              message: `Requested quote '${targetQuoteId}' was not found or does not belong to tenant.`,
+            },
+          },
+          { status: 404 }
+        );
+      }
+
+      if (new Date(persistedQuote.expires_at).getTime() < Date.now()) {
         return NextResponse.json(
           {
             success: false,

@@ -402,6 +402,33 @@ describe("Atomic Authorization, Recoverable Execution & Security Hardening", () 
       assert.ok(json.data.events.some((e: { isCompensating?: boolean }) => e.isCompensating));
     });
 
+    it("should return HTTP 404 with QUOTE_NOT_FOUND when authorizedQuoteId does not exist in repository", async () => {
+      resetStore();
+      const startRes = await orchestrator.startWorkflow({
+        inputText: "Renew my insurance policy AUTO-2026-00182",
+        channel: "web",
+        executionContext: DEMO_CONTEXT,
+      });
+
+      const req = new Request(`http://localhost:3000/api/actions/${startRes.sessionId}/authorize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          authorized: true,
+          authorizedQuoteId: "quote_non_existent_fake_id_123",
+        }),
+      });
+
+      const res = await authorizeHandler(req, {
+        params: Promise.resolve({ id: startRes.sessionId }),
+      });
+
+      assert.equal(res.status, 404);
+      const json = await res.json();
+      assert.equal(json.success, false);
+      assert.equal(json.error.code, "QUOTE_NOT_FOUND");
+    });
+
     it("should return HTTP 400 on POST /api/actions when request body is invalid", async () => {
       const req = new Request("http://localhost:3000/api/actions", {
         method: "POST",
