@@ -39,7 +39,65 @@ export interface QuoteSignaturePayload {
 }
 
 /**
+ * Deterministically serializes an immutable quote payload into an unambiguous canonical JSON string.
+ * Normalizes:
+ * - amount: strictly finite positive number
+ * - currency: trimmed uppercase ISO code (e.g., 'NGN', 'USD')
+ * - expiresAt: strict ISO 8601 string representation via Date.toISOString()
+ * - optional string fields (providerReference, underwriterId): trimmed string or null
+ * - all keys sorted lexicographically
+ * 
+ * Prevents delimiter collision attacks that arise with colon-delimited or character-concatenated formats.
+ */
+export function serializeCanonicalQuotePayload(payload: QuoteSignaturePayload): string {
+  const amountNum = Number(payload.amount);
+  if (!Number.isFinite(amountNum) || amountNum < 0) {
+    throw new Error(`Invalid quote amount for canonical serialization: ${payload.amount}`);
+  }
+
+  const currencyNorm = (payload.currency || "NGN").trim().toUpperCase();
+
+  const expiryDate = new Date(payload.expiresAt);
+  if (isNaN(expiryDate.getTime())) {
+    throw new Error(`Invalid expiresAt timestamp for canonical serialization: ${payload.expiresAt}`);
+  }
+  const expiresAtNorm = expiryDate.toISOString();
+
+  const providerRefNorm =
+    payload.providerReference !== undefined &&
+    payload.providerReference !== null &&
+    String(payload.providerReference).trim().length > 0
+      ? String(payload.providerReference).trim()
+      : null;
+
+  const underwriterIdNorm =
+    payload.underwriterId !== undefined &&
+    payload.underwriterId !== null &&
+    String(payload.underwriterId).trim().length > 0
+      ? String(payload.underwriterId).trim()
+      : null;
+
+  // Strict lexicographically sorted object for deterministic canonical JSON representation
+  const canonicalObject = {
+    amount: amountNum,
+    currency: currencyNorm,
+    customerId: String(payload.customerId || "").trim(),
+    expiresAt: expiresAtNorm,
+    organizationId: String(payload.organizationId || "").trim(),
+    policyId: String(payload.policyId || "").trim(),
+    providerName: String(payload.providerName || "").trim(),
+    providerReference: providerRefNorm,
+    sessionId: String(payload.sessionId || "").trim(),
+    underwriterId: underwriterIdNorm,
+    version: QUOTE_SIGNATURE_VERSION,
+  };
+
+  return JSON.stringify(canonicalObject);
+}
+
+/**
  * Computes a keyed quote-integrity signature using HMAC-SHA256 for an immutable quote.
+ * Uses deterministic canonical JSON serialization to eliminate delimiter collisions.
  * Protects against database-level tampering by requiring the server's private signing key.
  * Binds provider_reference and underwriterId into canonical payload to protect settlement provider identity.
  */
@@ -47,9 +105,7 @@ export function computeQuoteSignature(payload: QuoteSignaturePayload): {
   quoteHash: string;
   signatureVersion: string;
 } {
-  const providerRef = payload.providerReference || "";
-  const underwriterId = payload.underwriterId || "";
-  const canonicalString = `${QUOTE_SIGNATURE_VERSION}:${payload.sessionId}:${payload.organizationId}:${payload.customerId}:${payload.policyId}:${payload.providerName}:${payload.amount}:${payload.currency}:${payload.expiresAt}:${providerRef}:${underwriterId}`;
+  const canonicalString = serializeCanonicalQuotePayload(payload);
   const hmac = crypto.createHmac("sha256", getQuoteSigningSecret());
   const quoteHash = hmac.update(canonicalString).digest("hex");
   return {

@@ -29,9 +29,28 @@ import { computeQuoteSignature, verifyQuoteSignature } from "@/lib/actionos/quot
 import { getPaymentProvider } from "@/lib/payments";
 import type { RefundPaymentInput } from "./tools/refund-payment";
 
+/**
+ * Sanitizes audio URLs by stripping query parameters (access tokens, SAS tokens, HMAC signatures)
+ * to ensure sensitive credentials are never stored in database records or logs.
+ */
+export function sanitizeAudioUrl(rawUrl?: string | null): string | null {
+  if (!rawUrl || typeof rawUrl !== "string") return null;
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = new URL(trimmed);
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return trimmed.split("?")[0].split("#")[0];
+  }
+}
+
 export interface StartWorkflowInput {
   inputText: string;
   inputAudioUrl?: string;
+  retainAudio?: boolean;
   channel: "web" | "voice" | "whatsapp" | "telegram" | "api";
   language?: string;
   executionContext: AuthenticatedExecutionContext | WorkflowExecutionContext;
@@ -122,9 +141,7 @@ export class ActionOSOrchestrator {
         ? events[events.length - 1].hash!
         : GENESIS_LEDGER_HASH;
 
-    const hash = computeEventHash(sanitizedEv, previousHash);
-    const signature = signEventHash(hash);
-
+    const sequenceNumber = events.length + 1;
     const eventClass =
       ev.eventClass ||
       (ev.action.includes("payment") ||
@@ -135,15 +152,25 @@ export class ActionOSOrchestrator {
         : ev.action.includes("authorization") || ev.action.includes("certificate")
         ? "consequential"
         : "informational");
+    const signingKeyVersion = "v1-2026";
+    const isCompensating = Boolean(ev.isCompensating);
+
+    const eventToHash: ActionLedgerEvent = {
+      ...sanitizedEv,
+      sequenceNumber,
+      previousHash,
+      eventClass,
+      signingKeyVersion,
+      isCompensating,
+    } as ActionLedgerEvent;
+
+    const hash = computeEventHash(eventToHash, previousHash);
+    const signature = signEventHash(hash);
 
     const completeEvent: ActionLedgerEvent = {
-      ...sanitizedEv,
-      sequenceNumber: events.length + 1,
-      previousHash,
+      ...eventToHash,
       hash,
       signature,
-      signingKeyVersion: "v1-2026",
-      eventClass,
     };
 
     events.push(completeEvent);
@@ -211,6 +238,11 @@ export class ActionOSOrchestrator {
     const sm = new ActionStateMachine("received");
     const events: ActionLedgerEvent[] = [];
 
+    const retainAudio = Boolean(input.retainAudio);
+    const sanitizedAudioUrl = sanitizeAudioUrl(input.inputAudioUrl);
+    // If raw input retention is false (default privacy policy), do NOT persist raw audio or signed URLs.
+    const persistedAudioUrl = retainAudio ? sanitizedAudioUrl : null;
+
     // Session record persisted via repository
     const session = await repos.sessions.create({
       id: sessionId,
@@ -219,13 +251,24 @@ export class ActionOSOrchestrator {
       channel: input.channel,
       language: input.language || "en-NG",
       input_text: redactSensitiveInput(input.inputText),
-      input_audio_url: input.inputAudioUrl || null,
+      input_audio_url: persistedAudioUrl,
       intent: null,
       status: "received",
       metadata: {
         aiProvider: this.nAtlas.name,
+        audioHandling: input.inputAudioUrl
+          ? {
+              audioProvided: true,
+              rawInputRetained: retainAudio,
+              audioSanitized: true,
+              ephemeralProcessed: true,
+              storageBehavior: retainAudio ? "sanitized_persisted" : "ephemeral_discarded_post_transcription",
+            }
+          : undefined,
         retentionPolicy: {
-          rawInputRetained: false,
+          rawInputRetained: retainAudio,
+          rawAudioRetained: retainAudio,
+          audioRetentionMode: retainAudio ? "sanitized_retained" : "ephemeral_discarded_post_transcription",
           piiRedacted: true,
           auditRetentionDays: 90,
           retentionPeriodDays: 90,

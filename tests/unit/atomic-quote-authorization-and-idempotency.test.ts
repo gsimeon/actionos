@@ -8,7 +8,7 @@ import { mockPaymentProvider } from "@/lib/payments/mock";
 import { POST as paymentWebhookHandler } from "@/app/api/webhooks/payment/route";
 import { toolRegistry } from "@/lib/actionos/tool-registry";
 import { computeQuoteSignature, verifyQuoteSignature, getQuoteSigningSecret } from "@/lib/actionos/quote-signature";
-import { verifyLedgerIntegrity } from "@/lib/actionos/crypto-ledger";
+import { computeEventHash, verifyLedgerIntegrity } from "@/lib/actionos/crypto-ledger";
 import type { GetQuoteInput } from "@/lib/actionos/tools/get-quote";
 import type { WorkflowExecutionContext } from "@/types/actionos";
 import { SupabaseActionSessionRepository } from "@/lib/repositories/supabase/supabase-repositories";
@@ -573,18 +573,23 @@ describe("Atomic Quote Authorization, Idempotency & Financial Execution Integrit
   });
 
   it("should detect broken sequence continuity and tampering in Action Ledger", () => {
+    const ev1Base = {
+      id: "ev_1",
+      sessionId: "sess_test",
+      sequenceNumber: 1,
+      timestamp: "2026-10-08T00:00:00Z",
+      action: "action_1",
+      description: "first action",
+      actor: "User" as const,
+      status: "verified" as const,
+      previousHash: "0000000000000000000000000000000000000000000000000000000000000000",
+    };
+    const ev1Hash = computeEventHash(ev1Base, ev1Base.previousHash);
+
     const validEvents = [
       {
-        id: "ev_1",
-        sessionId: "sess_test",
-        sequenceNumber: 1,
-        timestamp: "2026-10-08T00:00:00Z",
-        action: "action_1",
-        description: "first action",
-        actor: "User" as const,
-        status: "verified" as const,
-        previousHash: "0000000000000000000000000000000000000000000000000000000000000000",
-        hash: "",
+        ...ev1Base,
+        hash: ev1Hash,
       },
       {
         id: "ev_2",
@@ -595,8 +600,8 @@ describe("Atomic Quote Authorization, Idempotency & Financial Execution Integrit
         description: "second action",
         actor: "User" as const,
         status: "verified" as const,
-        previousHash: "",
-        hash: "",
+        previousHash: ev1Hash,
+        hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       },
     ];
 

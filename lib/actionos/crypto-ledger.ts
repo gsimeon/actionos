@@ -69,7 +69,8 @@ export function getLedgerKeyInfo(): LedgerKeyInfo {
 
 /**
  * Deterministically compute the SHA-256 hash of an Action Ledger event
- * incorporating previous event hash, timestamp, actor, action, and payload.
+ * incorporating sequenceNumber, previous event hash, timestamp, actor, action,
+ * eventClass, signingKeyVersion, isCompensating, and payload metadata.
  */
 export function computeEventHash(
   event: Partial<ActionLedgerEvent>,
@@ -83,19 +84,24 @@ export function computeEventHash(
       return acc;
     }, {});
 
-  const content = JSON.stringify({
-    previousHash,
-    sessionId: event.sessionId,
-    timestamp: event.timestamp,
-    action: event.action,
-    description: event.description,
-    actor: event.actor,
-    status: event.status,
-    tool: event.tool,
-    referenceId: event.referenceId,
+  const canonicalPayload = {
+    action: String(event.action || ""),
+    actor: String(event.actor || ""),
+    description: String(event.description || ""),
+    eventClass: event.eventClass || null,
+    isCompensating: Boolean(event.isCompensating),
     metadata: sortedMetadata,
-  });
+    previousHash: String(previousHash || GENESIS_LEDGER_HASH),
+    referenceId: event.referenceId || null,
+    sequenceNumber: typeof event.sequenceNumber === "number" ? event.sequenceNumber : null,
+    sessionId: String(event.sessionId || ""),
+    signingKeyVersion: event.signingKeyVersion || null,
+    status: String(event.status || ""),
+    timestamp: String(event.timestamp || ""),
+    tool: event.tool || null,
+  };
 
+  const content = JSON.stringify(canonicalPayload);
   return crypto.createHash("sha256").update(content).digest("hex");
 }
 
@@ -128,12 +134,24 @@ export function verifyEventSignature(
   }
 }
 
+export interface VerifyLedgerIntegrityOptions {
+  verifySignatures?: boolean;
+  requireKeyVersion?: string;
+}
+
 /**
- * Verify complete cryptographic hash chain integrity of the Action Ledger
+ * Verify complete cryptographic hash chain integrity of the Action Ledger.
+ * Strictly verifies:
+ * 1. 1-indexed sequence continuity (rejects skipped, missing, or negative sequence numbers)
+ * 2. Unbroken previousHash linking (rejects missing or mismatched previousHash links)
+ * 3. Valid 64-hex SHA-256 event hash (rejects missing or malformed hashes)
+ * 4. Exact recomputed event hash match over canonical payload
+ * 5. Signing key version alignment (if requested via requireKeyVersion)
+ * 6. Authentic Ed25519 digital signatures (if requested via verifySignatures)
  */
 export function verifyLedgerIntegrity(
   events: ActionLedgerEvent[],
-  options?: { verifySignatures?: boolean }
+  options?: VerifyLedgerIntegrityOptions
 ): {
   valid: boolean;
   tamperedIndex?: number;
@@ -148,52 +166,80 @@ export function verifyLedgerIntegrity(
   for (let i = 0; i < events.length; i++) {
     const ev = events[i];
 
-    // Verify sequence continuity if sequenceNumber is defined on events
-    if (typeof ev.sequenceNumber === "number") {
-      const expectedSeq = i + 1;
-      if (ev.sequenceNumber !== expectedSeq) {
-        return {
-          valid: false,
-          tamperedIndex: i,
-          reason: `Broken sequence continuity at index ${i}: expected sequence number ${expectedSeq} but got ${ev.sequenceNumber}`,
-        };
-      }
-    }
-
-    // Verify previous hash link
-    if (ev.previousHash && ev.previousHash !== expectedPrevHash) {
+    // 1. Strictly require sequence number continuity (1-indexed)
+    const expectedSeq = i + 1;
+    if (typeof ev.sequenceNumber !== "number" || ev.sequenceNumber !== expectedSeq) {
       return {
         valid: false,
         tamperedIndex: i,
-        reason: `Broken chain link at index ${i}: expected prevHash ${expectedPrevHash.substring(0, 8)}... but got ${ev.previousHash?.substring(0, 8)}...`,
+        reason: `Broken sequence continuity at index ${i}: expected sequence number ${expectedSeq} but got ${ev.sequenceNumber}`,
       };
     }
 
-    // Verify current hash computation
-    if (ev.hash) {
-      const computed = computeEventHash(ev, expectedPrevHash);
-      if (computed !== ev.hash) {
+    // 2. Strictly require previousHash link
+    if (!ev.previousHash || typeof ev.previousHash !== "string") {
+      return {
+        valid: false,
+        tamperedIndex: i,
+        reason: `Missing previousHash at index ${i}`,
+      };
+    }
+    if (ev.previousHash !== expectedPrevHash) {
+      return {
+        valid: false,
+        tamperedIndex: i,
+        reason: `Broken chain link at index ${i}: expected prevHash ${expectedPrevHash.substring(0, 8)}... but got ${ev.previousHash.substring(0, 8)}...`,
+      };
+    }
+
+    // 3. Strictly require valid 64-hex SHA-256 event hash
+    if (!ev.hash || typeof ev.hash !== "string" || !/^[0-9a-fA-F]{64}$/.test(ev.hash)) {
+      return {
+        valid: false,
+        tamperedIndex: i,
+        reason: `Missing or malformed event hash at index ${i}`,
+      };
+    }
+
+    // 4. Recompute event hash over canonical payload and verify exact match
+    const computed = computeEventHash(ev, expectedPrevHash);
+    if (computed !== ev.hash) {
+      return {
+        valid: false,
+        tamperedIndex: i,
+        reason: `Invalid event hash at index ${i}: computed ${computed.substring(0, 8)}... but got ${ev.hash.substring(0, 8)}...`,
+      };
+    }
+
+    // 5. Require and verify key version if specified
+    if (options?.requireKeyVersion && ev.signingKeyVersion !== options.requireKeyVersion) {
+      return {
+        valid: false,
+        tamperedIndex: i,
+        reason: `Invalid signing key version at index ${i}: expected ${options.requireKeyVersion} but got ${ev.signingKeyVersion}`,
+      };
+    }
+
+    // 6. Verify digital signature if requested
+    if (options?.verifySignatures) {
+      if (!ev.signature || typeof ev.signature !== "string" || !/^[0-9a-fA-F]{128}$/.test(ev.signature)) {
         return {
           valid: false,
           tamperedIndex: i,
-          reason: `Invalid event hash at index ${i}: computed ${computed.substring(0, 8)}... but got ${ev.hash.substring(0, 8)}...`,
+          reason: `Missing or malformed Ed25519 signature at index ${i}`,
         };
       }
-
-      // Optionally verify digital signature
-      if (options?.verifySignatures && ev.signature) {
-        const sigValid = verifyEventSignature(ev.hash, ev.signature);
-        if (!sigValid) {
-          return {
-            valid: false,
-            tamperedIndex: i,
-            reason: `Invalid Ed25519 signature at index ${i}: signature does not match event hash`,
-          };
-        }
+      const sigValid = verifyEventSignature(ev.hash, ev.signature);
+      if (!sigValid) {
+        return {
+          valid: false,
+          tamperedIndex: i,
+          reason: `Invalid Ed25519 signature at index ${i}: signature does not match event hash`,
+        };
       }
-
-      expectedPrevHash = ev.hash;
     }
+
+    expectedPrevHash = ev.hash;
   }
 
   return { valid: true };

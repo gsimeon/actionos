@@ -5,6 +5,7 @@ import {
   computeQuoteSignature,
   verifyQuoteSignature,
   getQuoteSigningSecret,
+  serializeCanonicalQuotePayload,
 } from "@/lib/actionos/quote-signature";
 import { orchestrator } from "@/lib/actionos/orchestrator";
 import { resetStore } from "@/lib/actionos/mock-store";
@@ -486,6 +487,115 @@ describe("Quote Signature Production Hardening & Regression Suite", () => {
       );
 
       assert.equal(execRes.status, "completed");
+    });
+  });
+
+  describe("Unambiguous Canonical JSON Serialization & Delimiter Collision Hardening", () => {
+    const basePayload = {
+      sessionId: "ses_col_001",
+      organizationId: "org_col_001",
+      customerId: "cust_col_001",
+      policyId: "pol_col_001",
+      providerName: "Leadway Assurance",
+      amount: 85000,
+      currency: "NGN",
+      expiresAt: "2026-12-31T23:59:59.000Z",
+    };
+
+    it("should prevent delimiter collision when fields contain colons", () => {
+      // Scenario that causes delimiter ambiguity in colon-separated format:
+      // In `${version}:${sess}:${org}:${cust}:${pol}:${prov}:${amount}:${curr}:${exp}:${providerRef}:${underwriterId}`
+      // Payload A: providerReference: "ref:part1", underwriterId: "part2" -> "...:ref:part1:part2"
+      // Payload B: providerReference: "ref", underwriterId: "part1:part2" -> "...:ref:part1:part2"
+      // In colon concatenation, both would produce identical strings!
+      const payloadA = {
+        ...basePayload,
+        providerReference: "leadway:ref_branch_01",
+        underwriterId: "tier_gold",
+      };
+      const payloadB = {
+        ...basePayload,
+        providerReference: "leadway",
+        underwriterId: "ref_branch_01:tier_gold",
+      };
+
+      const serialA = serializeCanonicalQuotePayload(payloadA);
+      const serialB = serializeCanonicalQuotePayload(payloadB);
+
+      assert.notEqual(serialA, serialB, "Canonical JSON must not collide on colon characters across fields");
+
+      const sigA = computeQuoteSignature(payloadA);
+      const sigB = computeQuoteSignature(payloadB);
+      assert.notEqual(sigA.quoteHash, sigB.quoteHash, "Signatures for distinct field combinations must never collide");
+    });
+
+    it("should normalize currency case deterministically (ngn vs NGN)", () => {
+      const payloadLower = { ...basePayload, currency: "ngn" };
+      const payloadUpper = { ...basePayload, currency: "NGN" };
+
+      const serialLower = serializeCanonicalQuotePayload(payloadLower);
+      const serialUpper = serializeCanonicalQuotePayload(payloadUpper);
+
+      assert.equal(serialLower, serialUpper, "Currency must be normalized to uppercase");
+      assert.equal(
+        computeQuoteSignature(payloadLower).quoteHash,
+        computeQuoteSignature(payloadUpper).quoteHash,
+        "Case variation in currency must produce identical canonical signatures"
+      );
+    });
+
+    it("should normalize equivalent ISO date timestamps", () => {
+      const payloadWithZ = { ...basePayload, expiresAt: "2026-12-31T23:59:59Z" };
+      const payloadWithMs = { ...basePayload, expiresAt: "2026-12-31T23:59:59.000Z" };
+
+      const serial1 = serializeCanonicalQuotePayload(payloadWithZ);
+      const serial2 = serializeCanonicalQuotePayload(payloadWithMs);
+
+      assert.equal(serial1, serial2, "Date strings must normalize to equivalent ISO representation");
+      assert.equal(
+        computeQuoteSignature(payloadWithZ).quoteHash,
+        computeQuoteSignature(payloadWithMs).quoteHash
+      );
+    });
+
+    it("should normalize optional fields (undefined vs null vs empty string) deterministically", () => {
+      const payloadUndef = {
+        ...basePayload,
+        providerReference: undefined,
+        underwriterId: undefined,
+      };
+      const payloadNull = {
+        ...basePayload,
+        providerReference: null,
+        underwriterId: null,
+      };
+      const payloadEmpty = {
+        ...basePayload,
+        providerReference: "   ",
+        underwriterId: "",
+      };
+
+      const serialUndef = serializeCanonicalQuotePayload(payloadUndef);
+      const serialNull = serializeCanonicalQuotePayload(payloadNull);
+      const serialEmpty = serializeCanonicalQuotePayload(payloadEmpty);
+
+      assert.equal(serialUndef, serialNull);
+      assert.equal(serialNull, serialEmpty);
+    });
+
+    it("should throw on invalid quote amounts or invalid timestamps during canonical serialization", () => {
+      assert.throws(
+        () => serializeCanonicalQuotePayload({ ...basePayload, amount: -500 }),
+        /Invalid quote amount/
+      );
+      assert.throws(
+        () => serializeCanonicalQuotePayload({ ...basePayload, amount: NaN }),
+        /Invalid quote amount/
+      );
+      assert.throws(
+        () => serializeCanonicalQuotePayload({ ...basePayload, expiresAt: "not-a-valid-date" }),
+        /Invalid expiresAt timestamp/
+      );
     });
   });
 });

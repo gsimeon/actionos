@@ -1151,7 +1151,9 @@ export class SupabaseLedgerRepository implements ILedgerRepository {
         previous_hash: event.previousHash ?? "",
         event_hash: event.hash ?? "",
         signature: event.signature ?? "",
-        signing_key_version: event.signingKeyVersion ?? "v1",
+        signing_key_version: event.signingKeyVersion ?? "v1-2026",
+        event_class: event.eventClass ?? "informational",
+        is_compensating: Boolean(event.isCompensating),
         metadata: event.metadata ?? {},
       });
     if (error) {
@@ -1202,7 +1204,9 @@ export class SupabaseLedgerRepository implements ILedgerRepository {
       hash: row.event_hash,
       signature: row.signature,
       signingKeyVersion: row.signing_key_version,
-      metadata: row.metadata as Record<string, unknown>,
+      eventClass: (row.event_class as ActionLedgerEvent["eventClass"]) || undefined,
+      isCompensating: typeof row.is_compensating === "boolean" ? row.is_compensating : undefined,
+      metadata: (row.metadata as Record<string, unknown>) || {},
     }));
   }
 }
