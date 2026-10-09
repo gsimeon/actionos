@@ -92,6 +92,11 @@ export function redactSensitiveObject<T>(obj: T): T {
   return obj;
 }
 
+export function formatCurrency(amount: number, currency: string = "NGN"): string {
+  if (currency === "NGN") return formatNaira(amount);
+  return `${currency} ${amount.toLocaleString()}`;
+}
+
 export class ActionOSOrchestrator {
   private nAtlas = createNAtlasProvider();
   private planner = new ActionOSPlanner();
@@ -644,12 +649,12 @@ export class ActionOSOrchestrator {
         sessionId,
         timestamp: new Date().toISOString(),
         action: "authorization_requested",
-        description: `Authorization requested for ₦${quoteAmount.toLocaleString()} to renew ${activePolicy.policy_number}`,
+        description: `Authorization requested for ${formatCurrency(quoteAmount, targetCurrency)} to renew ${activePolicy.policy_number}`,
         status: "pending",
         actor: "Policy Guardrail",
         metadata: {
           amount: quoteAmount,
-          currency: "NGN",
+          currency: targetCurrency,
           quotesCount: availableQuotes.length,
           policy: activePolicy.policy_number,
           expiry: activePolicy.expiry_date,
@@ -662,7 +667,7 @@ export class ActionOSOrchestrator {
         policyNumber: activePolicy.policy_number,
       });
 
-      responseMessage = `Found your policy ${activePolicy.policy_number} for ${authDetails!.assetName}. It expires on ${formatDate(activePolicy.expiry_date)}. Renewal quote is ${formatNaira(quoteAmount)}. Do you authorize payment and renewal?`;
+      responseMessage = `Found your policy ${activePolicy.policy_number} for ${authDetails!.assetName}. It expires on ${formatDate(activePolicy.expiry_date)}. Renewal quote is ${formatCurrency(quoteAmount, targetCurrency)}. Do you authorize payment and renewal?`;
 
       return {
         sessionId,
@@ -673,7 +678,7 @@ export class ActionOSOrchestrator {
         authorizationRequired: true,
         authorizationDetails: authDetails,
         amount: quoteAmount,
-        currency: "NGN",
+        currency: targetCurrency,
         events,
       };
     }
@@ -1368,7 +1373,7 @@ export class ActionOSOrchestrator {
             intent: plan.intent,
             confidence: plan.confidence,
             message: refundOutcome.success
-              ? `Saga Rollback Triggered: Certificate generation failed, but your payment of ${formatNaira(quoteAmount)} was automatically refunded.`
+              ? `Saga Rollback Triggered: Certificate generation failed, but your payment of ${formatCurrency(quoteAmount, quoteCurrency)} was automatically refunded.`
               : `Saga Rollback Incomplete: Certificate generation failed and automatic refund could not be verified (${refundOutcome.error || "Gateway rejected"}). Your account was NOT credited. Escalated for manual supervisor refund.`,
             authorizationRequired: false,
             authorizationDetails: null,
@@ -1450,8 +1455,8 @@ export class ActionOSOrchestrator {
             intent: plan.intent,
             confidence: plan.confidence,
             message: refundOutcome.success
-              ? `Execution halted at step '${step.tool_name}': ${result.error?.message}. Payment of ${formatNaira(quoteAmount)} was automatically refunded.`
-              : `Execution halted at step '${step.tool_name}': ${result.error?.message}. Automated refund of ${formatNaira(quoteAmount)} could not be verified. Escalated for supervisor review.`,
+              ? `Execution halted at step '${step.tool_name}': ${result.error?.message}. Payment of ${formatCurrency(quoteAmount, quoteCurrency)} was automatically refunded.`
+              : `Execution halted at step '${step.tool_name}': ${result.error?.message}. Automated refund of ${formatCurrency(quoteAmount, quoteCurrency)} could not be verified. Escalated for supervisor review.`,
             authorizationRequired: false,
             authorizationDetails: null,
             events,
@@ -1616,7 +1621,7 @@ export class ActionOSOrchestrator {
             intent: plan.intent,
             confidence: plan.confidence,
             message: refundOutcome.success
-              ? `Verification check failed: ${verifyRenewalResult.reason}. Your payment of ${formatNaira(quoteAmount)} was automatically refunded and verified.`
+              ? `Verification check failed: ${verifyRenewalResult.reason}. Your payment of ${formatCurrency(quoteAmount, quoteCurrency)} was automatically refunded and verified.`
               : `Verification check failed: ${verifyRenewalResult.reason}. An automated refund could not be verified. Escalated for human supervisor reconciliation.`,
             authorizationRequired: false,
             authorizationDetails: null,
@@ -1709,7 +1714,7 @@ export class ActionOSOrchestrator {
         intent: plan.intent,
         confidence: plan.confidence,
         message: refundSuccess
-          ? `We ran into an issue executing your action: ${errMsg}. Your payment of ${formatNaira(quoteAmount)} was automatically refunded.`
+          ? `We ran into an issue executing your action: ${errMsg}. Your payment of ${formatCurrency(quoteAmount, quoteCurrency)} was automatically refunded.`
           : `We ran into an issue executing your action: ${errMsg}. An automated refund could not be verified. A supervisor has been alerted to review your account.`,
         authorizationRequired: false,
         authorizationDetails: null,
