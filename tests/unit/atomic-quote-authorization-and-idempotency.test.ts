@@ -605,6 +605,61 @@ describe("Atomic Quote Authorization, Idempotency & Financial Execution Integrit
     assert.match(result.reason || "", /Broken sequence continuity/);
   });
 
+  it("should detect tampering when persisted ledger events are modified, deleted, or reordered after reload", async () => {
+    resetStore();
+    const repos = getRepositoryContainer();
+
+    // 1. Run renewal workflow to generate a real chained ledger
+    const startRes = await orchestrator.startWorkflow({
+      inputText: "Renew my Toyota Camry insurance AUTO-2026-00182",
+      channel: "web",
+      executionContext: DEMO_CONTEXT,
+    });
+    assert.equal(startRes.status, "awaiting_authorization");
+
+    const authRes = await orchestrator.authorizeAndExecute(
+      startRes.sessionId,
+      true,
+      DEMO_CONTEXT,
+      {
+        quoteId: startRes.authorizationDetails!.quoteId,
+        authorizedQuoteId: startRes.authorizationDetails!.quoteId,
+      }
+    );
+    assert.equal(authRes.status, "completed");
+
+    // 2. Fetch persisted events from repository
+    const persistedEvents = await repos.ledger.getEventsBySessionId(startRes.sessionId, DEMO_CONTEXT);
+    assert.ok(persistedEvents.length >= 3, "Workflow must produce multiple chained ledger events");
+
+    // 3. Verify clean baseline passes integrity check
+    const baselineCheck = verifyLedgerIntegrity(persistedEvents);
+    assert.equal(baselineCheck.valid, true, "Unmodified persisted ledger must be cryptographically valid");
+
+    // 4. Tampering Case A: Modify an entry's description or payload
+    const modifiedEvents = JSON.parse(JSON.stringify(persistedEvents));
+    modifiedEvents[1].description = "Tampered payment amount or altered description";
+    const modCheck = verifyLedgerIntegrity(modifiedEvents);
+    assert.equal(modCheck.valid, false, "Modified event must fail cryptographic hash verification");
+    assert.match(modCheck.reason || "", /Invalid event hash/);
+
+    // 5. Tampering Case B: Delete an intermediate ledger entry
+    const deletedEvents = JSON.parse(JSON.stringify(persistedEvents));
+    deletedEvents.splice(1, 1); // Remove intermediate event
+    const delCheck = verifyLedgerIntegrity(deletedEvents);
+    assert.equal(delCheck.valid, false, "Deleted ledger event must break sequence or previous hash link");
+    assert.match(delCheck.reason || "", /Broken sequence continuity|Broken chain link/);
+
+    // 6. Tampering Case C: Reorder two ledger entries
+    const reorderedEvents = JSON.parse(JSON.stringify(persistedEvents));
+    const temp = reorderedEvents[0];
+    reorderedEvents[0] = reorderedEvents[1];
+    reorderedEvents[1] = temp;
+    const reorderCheck = verifyLedgerIntegrity(reorderedEvents);
+    assert.equal(reorderCheck.valid, false, "Reordered ledger entries must fail sequence verification");
+    assert.match(reorderCheck.reason || "", /Broken sequence continuity|Broken chain link/);
+  });
+
   it("should fail closed on ledger event queries when parent session does not exist or cross-tenant context is provided", async () => {
     resetStore();
     const repos = getRepositoryContainer();
