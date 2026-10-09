@@ -60,6 +60,10 @@ export interface IActionSessionRepository {
     quoteId: string,
     tenant?: TenantContext
   ): Promise<{ session: ActionSession; quote: Quote } | null>;
+  findPendingReconciliation(
+    options?: { organizationId?: string; limit?: number },
+    tenant?: TenantContext
+  ): Promise<ActionSession[]>;
 }
 
 export interface IActionPlanRepository {

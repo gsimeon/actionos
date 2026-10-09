@@ -670,6 +670,43 @@ export class SupabaseActionSessionRepository implements IActionSessionRepository
 
     return null;
   }
+
+  async findPendingReconciliation(
+    options?: { organizationId?: string; limit?: number },
+    tenant?: TenantContext
+  ): Promise<ActionSession[]> {
+    let query = this.client
+      .from("action_sessions")
+      .select("*")
+      .in("status", ["executing", "escalated"])
+      .order("created_at", { ascending: true })
+      .limit(options?.limit || 50);
+
+    const orgId = tenant?.organizationId || options?.organizationId;
+    if (orgId) {
+      query = query.eq("organization_id", orgId);
+    }
+    if (tenant?.customerId) {
+      query = query.eq("customer_id", tenant.customerId);
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      throw new DatabaseError(`Failed to fetch pending reconciliation sessions: ${error.message}`, error.code, error);
+    }
+
+    const sessions = (data || []) as ActionSession[];
+    return sessions.filter((s) => {
+      const meta = (s.metadata || {}) as Record<string, unknown>;
+      return Boolean(
+        meta.reconciliation_required === true ||
+        meta.requiresDeferredReconciliation === true ||
+        meta.requiresManualRefund === true ||
+        meta.refundState === "refund_pending" ||
+        meta.refundState === "refund_unknown"
+      );
+    });
+  }
 }
 
 export class SupabaseActionPlanRepository implements IActionPlanRepository {

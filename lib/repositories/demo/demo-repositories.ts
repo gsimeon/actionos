@@ -72,7 +72,7 @@ export class DemoCustomerRepository implements ICustomerRepository {
     return store.customers.filter((c) => c.organization_id === orgId);
   }
 
-  async create(data: Partial<Customer> & { customer_number: string; full_name: string; phone: string; email: string; organization_id: string }): Promise<Customer> {
+  async create(data: Partial<Customer> & { customer_number: string; full_name: string; phone: string; email: string; organization_id: string }, _tenant?: TenantContext): Promise<Customer> {
     const store = getStore();
     const customer: Customer = {
       id: data.id || generateDemoId("demo_cus"),
@@ -417,6 +417,31 @@ export class DemoActionSessionRepository implements IActionSessionRepository {
     session.status = "executing";
     quote.status = "accepted";
     return { session, quote };
+  }
+
+  async findPendingReconciliation(
+    options?: { organizationId?: string; limit?: number },
+    tenant?: TenantContext
+  ): Promise<ActionSession[]> {
+    const store = getStore();
+    const orgId = tenant?.organizationId || options?.organizationId;
+    let list = store.sessions.filter((s) => {
+      if (orgId && s.organization_id !== orgId) return false;
+      if (tenant?.customerId && s.customer_id && s.customer_id !== tenant.customerId) return false;
+      if (s.status !== "executing" && s.status !== "escalated") return false;
+      const meta = s.metadata || {};
+      return Boolean(
+        meta.reconciliation_required === true ||
+        meta.requiresDeferredReconciliation === true ||
+        meta.requiresManualRefund === true ||
+        meta.refundState === "refund_pending" ||
+        meta.refundState === "refund_unknown"
+      );
+    });
+    if (options?.limit) {
+      list = list.slice(0, options.limit);
+    }
+    return list;
   }
 }
 

@@ -9,7 +9,9 @@ export interface OutboundWebhookPayload<T = Record<string, unknown>> {
     | "payment.verified"
     | "policy.renewed"
     | "saga.compensated"
-    | "saga.compensation_failed";
+    | "saga.compensation_failed"
+    | "recovery.reconciled"
+    | "recovery.dead_lettered";
   timestamp: string;
   data: T;
   signature?: string;
