@@ -4,6 +4,32 @@ import { getRepositoryContainer } from "@/lib/repositories";
 import { isProductionMode } from "@/lib/runtime/mode";
 import type { PaymentWebhookPayload } from "@/types/api";
 
+/**
+ * Cryptographically verifies Paystack webhook authenticity against the raw request body.
+ * Uses HMAC-SHA512 with timingSafeEqual to prevent signature tampering or timing attacks.
+ */
+export function verifyPaystackWebhookSignature(
+  rawBody: string,
+  signature: string | null | undefined,
+  secretKey?: string
+): boolean {
+  const secret = secretKey || process.env.PAYSTACK_SECRET_KEY;
+  if (!secret || !signature) {
+    return false;
+  }
+  try {
+    const computedHash = crypto.createHmac("sha512", secret).update(rawBody).digest("hex");
+    const computedBuf = Buffer.from(computedHash, "utf8");
+    const sigBuf = Buffer.from(signature, "utf8");
+    if (computedBuf.length !== sigBuf.length) {
+      return false;
+    }
+    return crypto.timingSafeEqual(computedBuf, sigBuf);
+  } catch {
+    return false;
+  }
+}
+
 export async function POST(req: Request) {
   try {
     const rawBody = await req.text();
@@ -26,11 +52,7 @@ export async function POST(req: Request) {
         );
       }
 
-      const computedHash = crypto.createHmac("sha512", secret).update(rawBody).digest("hex");
-      const computedBuf = Buffer.from(computedHash, "utf8");
-      const sigBuf = Buffer.from(signature, "utf8");
-
-      if (computedBuf.length !== sigBuf.length || !crypto.timingSafeEqual(computedBuf, sigBuf)) {
+      if (!verifyPaystackWebhookSignature(rawBody, signature, secret)) {
         return NextResponse.json(
           {
             success: false,

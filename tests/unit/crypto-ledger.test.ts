@@ -5,6 +5,12 @@ import {
   signEventHash,
   verifyEventSignature,
   verifyLedgerIntegrity,
+  registerLedgerPublicKey,
+  getLedgerPublicKey,
+  clearLedgerKeyRegistry,
+  createLedgerCheckpoint,
+  verifyLedgerCheckpoint,
+  getLedgerKeyInfo,
   GENESIS_LEDGER_HASH,
 } from "@/lib/actionos/crypto-ledger";
 import type { ActionLedgerEvent } from "@/types/actionos";
@@ -344,5 +350,191 @@ describe("ActionOS Cryptographic Action Ledger (Tamper-Evidence & Integrity)", (
         delete process.env.ACTION_LEDGER_SIGNING_KEY;
       }
     }
+  });
+
+  it("should verify historical events signed under key v1 after intentional rotation to key v2 via key registry", () => {
+    const originalKey = process.env.ACTION_LEDGER_SIGNING_KEY;
+    const originalVersion = process.env.ACTION_LEDGER_KEY_VERSION;
+    clearLedgerKeyRegistry();
+
+    try {
+      // 1. Configure initial active key v1 (e.g. 2025 key epoch)
+      const keyV1Seed = "actionos-signing-key-epoch-v1-2025-seed";
+      process.env.ACTION_LEDGER_SIGNING_KEY = keyV1Seed;
+      process.env.ACTION_LEDGER_KEY_VERSION = "v1-2025";
+
+      const keyInfoV1 = getLedgerKeyInfo();
+      assert.equal(keyInfoV1.keyId, "v1-2025");
+      // Explicitly retain v1 public key in historical registry for forward verification
+      registerLedgerPublicKey("v1-2025", keyInfoV1.publicKeyPem);
+      assert.ok(getLedgerPublicKey("v1-2025"), "Key v1 must be resolvable from registry");
+
+      // 2. Sign Event 1 with active key v1
+      const event1Partial: Partial<ActionLedgerEvent> = {
+        id: "ev_v1_001",
+        sessionId: "session-rotation-test",
+        sequenceNumber: 1,
+        timestamp: "2025-12-31T23:59:00.000Z",
+        action: "policy_lookup",
+        description: "Historical policy lookup under v1 key",
+        actor: "ActionOS Engine",
+        status: "verified",
+        eventClass: "informational",
+        signingKeyVersion: "v1-2025",
+        isCompensating: false,
+      };
+      const hash1 = computeEventHash(event1Partial, GENESIS_LEDGER_HASH);
+      const sig1 = signEventHash(hash1); // signed with active v1
+      const event1: ActionLedgerEvent = {
+        ...(event1Partial as ActionLedgerEvent),
+        previousHash: GENESIS_LEDGER_HASH,
+        hash: hash1,
+        signature: sig1,
+      };
+
+      // 3. Perform intentional key rotation to key v2 (2026 key epoch)
+      const keyV2Seed = "actionos-signing-key-epoch-v2-2026-seed";
+      process.env.ACTION_LEDGER_SIGNING_KEY = keyV2Seed;
+      process.env.ACTION_LEDGER_KEY_VERSION = "v2-2026";
+
+      const keyInfoV2 = getLedgerKeyInfo();
+      assert.equal(keyInfoV2.keyId, "v2-2026");
+      registerLedgerPublicKey("v2-2026", keyInfoV2.publicKeyPem);
+
+      // 4. Sign Event 2 with newly rotated active key v2
+      const event2Partial: Partial<ActionLedgerEvent> = {
+        id: "ev_v2_002",
+        sessionId: "session-rotation-test",
+        sequenceNumber: 2,
+        timestamp: "2026-01-01T00:01:00.000Z",
+        action: "policy_renewal",
+        description: "Post-rotation policy renewal under v2 key",
+        actor: "ActionOS Engine",
+        status: "verified",
+        eventClass: "critical",
+        signingKeyVersion: "v2-2026",
+        isCompensating: false,
+      };
+      const hash2 = computeEventHash(event2Partial, hash1);
+      const sig2 = signEventHash(hash2); // signed with active v2
+      const event2: ActionLedgerEvent = {
+        ...(event2Partial as ActionLedgerEvent),
+        previousHash: hash1,
+        hash: hash2,
+        signature: sig2,
+      };
+
+      // 5. Verify entire chain containing events from BOTH key versions
+      const chain = [event1, event2];
+      const check = verifyLedgerIntegrity(chain, { verifySignatures: true });
+
+      assert.equal(
+        check.valid,
+        true,
+        `Historical verification must succeed across key rotation: ${check.reason}`
+      );
+
+      // Verify single event signature directly using key version lookup
+      assert.equal(verifyEventSignature(hash1, sig1, "v1-2025"), true);
+      assert.equal(verifyEventSignature(hash2, sig2, "v2-2026"), true);
+      // v1 signature should fail when verified against v2 key
+      assert.equal(verifyEventSignature(hash1, sig1, "v2-2026"), false);
+    } finally {
+      if (originalKey !== undefined) {
+        process.env.ACTION_LEDGER_SIGNING_KEY = originalKey;
+      } else {
+        delete process.env.ACTION_LEDGER_SIGNING_KEY;
+      }
+      if (originalVersion !== undefined) {
+        process.env.ACTION_LEDGER_KEY_VERSION = originalVersion;
+      } else {
+        delete process.env.ACTION_LEDGER_KEY_VERSION;
+      }
+      clearLedgerKeyRegistry();
+    }
+  });
+
+  it("should anchor and verify external ledger checkpoints, detecting full database chain rewrites", () => {
+    // 1. Build a valid chain of 3 events
+    const events: ActionLedgerEvent[] = [];
+    let prev = GENESIS_LEDGER_HASH;
+    for (let i = 0; i < 3; i++) {
+      const partial: Partial<ActionLedgerEvent> = {
+        id: `ev_anchor_${i}`,
+        sessionId: "session-checkpoint-test",
+        sequenceNumber: i + 1,
+        timestamp: new Date().toISOString(),
+        action: `action_${i}`,
+        description: `Legitimate action ${i}`,
+        actor: "ActionOS Engine",
+        status: "verified",
+        eventClass: "informational",
+        signingKeyVersion: "v1-2026",
+        isCompensating: false,
+      };
+      const hash = computeEventHash(partial, prev);
+      events.push({
+        ...(partial as ActionLedgerEvent),
+        previousHash: prev,
+        hash,
+        signature: signEventHash(hash),
+      });
+      prev = hash;
+    }
+
+    // 2. Create an external checkpoint anchored at sequence 3
+    const checkpoint = createLedgerCheckpoint(events);
+    assert.equal(checkpoint.sequenceNumber, 3);
+    assert.equal(checkpoint.sessionId, "session-checkpoint-test");
+    assert.equal(checkpoint.eventHash, events[2].hash);
+    assert.ok(checkpoint.signature);
+
+    // 3. Verify valid stream against checkpoint
+    const validResult = verifyLedgerCheckpoint(checkpoint, events);
+    assert.equal(validResult.valid, true);
+
+    // 4. Attacker rewrites the entire database to erase an event and recomputes all hashes
+    // Internally, this rewritten chain is unbroken, but it diverges from the external checkpoint
+    const rewrittenEvents: ActionLedgerEvent[] = [];
+    let rewrittenPrev = GENESIS_LEDGER_HASH;
+    for (let i = 0; i < 3; i++) {
+      const partial: Partial<ActionLedgerEvent> = {
+        id: `ev_anchor_${i}`,
+        sessionId: "session-checkpoint-test",
+        sequenceNumber: i + 1,
+        timestamp: new Date().toISOString(),
+        action: `action_${i}`,
+        // Adversary changed payload of event 2
+        description: i === 1 ? "Adversary altered transaction details" : `Legitimate action ${i}`,
+        actor: "ActionOS Engine",
+        status: "verified",
+        eventClass: "informational",
+        signingKeyVersion: "v1-2026",
+        isCompensating: false,
+      };
+      const hash = computeEventHash(partial, rewrittenPrev);
+      rewrittenEvents.push({
+        ...(partial as ActionLedgerEvent),
+        previousHash: rewrittenPrev,
+        hash,
+        signature: signEventHash(hash),
+      });
+      rewrittenPrev = hash;
+    }
+
+    // Notice: rewrittenEvents passes internal verifyLedgerIntegrity because attacker recomputed everything:
+    const internalCheck = verifyLedgerIntegrity(rewrittenEvents, { verifySignatures: true });
+    assert.equal(internalCheck.valid, true, "Internal chain appears valid to naive inspector");
+
+    // BUT checking against the externally published checkpoint catches the rewrite!
+    const externalCheck = verifyLedgerCheckpoint(checkpoint, rewrittenEvents);
+    assert.equal(externalCheck.valid, false, "External checkpoint must detect database chain rewrite");
+    assert.match(externalCheck.reason || "", /Database chain rewrite detected/);
+
+    // 5. Corrupted checkpoint signature is also rejected
+    const forgedCheckpoint = { ...checkpoint, signature: "a".repeat(128) };
+    const forgedResult = verifyLedgerCheckpoint(forgedCheckpoint, events);
+    assert.equal(forgedResult.valid, false);
+    assert.match(forgedResult.reason || "", /Invalid checkpoint signature/);
   });
 });

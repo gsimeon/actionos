@@ -597,5 +597,113 @@ describe("Quote Signature Production Hardening & Regression Suite", () => {
         /Invalid expiresAt timestamp/
       );
     });
+
+    it("should strictly reject zero or negative quote amounts for insurance renewals", () => {
+      assert.throws(
+        () => serializeCanonicalQuotePayload({ ...basePayload, amount: 0 }),
+        /Quote amount must be greater than zero/
+      );
+      assert.throws(
+        () => serializeCanonicalQuotePayload({ ...basePayload, amount: -0.01 }),
+        /Quote amount must be greater than zero/
+      );
+    });
+
+    it("should strictly require a valid, explicitly supplied 3-letter currency code", () => {
+      assert.throws(
+        () => serializeCanonicalQuotePayload({ ...basePayload, currency: "" }),
+        /Invalid or missing quote currency/
+      );
+      assert.throws(
+        () => serializeCanonicalQuotePayload({ ...basePayload, currency: "   " }),
+        /Invalid or missing quote currency/
+      );
+      assert.throws(
+        () => serializeCanonicalQuotePayload({ ...basePayload, currency: "NAIRA" }),
+        /Invalid or missing quote currency/
+      );
+      assert.throws(
+        () => serializeCanonicalQuotePayload({ ...basePayload, currency: "NG" }),
+        /Invalid or missing quote currency/
+      );
+      assert.throws(
+        () => serializeCanonicalQuotePayload({ ...basePayload, currency: "123" }),
+        /Invalid or missing quote currency/
+      );
+      assert.throws(
+        () => serializeCanonicalQuotePayload({ ...basePayload, currency: (undefined as unknown as string) }),
+        /Invalid or missing quote currency/
+      );
+    });
+
+    it("should strictly reject blank required identifiers and provider names", () => {
+      assert.throws(
+        () => serializeCanonicalQuotePayload({ ...basePayload, sessionId: "  " }),
+        /Required quote field 'sessionId' must be a non-empty string/
+      );
+      assert.throws(
+        () => serializeCanonicalQuotePayload({ ...basePayload, organizationId: "" }),
+        /Required quote field 'organizationId' must be a non-empty string/
+      );
+      assert.throws(
+        () => serializeCanonicalQuotePayload({ ...basePayload, customerId: "   " }),
+        /Required quote field 'customerId' must be a non-empty string/
+      );
+      assert.throws(
+        () => serializeCanonicalQuotePayload({ ...basePayload, policyId: "" }),
+        /Required quote field 'policyId' must be a non-empty string/
+      );
+      assert.throws(
+        () => serializeCanonicalQuotePayload({ ...basePayload, providerName: " \t " }),
+        /Required quote field 'providerName' must be a non-empty string/
+      );
+    });
+
+    it("should strictly reject missing or malformed expiry timestamps", () => {
+      assert.throws(
+        () => serializeCanonicalQuotePayload({ ...basePayload, expiresAt: "" }),
+        /Missing or blank expiresAt timestamp/
+      );
+      assert.throws(
+        () => serializeCanonicalQuotePayload({ ...basePayload, expiresAt: "   " }),
+        /Missing or blank expiresAt timestamp/
+      );
+      assert.throws(
+        () => serializeCanonicalQuotePayload({ ...basePayload, expiresAt: "2026-99-99T99:99:99Z" }),
+        /Invalid expiresAt timestamp/
+      );
+    });
+
+    it("should return false from verifyQuoteSignature when quotes contain invalid or zero amounts, invalid currencies, or blank identifiers", () => {
+      const validQuote = {
+        session_id: basePayload.sessionId,
+        organization_id: basePayload.organizationId,
+        customer_id: basePayload.customerId,
+        policy_id: basePayload.policyId,
+        provider_name: basePayload.providerName,
+        amount: basePayload.amount,
+        currency: basePayload.currency,
+        expires_at: basePayload.expiresAt,
+        quote_hash: computeQuoteSignature(basePayload).quoteHash,
+      };
+
+      // Valid quote verifies
+      assert.equal(verifyQuoteSignature(validQuote), true);
+
+      // Quote with amount = 0 fails closed
+      assert.equal(verifyQuoteSignature({ ...validQuote, amount: 0 }), false);
+
+      // Quote with invalid currency fails closed
+      assert.equal(verifyQuoteSignature({ ...validQuote, currency: "INVALID" }), false);
+
+      // Quote with blank sessionId fails closed
+      assert.equal(verifyQuoteSignature({ ...validQuote, session_id: "" }), false);
+
+      // Quote with blank providerName fails closed
+      assert.equal(verifyQuoteSignature({ ...validQuote, provider_name: "  " }), false);
+
+      // Quote with malformed expires_at fails closed
+      assert.equal(verifyQuoteSignature({ ...validQuote, expires_at: "invalid-date" }), false);
+    });
   });
 });

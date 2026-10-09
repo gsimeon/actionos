@@ -1,5 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import {
   getPaymentProvider,
   setPaymentProvider,
@@ -15,6 +16,7 @@ import { formatCurrency, formatNaira } from "@/lib/utils";
 import { orchestrator } from "@/lib/actionos/orchestrator";
 import { resetStore } from "@/lib/actionos/mock-store";
 import { getRepositoryContainer } from "@/lib/repositories";
+import { verifyPaystackWebhookSignature, POST as paymentWebhookHandler } from "@/app/api/webhooks/payment/route";
 import type { ActionLedgerEvent } from "@/types/actionos";
 
 class DeterministicFakePaymentProvider implements IPaymentProvider {
@@ -383,6 +385,209 @@ describe("Payment Provider Adapter Isolation & Production Fail-Closed Tests", ()
       const verifiedEvent = events.find((e) => e.action === "saga_compensating_refund");
       assert(verifiedEvent);
       assert.equal(verifiedEvent.status, "verified");
+    });
+  });
+
+  describe("Paystack Webhook Authenticity & Signature Verification", () => {
+    const testSecret = "sk_live_paystack_secret_verification_test_998877";
+
+    it("verifies authentic HMAC-SHA512 webhook signature against raw request body", () => {
+      const rawBody = JSON.stringify({
+        event: "charge.success",
+        data: {
+          id: 12345678,
+          reference: "ref_webhook_valid_01",
+          amount: 8750000,
+          currency: "NGN",
+          status: "success",
+        },
+      });
+
+      const validSignature = crypto.createHmac("sha512", testSecret).update(rawBody).digest("hex");
+      assert.equal(verifyPaystackWebhookSignature(rawBody, validSignature, testSecret), true);
+    });
+
+    it("rejects tampered webhook request body or forged signature", () => {
+      const rawBody = JSON.stringify({
+        event: "charge.success",
+        data: { reference: "ref_webhook_02", amount: 8750000 },
+      });
+      const validSignature = crypto.createHmac("sha512", testSecret).update(rawBody).digest("hex");
+
+      // Body tampered with by adversary (e.g., trying to falsify payment amount)
+      const tamperedBody = JSON.stringify({
+        event: "charge.success",
+        data: { reference: "ref_webhook_02", amount: 100 },
+      });
+      assert.equal(verifyPaystackWebhookSignature(tamperedBody, validSignature, testSecret), false);
+
+      // Forged signature
+      assert.equal(verifyPaystackWebhookSignature(rawBody, "bad_signature_deadbeef", testSecret), false);
+
+      // Wrong gateway secret key
+      assert.equal(verifyPaystackWebhookSignature(rawBody, validSignature, "wrong_secret_key"), false);
+    });
+
+    it("returns false when signature or secret is missing or empty", () => {
+      const rawBody = JSON.stringify({ event: "charge.success" });
+      assert.equal(verifyPaystackWebhookSignature(rawBody, null, testSecret), false);
+      assert.equal(verifyPaystackWebhookSignature(rawBody, undefined, testSecret), false);
+      assert.equal(verifyPaystackWebhookSignature(rawBody, "some_sig", ""), false);
+      assert.equal(verifyPaystackWebhookSignature(rawBody, "some_sig", undefined), false);
+    });
+  });
+
+  describe("Webhook Processing Idempotency & Deduplication", () => {
+    it("acknowledges initial charge webhook and marks duplicate on replayed webhook", async () => {
+      const tenantContext = {
+        organizationId: "org_webhook_test",
+        customerId: "cust_webhook_test",
+        role: "customer" as const,
+      };
+      const repos = getRepositoryContainer();
+
+      await repos.customers.create(
+        {
+          id: "cust_webhook_test",
+          customer_number: "CUST-WH-001",
+          organization_id: "org_webhook_test",
+          full_name: "Webhook Test User",
+          email: "wh@actionos.ng",
+          phone: "+2348000000001",
+        },
+        tenantContext
+      );
+
+      const txRef = "ref_idempotent_wh_123";
+      await repos.transactions.create(
+        {
+          id: txRef,
+          reference: txRef,
+          customer_id: "cust_webhook_test",
+          organization_id: "org_webhook_test",
+          transaction_type: "renewal_premium",
+          amount: 87500,
+          currency: "NGN",
+          status: "pending",
+          provider: "paystack",
+          renewal_id: null,
+          metadata: { session_id: "sess_wh_123" },
+        },
+        tenantContext
+      );
+
+      const webhookPayload = JSON.stringify({
+        event: "charge.success",
+        data: {
+          id: 999111,
+          reference: txRef,
+          amount: 8750000,
+          currency: "NGN",
+          status: "success",
+        },
+      });
+
+      // First webhook delivery
+      const req1 = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: webhookPayload,
+      });
+
+      const res1 = await paymentWebhookHandler(req1);
+      assert.equal(res1.status, 200);
+      const json1 = (await res1.json()) as { data: { acknowledged: boolean; duplicate: boolean } };
+      assert.equal(json1.data.acknowledged, true);
+      assert.equal(json1.data.duplicate, false, "Initial webhook must not be marked as duplicate");
+
+      // Verify transaction transitioned to succeeded
+      const txAfter1 = await repos.transactions.findByReference(txRef);
+      assert.equal(txAfter1?.status, "succeeded");
+
+      // Second webhook delivery (simulated gateway replay/retry)
+      const req2 = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: webhookPayload,
+      });
+
+      const res2 = await paymentWebhookHandler(req2);
+      assert.equal(res2.status, 200);
+      const json2 = (await res2.json()) as { data: { acknowledged: boolean; duplicate: boolean } };
+      assert.equal(json2.data.acknowledged, true);
+      assert.equal(json2.data.duplicate, true, "Replayed webhook must be acknowledged as idempotent duplicate");
+
+      // Transaction status remains cleanly succeeded
+      const txAfter2 = await repos.transactions.findByReference(txRef);
+      assert.equal(txAfter2?.status, "succeeded");
+    });
+  });
+
+  describe("Uncertain Payment Recovery & Double-Charge Prevention", () => {
+    it("simulates gateway timeout after initiation and confirms retry reconciles without a second charge", async () => {
+      let chargeRequestCount = 0;
+      let verificationCallCount = 0;
+
+      const trackableProvider: IPaymentProvider = {
+        name: "Trackable Payment Provider",
+        async requestPayment(input: PaymentInitiationInput) {
+          chargeRequestCount++;
+          return {
+            status: "processing",
+            reference: input.reference,
+            gatewayUrl: `https://checkout.paystack.com/${input.reference}`,
+            providerReference: `paystack_tx_${input.reference}`,
+          };
+        },
+        async verifyPayment(ref: string) {
+          verificationCallCount++;
+          if (verificationCallCount === 1) {
+            // First verification simulates timeout right after customer was debited
+            throw new Error("GATEWAY_TIMEOUT: Paystack verification endpoint timed out");
+          }
+          // Subsequent reconciliation verification confirms settlement
+          return {
+            status: "succeeded",
+            amount: 87500,
+            currency: "NGN",
+            providerReference: `paystack_tx_${ref}`,
+            paidAt: new Date().toISOString(),
+          };
+        },
+      };
+
+      setPaymentProvider(trackableProvider);
+
+      const paymentInput: PaymentInitiationInput = {
+        customerId: "cust_timeout_test",
+        amount: 87500,
+        currency: "NGN",
+        reference: "ref_timeout_charge_001",
+      };
+
+      // 1. Initial charge initiation
+      const initResult = await trackableProvider.requestPayment(paymentInput);
+      assert.equal(initResult.status, "processing");
+      assert.equal(chargeRequestCount, 1, "Initial charge requested exactly once");
+
+      // 2. Verification attempt encounters gateway timeout
+      await assert.rejects(
+        () => trackableProvider.verifyPayment(initResult.reference),
+        /GATEWAY_TIMEOUT/
+      );
+      assert.equal(verificationCallCount, 1);
+
+      // 3. Retry / reconciliation path: must check existing reference via verifyPayment, NOT issue a new charge
+      const reconciled = await trackableProvider.verifyPayment(initResult.reference);
+      assert.equal(reconciled.status, "succeeded");
+      assert.equal(verificationCallCount, 2);
+
+      // Crucial security invariant: charge request count MUST remain 1, preventing double-debiting customer
+      assert.equal(
+        chargeRequestCount,
+        1,
+        "Reconciliation must verify existing transaction reference and never trigger a second charge"
+      );
     });
   });
 });

@@ -50,19 +50,59 @@ export interface QuoteSignaturePayload {
  * Prevents delimiter collision attacks that arise with colon-delimited or character-concatenated formats.
  */
 export function serializeCanonicalQuotePayload(payload: QuoteSignaturePayload): string {
+  // 1. Strictly require positive amount (> 0) for insurance renewal quotes
   const amountNum = Number(payload.amount);
-  if (!Number.isFinite(amountNum) || amountNum < 0) {
-    throw new Error(`Invalid quote amount for canonical serialization: ${payload.amount}`);
+  if (!Number.isFinite(amountNum) || amountNum <= 0) {
+    throw new Error(`Invalid quote amount for canonical serialization: ${payload.amount}. Quote amount must be greater than zero.`);
   }
 
-  const currencyNorm = (payload.currency || "NGN").trim().toUpperCase();
+  // 2. Require a valid, explicitly supplied 3-letter ISO currency code (e.g. 'NGN', 'USD')
+  if (
+    !payload.currency ||
+    typeof payload.currency !== "string" ||
+    !/^[A-Za-z]{3}$/.test(payload.currency.trim())
+  ) {
+    throw new Error(
+      `Invalid or missing quote currency for canonical serialization: '${payload.currency}'. An explicit 3-letter currency code is required.`
+    );
+  }
+  const currencyNorm = payload.currency.trim().toUpperCase();
 
+  // 3. Validate required identifiers and provider names as non-empty strings
+  const requiredStringFields: Array<{ name: keyof QuoteSignaturePayload; value: unknown }> = [
+    { name: "sessionId", value: payload.sessionId },
+    { name: "organizationId", value: payload.organizationId },
+    { name: "customerId", value: payload.customerId },
+    { name: "policyId", value: payload.policyId },
+    { name: "providerName", value: payload.providerName },
+  ];
+
+  for (const field of requiredStringFields) {
+    if (
+      field.value === undefined ||
+      field.value === null ||
+      typeof field.value !== "string" ||
+      field.value.trim().length === 0
+    ) {
+      throw new Error(`Required quote field '${field.name}' must be a non-empty string.`);
+    }
+  }
+
+  // 4. Validate expiry timestamp is present, non-blank, and valid
+  if (
+    !payload.expiresAt ||
+    typeof payload.expiresAt !== "string" ||
+    payload.expiresAt.trim().length === 0
+  ) {
+    throw new Error(`Missing or blank expiresAt timestamp for canonical serialization: '${payload.expiresAt}'`);
+  }
   const expiryDate = new Date(payload.expiresAt);
   if (isNaN(expiryDate.getTime())) {
     throw new Error(`Invalid expiresAt timestamp for canonical serialization: ${payload.expiresAt}`);
   }
   const expiresAtNorm = expiryDate.toISOString();
 
+  // 5. Normalize optional fields (providerReference, underwriterId)
   const providerRefNorm =
     payload.providerReference !== undefined &&
     payload.providerReference !== null &&
@@ -81,13 +121,13 @@ export function serializeCanonicalQuotePayload(payload: QuoteSignaturePayload): 
   const canonicalObject = {
     amount: amountNum,
     currency: currencyNorm,
-    customerId: String(payload.customerId || "").trim(),
+    customerId: String(payload.customerId).trim(),
     expiresAt: expiresAtNorm,
-    organizationId: String(payload.organizationId || "").trim(),
-    policyId: String(payload.policyId || "").trim(),
-    providerName: String(payload.providerName || "").trim(),
+    organizationId: String(payload.organizationId).trim(),
+    policyId: String(payload.policyId).trim(),
+    providerName: String(payload.providerName).trim(),
     providerReference: providerRefNorm,
-    sessionId: String(payload.sessionId || "").trim(),
+    sessionId: String(payload.sessionId).trim(),
     underwriterId: underwriterIdNorm,
     version: QUOTE_SIGNATURE_VERSION,
   };
