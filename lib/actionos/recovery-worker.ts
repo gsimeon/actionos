@@ -170,9 +170,9 @@ export class ActionOSRecoveryWorker {
     const finalMeta = (updatedSession?.metadata || {}) as Record<string, unknown>;
 
     const isResolved =
-      (finalStatus === "completed" || finalStatus === "failed") &&
-      finalMeta.reconciliation_required !== true &&
-      finalMeta.refundState !== "refund_pending";
+      finalStatus === "completed" ||
+      (finalStatus === "failed" && finalMeta.refundState !== "refund_pending") ||
+      (finalMeta.refundState === "refund_confirmed" && finalMeta.requiresDeferredReconciliation !== true);
 
     if (isResolved) {
       // Clear pending reconciliation flags

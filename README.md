@@ -131,8 +131,8 @@ The test suites validate:
 
 ## 7. Architecture & Security
 See detailed specifications in:
-- [ARCHITECTURE.md](file:///C:/Users/PC/.gemini/antigravity-ide/scratch/actionos/ARCHITECTURE.md)
-- [SECURITY.md](file:///C:/Users/PC/.gemini/antigravity-ide/scratch/actionos/SECURITY.md)
+- [ARCHITECTURE.md](./ARCHITECTURE.md)
+- [SECURITY.md](./SECURITY.md)
 
 ---
 

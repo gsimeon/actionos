@@ -1795,11 +1795,11 @@ export class ActionOSOrchestrator {
       };
     }
 
+    const sessionMeta = (session.metadata || {}) as Record<string, unknown>;
     const authDetails = session.metadata?.authorizationDetails as AuthorizationDetails | undefined;
-    const policyNumber = authDetails?.policyNumber;
+    const policyNumber = authDetails?.policyNumber || (sessionMeta.policyNumber as string | undefined);
     const sanitizedSession = sessionId.replace(/-/g, "").substring(0, 16);
     const sanitizedPolicy = policyNumber ? policyNumber.replace(/[^a-zA-Z0-9]/g, "") : "unknown";
-    const sessionMeta = (session.metadata || {}) as Record<string, unknown>;
     const consentRecord = sessionMeta.consentRecord as Record<string, unknown> | undefined;
     const quoteId = (consentRecord?.quoteId || authDetails?.quoteId) as string | undefined;
     const sanitizedQuote = quoteId ? quoteId.replace(/-/g, "").substring(0, 16) : "";
@@ -1919,6 +1919,15 @@ export class ActionOSOrchestrator {
       if (policy && policy.status === "renewed") {
         // Renewal is already complete; mark session completed
         await repos.sessions.updateStatus(sessionId, "completed", new Date().toISOString(), tenantContext);
+        await repos.sessions.updateMetadata(
+          sessionId,
+          {
+            reconciliation_required: false,
+            requiresDeferredReconciliation: false,
+            paymentReconciliationState: "reconciled_renewed",
+          },
+          tenantContext
+        );
         return {
           sessionId,
           resolvedStatus: "completed",
@@ -1953,6 +1962,16 @@ export class ActionOSOrchestrator {
 
       await repos.sessions.updateStatus(sessionId, "escalated", undefined, tenantContext);
       if (refundOutcome.success && refundOutcome.refundState === "refund_confirmed") {
+        await repos.sessions.updateMetadata(
+          sessionId,
+          {
+            refundState: "refund_confirmed",
+            reconciliation_required: false,
+            requiresDeferredReconciliation: false,
+            paymentReconciliationState: "refunded_uncompleted",
+          },
+          tenantContext
+        );
         return {
           sessionId,
           resolvedStatus: "escalated",
