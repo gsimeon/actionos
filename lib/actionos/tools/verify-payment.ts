@@ -1,5 +1,5 @@
 import type { IActionOSTool, ToolResult, WorkflowExecutionContext } from "@/types/actionos";
-import { mockPaymentProvider } from "@/lib/payments/mock";
+import { getPaymentProvider } from "@/lib/payments";
 import { ActionOSGuardrails } from "@/lib/actionos/guardrails";
 
 export interface VerifyPaymentInput {
@@ -39,7 +39,7 @@ export class VerifyPaymentTool implements IActionOSTool<VerifyPaymentInput, Veri
 
   async execute(input: VerifyPaymentInput, context: WorkflowExecutionContext): Promise<ToolResult<VerifyPaymentOutput>> {
     try {
-      const verification = await mockPaymentProvider.verifyPayment(input.reference);
+      const verification = await getPaymentProvider().verifyPayment(input.reference);
 
       const guardrails = new ActionOSGuardrails();
       const settlementCheck = guardrails.validatePaymentSettlement(

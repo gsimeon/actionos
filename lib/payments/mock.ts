@@ -168,6 +168,7 @@ export class MockPaymentProvider implements IPaymentProvider {
       status: "refunded",
       refundReference: refundRef,
       amount: amount ?? (record?.amount || 0),
+      currency: record?.currency || tx?.currency || "NGN",
     };
   }
 }

@@ -13,6 +13,18 @@ export function formatNaira(amount: number): string {
   }).format(amount).replace("NGN", "₦");
 }
 
+export function formatCurrency(amount: number, currency: string = "NGN"): string {
+  const curr = (currency || "NGN").toUpperCase();
+  if (curr === "NGN") {
+    return formatNaira(amount);
+  }
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: curr,
+    maximumFractionDigits: 2,
+  }).format(amount);
+}
+
 export function formatDate(dateString: string | Date | null | undefined): string {
   if (!dateString) return "—";
   const date = new Date(dateString);

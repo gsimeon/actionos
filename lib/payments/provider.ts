@@ -25,6 +25,7 @@ export interface PaymentRefundResult {
   status: "refunded" | "failed";
   refundReference: string;
   amount: number;
+  currency?: string;
   error?: string;
 }
 

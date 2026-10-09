@@ -2,7 +2,7 @@ import type { IActionOSTool, ToolResult, WorkflowExecutionContext } from "@/type
 import { getRepositoryContainer } from "@/lib/repositories";
 import { isDemoMode } from "@/lib/runtime/mode";
 import { DEMO_CONTEXT } from "@/lib/security/auth-context";
-import { mockPaymentProvider } from "@/lib/payments/mock";
+import { getPaymentProvider } from "@/lib/payments";
 
 export interface RefundPaymentInput {
   reference: string;
@@ -62,7 +62,17 @@ export class RefundPaymentTool implements IActionOSTool<RefundPaymentInput, Refu
     };
 
     // 1. Process refund directly through payment rail provider
-    const refundProviderRes = await mockPaymentProvider.refundPayment(input.reference, input.amount, {
+    const paymentProvider = getPaymentProvider();
+    if (!paymentProvider.refundPayment) {
+      return {
+        success: false,
+        error: {
+          code: "REFUND_NOT_SUPPORTED",
+          message: `Active payment provider '${paymentProvider.name}' does not support automated refunds.`,
+        },
+      };
+    }
+    const refundProviderRes = await paymentProvider.refundPayment(input.reference, input.amount, {
       simulateRefundFailure: input.simulateRefundFailure,
     });
 
@@ -77,6 +87,7 @@ export class RefundPaymentTool implements IActionOSTool<RefundPaymentInput, Refu
     }
 
     const refundRef = refundProviderRes.refundReference || `ref_rev_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const providerName = paymentProvider.name.includes("Paystack Gateway") ? "paystack" : "mock_paystack";
 
     // 2. ONLY record reversing transaction in DB after provider confirms refund
     await repos.transactions.create(
@@ -85,7 +96,7 @@ export class RefundPaymentTool implements IActionOSTool<RefundPaymentInput, Refu
         renewal_id: null,
         amount: -Math.abs(input.amount),
         currency: input.currency || "NGN",
-        provider: "mock_paystack",
+        provider: providerName,
         reference: refundRef,
         status: "succeeded",
         transaction_type: "refund",
@@ -104,8 +115,8 @@ export class RefundPaymentTool implements IActionOSTool<RefundPaymentInput, Refu
       data: {
         refundReference: refundRef,
         originalReference: input.reference,
-        amount: input.amount,
-        currency: input.currency || "NGN",
+        amount: refundProviderRes.amount !== undefined ? refundProviderRes.amount : input.amount,
+        currency: refundProviderRes.currency || input.currency || "NGN",
         status: "refunded",
         reason: input.reason,
         refundedAt: new Date().toISOString(),

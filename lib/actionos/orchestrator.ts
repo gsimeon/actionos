@@ -23,10 +23,10 @@ import type {
 } from "@/types/actionos";
 import crypto from "node:crypto";
 import { isDemoMode, isProductionMode } from "@/lib/runtime/mode";
-import { formatNaira, formatDate } from "@/lib/utils";
+import { formatCurrency, formatDate } from "@/lib/utils";
 import { createWorkflowExecutionContext } from "@/lib/runtime/execution-context";
 import { computeQuoteSignature, verifyQuoteSignature } from "@/lib/actionos/quote-signature";
-import { mockPaymentProvider } from "@/lib/payments/mock";
+import { getPaymentProvider } from "@/lib/payments";
 import type { RefundPaymentInput } from "./tools/refund-payment";
 
 export interface StartWorkflowInput {
@@ -92,10 +92,7 @@ export function redactSensitiveObject<T>(obj: T): T {
   return obj;
 }
 
-export function formatCurrency(amount: number, currency: string = "NGN"): string {
-  if (currency === "NGN") return formatNaira(amount);
-  return `${currency} ${amount.toLocaleString()}`;
-}
+export { formatCurrency };
 
 export class ActionOSOrchestrator {
   private nAtlas = createNAtlasProvider();
@@ -738,7 +735,7 @@ export class ActionOSOrchestrator {
         sessionId,
         timestamp: new Date().toISOString(),
         action: "saga_compensating_refund_failed",
-        description: `Saga Rollback Failed: Refund tool not registered. Escalated for manual refund of ${formatNaira(amount)}.`,
+        description: `Saga Rollback Failed: Refund tool not registered. Escalated for manual refund of ${formatCurrency(amount, currency)}.`,
         status: "failed",
         actor: "Saga Compensator",
         isCompensating: true,
@@ -770,13 +767,18 @@ export class ActionOSOrchestrator {
         execContext
       );
 
-      if (refundRes.success && refundRes.data?.status === "refunded") {
+      const confirmedAmount = refundRes.data?.amount;
+      const confirmedCurrency = refundRes.data?.currency || "NGN";
+      const amountMatches = confirmedAmount === amount;
+      const currencyMatches = confirmedCurrency.toUpperCase() === (currency || "NGN").toUpperCase();
+
+      if (refundRes.success && refundRes.data?.status === "refunded" && amountMatches && currencyMatches) {
         await this.appendLedgerEvent(events, {
           id: `ev_${Date.now()}_saga_rollback`,
           sessionId,
           timestamp: new Date().toISOString(),
           action: "saga_compensating_refund",
-          description: `Saga Rollback Verified: Automatic reversal of ${formatNaira(amount)} confirmed by gateway (Ref: ${refundRes.data.refundReference})`,
+          description: `Saga Rollback Verified: Automatic reversal of ${formatCurrency(amount, currency)} confirmed by gateway (Ref: ${refundRes.data.refundReference})`,
           status: "verified",
           actor: "Saga Compensator",
           isCompensating: true,
@@ -803,6 +805,40 @@ export class ActionOSOrchestrator {
         });
 
         return { success: true, refundReference: refundRes.data.refundReference, refundState: "refund_confirmed" };
+      } else if (refundRes.success && refundRes.data?.status === "refunded") {
+        const mismatchReason = `Refund amount or currency mismatch: expected ${amount} ${currency || "NGN"}, but gateway confirmed ${confirmedAmount} ${confirmedCurrency}`;
+        await this.appendLedgerEvent(events, {
+          id: `ev_${Date.now()}_saga_rollback_mismatch`,
+          sessionId,
+          timestamp: new Date().toISOString(),
+          action: "saga_compensating_refund_failed",
+          description: `Saga Rollback Failed: Reversal amount/currency mismatch (${mismatchReason}). Escalated for supervisor investigation.`,
+          status: "failed",
+          actor: "Saga Compensator",
+          isCompensating: true,
+          metadata: { paymentReference, reason, error: mismatchReason, returned: refundRes.data },
+        });
+
+        await repos.sessions.updateMetadata(
+          sessionId,
+          {
+            refundState: "refund_pending",
+            refundStatus: "refund_pending",
+            refundFailureReason: mismatchReason,
+            requiresManualRefund: true,
+          },
+          tenantContext
+        );
+
+        webhookDispatcher.broadcast("saga.compensation_failed", {
+          sessionId,
+          reason: mismatchReason,
+          paymentReference,
+          amount,
+          error: mismatchReason,
+        });
+
+        return { success: false, error: mismatchReason, refundState: "refund_pending" };
       } else {
         const failureReason = refundRes.error?.message || "Refund was not confirmed by gateway";
 
@@ -811,7 +847,7 @@ export class ActionOSOrchestrator {
           sessionId,
           timestamp: new Date().toISOString(),
           action: "saga_compensating_refund_failed",
-          description: `Saga Rollback Failed: Reversal of ${formatNaira(amount)} could not be verified (${failureReason}). Escalated for supervisor refund.`,
+          description: `Saga Rollback Failed: Reversal of ${formatCurrency(amount, currency)} could not be verified (${failureReason}). Escalated for supervisor refund.`,
           status: "failed",
           actor: "Saga Compensator",
           isCompensating: true,
@@ -1278,8 +1314,8 @@ export class ActionOSOrchestrator {
     session.status = "executing";
 
     const authDesc = options?.authMethod === "biometric_webauthn"
-      ? `WebAuthn Biometric Passkey authorization confirmed for ${formatNaira(quoteAmount)}.`
-      : `Explicit authorization confirmed for ${formatNaira(quoteAmount)}. Proceeding with execution.`;
+      ? `WebAuthn Biometric Passkey authorization confirmed for ${formatCurrency(quoteAmount, quoteCurrency)}.`
+      : `Explicit authorization confirmed for ${formatCurrency(quoteAmount, quoteCurrency)}. Proceeding with execution.`;
 
     const consentRecord = {
       quoteId: dbQuote.id,
@@ -1562,7 +1598,7 @@ export class ActionOSOrchestrator {
           if (tx?.status === "succeeded") {
             isPaymentSettled = true;
           } else {
-            const providerVerify = await mockPaymentProvider.verifyPayment(paymentReference).catch(() => null);
+            const providerVerify = await getPaymentProvider().verifyPayment(paymentReference).catch(() => null);
             if (providerVerify?.status === "succeeded") {
               isPaymentSettled = true;
             }
@@ -1831,7 +1867,7 @@ export class ActionOSOrchestrator {
     if (!isSettled) {
       for (const ref of candidateRefs) {
         try {
-          const verifyRes = await mockPaymentProvider.verifyPayment(ref);
+          const verifyRes = await getPaymentProvider().verifyPayment(ref);
           if (verifyRes.status === "succeeded") {
             isSettled = true;
             effectiveRef = ref;

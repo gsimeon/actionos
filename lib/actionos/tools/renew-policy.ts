@@ -1,8 +1,7 @@
 import type { IActionOSTool, ToolResult, WorkflowExecutionContext } from "@/types/actionos";
 import type { Policy } from "@/types/database";
 import { getRepositoryContainer } from "@/lib/repositories";
-
-import { mockPaymentProvider } from "@/lib/payments/mock";
+import { getPaymentProvider } from "@/lib/payments";
 
 export interface RenewPolicyInput {
   policyNumber: string;
@@ -70,7 +69,7 @@ export class RenewPolicyTool implements IActionOSTool<RenewPolicyInput, RenewPol
     let isSettled = tx?.status === "succeeded";
 
     if (!isSettled) {
-      const verification = await mockPaymentProvider.verifyPayment(input.paymentReference);
+      const verification = await getPaymentProvider().verifyPayment(input.paymentReference);
       isSettled = verification.status === "succeeded";
     }
 

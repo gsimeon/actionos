@@ -1,5 +1,5 @@
 import type { IActionOSTool, ToolResult, WorkflowExecutionContext } from "@/types/actionos";
-import { mockPaymentProvider } from "@/lib/payments/mock";
+import { getPaymentProvider } from "@/lib/payments";
 
 export interface RequestPaymentInput {
   customerId: string;
@@ -53,7 +53,7 @@ export class RequestPaymentTool implements IActionOSTool<RequestPaymentInput, Pa
         : `act_${sanitizedSession}_pay_${sanitizedPolicy}`);
 
     try {
-      const res = await mockPaymentProvider.requestPayment({
+      const res = await getPaymentProvider().requestPayment({
         customerId: input.customerId,
         amount: input.amount,
         currency: input.currency || "NGN",
