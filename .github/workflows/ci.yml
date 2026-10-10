@@ -36,8 +36,11 @@ jobs:
       - name: ESLint check
         run: npm run lint
 
-      - name: Automated Unit, Acceptance & Security Regression Suites
-        run: npm test
+      - name: Unit & Cryptographic Non-Repudiation Test Suite
+        run: npm run test:unit
+
+      - name: Protected Integration Stage (Supabase RLS, Tenant Isolation, RPC & Webhooks)
+        run: npm run test:integration
 
       - name: Next.js Production Build
         run: npm run build

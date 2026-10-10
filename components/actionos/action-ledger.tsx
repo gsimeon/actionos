@@ -41,7 +41,7 @@ export function ActionLedger({
   const isSimulatedTamper = tamperedEvents !== null;
 
   const handleVerifyChain = () => {
-    const res = verifyLedgerIntegrity(activeEvents);
+    const res = verifyLedgerIntegrity(activeEvents, { verifySignatures: true });
     setVerifyStatus({ checked: true, valid: res.valid, reason: res.reason });
   };
 

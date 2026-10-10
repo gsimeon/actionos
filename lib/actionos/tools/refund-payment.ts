@@ -10,6 +10,8 @@ export interface RefundPaymentInput {
   currency?: string;
   reason: string;
   simulateRefundFailure?: boolean;
+  simulateRefundPending?: boolean;
+  simulateRefundUnknown?: boolean;
 }
 
 export interface RefundPaymentOutput {
@@ -17,9 +19,10 @@ export interface RefundPaymentOutput {
   originalReference: string;
   amount: number;
   currency: string;
-  status: "refunded" | "processing";
+  status: "refunded" | "processing" | "pending" | "failed";
   reason: string;
   refundedAt: string;
+  refundState?: "refund_confirmed" | "refund_pending" | "refund_failed" | "refund_unknown";
 }
 
 export class RefundPaymentTool implements IActionOSTool<RefundPaymentInput, RefundPaymentOutput> {
@@ -74,52 +77,132 @@ export class RefundPaymentTool implements IActionOSTool<RefundPaymentInput, Refu
     }
     const refundProviderRes = await paymentProvider.refundPayment(input.reference, input.amount, {
       simulateRefundFailure: input.simulateRefundFailure,
+      simulateRefundPending: input.simulateRefundPending,
+      simulateRefundUnknown: input.simulateRefundUnknown,
     });
 
-    if (refundProviderRes.status !== "refunded") {
-      return {
-        success: false,
-        error: {
-          code: "REFUND_REJECTED",
-          message: refundProviderRes.error || "Payment gateway rail declined refund reversal",
-        },
-      };
-    }
+    const isConfirmed = refundProviderRes.status === "refund_confirmed" || refundProviderRes.status === "refunded";
+    const isPending = refundProviderRes.status === "refund_pending";
+    const isUnknown = refundProviderRes.status === "refund_unknown" || refundProviderRes.status === "unknown";
 
     const refundRef = refundProviderRes.refundReference || `ref_rev_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const providerName = paymentProvider.name.includes("Paystack Gateway") ? "paystack" : "mock_paystack";
 
-    // 2. ONLY record reversing transaction in DB after provider confirms refund
-    await repos.transactions.create(
-      {
-        customer_id: customerId,
-        renewal_id: null,
-        amount: -Math.abs(input.amount),
-        currency: input.currency || "NGN",
-        provider: providerName,
-        reference: refundRef,
-        status: "succeeded",
-        transaction_type: "refund",
-        metadata: {
-          originalReference: input.reference,
-          reason: input.reason,
-          isSagaCompensating: true,
-          gatewayVerified: true,
+    if (isConfirmed) {
+      // 2. Authoritative confirmation: Record reversing transaction as succeeded
+      await repos.transactions.create(
+        {
+          customer_id: customerId,
+          renewal_id: null,
+          amount: -Math.abs(input.amount),
+          currency: input.currency || "NGN",
+          provider: providerName,
+          reference: refundRef,
+          status: "succeeded",
+          transaction_type: "refund",
+          metadata: {
+            originalReference: input.reference,
+            reason: input.reason,
+            isSagaCompensating: true,
+            gatewayVerified: true,
+            refundState: "refund_confirmed",
+          },
         },
-      },
-      tenantContext
-    );
+        tenantContext
+      );
+
+      return {
+        success: true,
+        data: {
+          refundReference: refundRef,
+          originalReference: input.reference,
+          amount: refundProviderRes.amount !== undefined ? refundProviderRes.amount : input.amount,
+          currency: refundProviderRes.currency || input.currency || "NGN",
+          status: "refunded",
+          reason: input.reason,
+          refundedAt: new Date().toISOString(),
+          refundState: "refund_confirmed",
+        },
+      };
+    }
+
+    if (isPending) {
+      // Accepted by gateway but not yet settled: record transaction as pending, NOT succeeded
+      await repos.transactions.create(
+        {
+          customer_id: customerId,
+          renewal_id: null,
+          amount: -Math.abs(input.amount),
+          currency: input.currency || "NGN",
+          provider: providerName,
+          reference: refundRef,
+          status: "pending",
+          transaction_type: "refund",
+          metadata: {
+            originalReference: input.reference,
+            reason: input.reason,
+            isSagaCompensating: true,
+            gatewayVerified: false,
+            refundState: "refund_pending",
+          },
+        },
+        tenantContext
+      );
+
+      return {
+        success: false,
+        data: {
+          refundReference: refundRef,
+          originalReference: input.reference,
+          amount: refundProviderRes.amount !== undefined ? refundProviderRes.amount : input.amount,
+          currency: refundProviderRes.currency || input.currency || "NGN",
+          status: "pending",
+          reason: input.reason,
+          refundedAt: new Date().toISOString(),
+          refundState: "refund_pending",
+        },
+        error: {
+          code: "REFUND_PENDING",
+          message: "Refund request accepted by payment gateway but settlement is pending confirmation.",
+        },
+      };
+    }
+
+    if (isUnknown) {
+      return {
+        success: false,
+        data: {
+          refundReference: refundRef,
+          originalReference: input.reference,
+          amount: refundProviderRes.amount !== undefined ? refundProviderRes.amount : input.amount,
+          currency: refundProviderRes.currency || input.currency || "NGN",
+          status: "pending",
+          reason: input.reason,
+          refundedAt: new Date().toISOString(),
+          refundState: "refund_unknown",
+        },
+        error: {
+          code: "REFUND_UNKNOWN",
+          message: refundProviderRes.error || "Payment gateway refund outcome is ambiguous (network error or provider timeout).",
+        },
+      };
+    }
 
     return {
-      success: true,
+      success: false,
       data: {
         refundReference: refundRef,
         originalReference: input.reference,
         amount: refundProviderRes.amount !== undefined ? refundProviderRes.amount : input.amount,
         currency: refundProviderRes.currency || input.currency || "NGN",
-        status: "refunded",
+        status: "failed",
         reason: input.reason,
         refundedAt: new Date().toISOString(),
+        refundState: "refund_failed",
+      },
+      error: {
+        code: "REFUND_REJECTED",
+        message: refundProviderRes.error || "Payment gateway rail declined refund reversal",
       },
     };
   }

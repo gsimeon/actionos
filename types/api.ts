@@ -83,13 +83,22 @@ export interface ExecuteStepRequest {
 }
 
 export interface PaymentWebhookPayload {
-  event: "charge.success" | "charge.failed";
+  event:
+    | "charge.success"
+    | "charge.failed"
+    | "refund.processed"
+    | "refund.pending"
+    | "refund.processing"
+    | "refund.failed"
+    | string;
   data: {
     reference: string;
-    amount: number;
-    currency: string;
-    status: "success" | "failed";
+    amount?: number;
+    currency?: string;
+    status?: string;
     customer_id?: string;
     paid_at?: string;
+    refundReference?: string;
   };
 }
+

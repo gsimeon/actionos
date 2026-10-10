@@ -6,6 +6,9 @@ import { getPaymentProvider } from "@/lib/payments";
 export interface RenewPolicyInput {
   policyNumber: string;
   paymentReference: string;
+  expectedAmount?: number;
+  expectedCurrency?: string;
+  underwriter?: string;
 }
 
 export interface RenewPolicyOutput {
@@ -54,8 +57,8 @@ export class RenewPolicyTool implements IActionOSTool<RenewPolicyInput, RenewPol
       role: context.auth?.role,
     };
 
-    // 1. Verify payment independently before renewing policy
-    if (!input.paymentReference) {
+    // 1. Verify payment reference is present
+    if (!input.paymentReference || typeof input.paymentReference !== "string" || !input.paymentReference.trim()) {
       return {
         success: false,
         error: {
@@ -65,23 +68,7 @@ export class RenewPolicyTool implements IActionOSTool<RenewPolicyInput, RenewPol
       };
     }
 
-    const tx = await repos.transactions.findByReference(input.paymentReference, tenantContext);
-    let isSettled = tx?.status === "succeeded";
-
-    if (!isSettled) {
-      const verification = await getPaymentProvider().verifyPayment(input.paymentReference);
-      isSettled = verification.status === "succeeded";
-    }
-
-    if (!isSettled) {
-      return {
-        success: false,
-        error: {
-          code: "UNVERIFIED_PAYMENT",
-          message: `Payment settlement could not be independently verified for reference '${input.paymentReference}'. Policy renewal halted.`,
-        },
-      };
-    }
+    const ref = input.paymentReference.trim();
 
     // 2. Fetch policy record
     const rawInput = input as unknown as Record<string, unknown>;
@@ -99,14 +86,106 @@ export class RenewPolicyTool implements IActionOSTool<RenewPolicyInput, RenewPol
       };
     }
 
+    // 3. Fetch linked renewal record if present
+    const renewal = await repos.renewals.findByPolicyId(policy.id, tenantContext);
+
+    // 4. Verify payment independently against DB and/or payment rail provider
+    const tx = await repos.transactions.findByReference(ref, tenantContext);
+    let settledAmount = tx?.status === "succeeded" ? tx.amount : undefined;
+    let settledCurrency = tx?.status === "succeeded" ? (tx.currency || "NGN").toUpperCase() : undefined;
+    let isSettled = tx?.status === "succeeded";
+
+    if (!isSettled) {
+      try {
+        const verification = await getPaymentProvider().verifyPayment(ref);
+        if (verification.status === "succeeded" || verification.status === "confirmed") {
+          isSettled = true;
+          settledAmount = verification.amount;
+          settledCurrency = (verification.currency || "NGN").toUpperCase();
+        }
+      } catch {
+        isSettled = false;
+      }
+    }
+
+    if (!isSettled) {
+      return {
+        success: false,
+        error: {
+          code: "UNVERIFIED_PAYMENT",
+          message: `Payment settlement could not be independently verified for reference '${ref}'. Policy renewal halted.`,
+        },
+      };
+    }
+
+    // 5. Enforce quote amount and currency integrity
+    const expectedAmount =
+      typeof input.expectedAmount === "number"
+        ? input.expectedAmount
+        : typeof renewal?.quote_amount === "number"
+        ? renewal.quote_amount
+        : typeof policy.premium === "number"
+        ? policy.premium
+        : undefined;
+
+    const expectedCurrency = (
+      input.expectedCurrency ||
+      renewal?.currency ||
+      policy.currency ||
+      "NGN"
+    ).toUpperCase();
+
+    if (expectedAmount !== undefined && settledAmount !== undefined) {
+      if (Math.abs(settledAmount - expectedAmount) > 0.01) {
+        return {
+          success: false,
+          error: {
+            code: settledAmount < expectedAmount ? "UNDERPAID_PAYMENT" : "PAYMENT_AMOUNT_MISMATCH",
+            message: `Settled payment amount (₦${settledAmount}) does not match required policy premium / quote (₦${expectedAmount}). Renewal halted.`,
+          },
+        };
+      }
+    }
+
+    if (settledCurrency && expectedCurrency && settledCurrency !== expectedCurrency) {
+      return {
+        success: false,
+        error: {
+          code: "CURRENCY_MISMATCH",
+          message: `Settled payment currency (${settledCurrency}) does not match expected quote currency (${expectedCurrency}). Renewal halted.`,
+        },
+      };
+    }
+
+    // 6. Enforce transaction boundary: prevent reusing refunded or cross-customer transactions
+    if (tx) {
+      if (tx.transaction_type === "refund") {
+        return {
+          success: false,
+          error: {
+            code: "UNVERIFIED_PAYMENT",
+            message: `Transaction reference '${ref}' is a refunded reversal. Policy renewal cannot complete using a refunded transaction.`,
+          },
+        };
+      }
+      if (tenantContext.customerId && tx.customer_id && tx.customer_id !== tenantContext.customerId) {
+        return {
+          success: false,
+          error: {
+            code: "UNAUTHORIZED_PAYMENT",
+            message: "Payment transaction belongs to another customer tenant context. Policy renewal halted.",
+          },
+        };
+      }
+    }
+
     const previousExpiry = policy.expiry_date;
     const prevDate = new Date(previousExpiry);
     const newDate = new Date(prevDate);
     newDate.setFullYear(prevDate.getFullYear() + 1);
     const newExpiry = newDate.toISOString().split("T")[0]; // e.g. 2027-10-14
 
-    // 3. Idempotent check: if policy is already renewed or renewal is already completed, return existing record
-    const renewal = await repos.renewals.findByPolicyId(policy.id, tenantContext);
+    // 7. Idempotent check: if policy is already renewed or renewal is already completed, return existing record
     if (policy.status === "renewed" || (renewal && renewal.status === "completed")) {
       return {
         success: true,
@@ -122,7 +201,7 @@ export class RenewPolicyTool implements IActionOSTool<RenewPolicyInput, RenewPol
       };
     }
 
-    // 4. Mutate policy state via repository with tenant guard
+    // 8. Mutate policy state via repository with tenant guard
     const updatedPolicy = await repos.policies.updateStatusAndExpiry(policy.id, "renewed", newExpiry, tenantContext);
 
     // Update renewal record if present

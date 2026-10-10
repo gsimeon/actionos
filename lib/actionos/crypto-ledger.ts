@@ -18,12 +18,60 @@ export interface LedgerKeyInfo {
 const historicalPublicKeyRegistry = new Map<string, crypto.KeyObject>();
 
 /**
+ * Returns the currently active ledger signing key version configured in the environment.
+ */
+export function getActiveLedgerKeyVersion(): string {
+  return process.env.ACTION_LEDGER_KEY_VERSION || "v1-2026";
+}
+
+/**
+ * Exports all registered historical public keys in serialized SPKI PEM format.
+ */
+export function exportDurableKeyRegistry(): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [ver, keyObj] of historicalPublicKeyRegistry.entries()) {
+    result[ver] = keyObj.export({ type: "spki", format: "pem" }).toString();
+  }
+  return result;
+}
+
+/**
+ * Loads durable historical public keys from an explicit record, JSON string, or environment configuration.
+ */
+export function loadDurableKeyRegistry(source?: string | Record<string, string>): void {
+  let records: Record<string, string> = {};
+  if (typeof source === "string") {
+    try {
+      records = JSON.parse(source);
+    } catch {
+      return;
+    }
+  } else if (source && typeof source === "object") {
+    records = source;
+  } else if (process.env.ACTION_LEDGER_HISTORICAL_KEYS) {
+    try {
+      records = JSON.parse(process.env.ACTION_LEDGER_HISTORICAL_KEYS);
+    } catch {
+      return;
+    }
+  }
+
+  for (const [version, pemOrSeed] of Object.entries(records)) {
+    if (version && pemOrSeed) {
+      registerLedgerPublicKey(version, pemOrSeed, { persist: false });
+    }
+  }
+}
+
+/**
  * Registers an Ed25519 public key associated with a specific signing key version.
  * Enables historical signature verification of ledger events created prior to key rotation.
+ * Persists registered keys into the durable registry store to survive application restarts.
  */
 export function registerLedgerPublicKey(
   version: string,
-  publicKey: crypto.KeyObject | string
+  publicKey: crypto.KeyObject | string,
+  options?: { persist?: boolean }
 ): void {
   if (!version || typeof version !== "string") {
     throw new Error("Key version string is required to register an Action Ledger public key.");
@@ -43,26 +91,40 @@ export function registerLedgerPublicKey(
     keyObj = publicKey;
   }
   historicalPublicKeyRegistry.set(version, keyObj);
+
+  if (options?.persist !== false) {
+    try {
+      const pem = keyObj.export({ type: "spki", format: "pem" }).toString();
+      let currentMap: Record<string, string> = {};
+      if (process.env.ACTION_LEDGER_HISTORICAL_KEYS) {
+        try {
+          currentMap = JSON.parse(process.env.ACTION_LEDGER_HISTORICAL_KEYS);
+        } catch {
+          currentMap = {};
+        }
+      }
+      currentMap[version] = pem;
+      process.env.ACTION_LEDGER_HISTORICAL_KEYS = JSON.stringify(currentMap);
+    } catch {
+      // ignore persistence failure
+    }
+  }
 }
 
 /**
  * Retrieves the registered Ed25519 public key for a specific key version,
- * checking the explicit registry first and falling back to environment configuration or active key.
+ * checking the in-memory registry first, auto-loading from durable storage on cache miss,
+ * and falling back to the active signing key.
  */
 export function getLedgerPublicKey(version?: string): crypto.KeyObject | null {
   if (version && historicalPublicKeyRegistry.has(version)) {
     return historicalPublicKeyRegistry.get(version)!;
   }
-  // Check if historical keys are configured via environment JSON
-  if (version && process.env.ACTION_LEDGER_HISTORICAL_KEYS) {
-    try {
-      const parsed = JSON.parse(process.env.ACTION_LEDGER_HISTORICAL_KEYS) as Record<string, string>;
-      if (parsed[version]) {
-        registerLedgerPublicKey(version, parsed[version]);
-        return historicalPublicKeyRegistry.get(version)!;
-      }
-    } catch {
-      // ignore parse failure
+  // On cache miss, attempt reloading from durable storage
+  if (version) {
+    loadDurableKeyRegistry();
+    if (historicalPublicKeyRegistry.has(version)) {
+      return historicalPublicKeyRegistry.get(version)!;
     }
   }
   const activePair = resolveEd25519KeyPair();
@@ -73,24 +135,28 @@ export function getLedgerPublicKey(version?: string): crypto.KeyObject | null {
 }
 
 /**
- * Clears the historical key registry (primarily for test suite isolation).
+ * Clears the in-memory historical key registry (simulates application restart or test isolation).
+ * If clearDurable is true, also clears the durable environment storage.
  */
-export function clearLedgerKeyRegistry(): void {
+export function clearLedgerKeyRegistry(options?: { clearDurable?: boolean }): void {
   historicalPublicKeyRegistry.clear();
+  if (options?.clearDurable) {
+    delete process.env.ACTION_LEDGER_HISTORICAL_KEYS;
+  }
 }
 
 /**
  * Derives or imports genuine Ed25519 KeyObjects from PEM, environment secret, or test seed.
  * Production mode strictly enforces that ACTION_LEDGER_SIGNING_KEY is configured in the environment.
  */
-function resolveEd25519KeyPair(explicitKey?: string): {
+function resolveEd25519KeyPair(explicitKey?: string, explicitKeyVersion?: string): {
   privateKey: crypto.KeyObject;
   publicKey: crypto.KeyObject;
   keyId: string;
 } {
   const isProduction = isProductionMode();
   const rawKey = explicitKey || process.env.ACTION_LEDGER_SIGNING_KEY;
-  const keyId = process.env.ACTION_LEDGER_KEY_VERSION || "v1-2026";
+  const keyId = explicitKeyVersion || process.env.ACTION_LEDGER_KEY_VERSION || "v1-2026";
 
   if (!rawKey) {
     if (isProduction) {
@@ -103,8 +169,8 @@ function resolveEd25519KeyPair(explicitKey?: string): {
     const der = Buffer.concat([ED25519_PKCS8_PREFIX, demoSeed]);
     const privateKey = crypto.createPrivateKey({ key: der, format: "der", type: "pkcs8" });
     const publicKey = crypto.createPublicKey(privateKey);
-    historicalPublicKeyRegistry.set("demo-sandbox-v1", publicKey);
-    historicalPublicKeyRegistry.set(keyId, publicKey);
+    registerLedgerPublicKey("demo-sandbox-v1", publicKey);
+    registerLedgerPublicKey(keyId, publicKey);
     return { privateKey, publicKey, keyId };
   }
 
@@ -119,7 +185,7 @@ function resolveEd25519KeyPair(explicitKey?: string): {
   }
 
   const publicKey = crypto.createPublicKey(privateKey);
-  historicalPublicKeyRegistry.set(keyId, publicKey);
+  registerLedgerPublicKey(keyId, publicKey);
   return { privateKey, publicKey, keyId };
 }
 
@@ -183,6 +249,37 @@ export function signEventHash(
   const { privateKey } = resolveEd25519KeyPair(privateKeySeed);
   const signature = crypto.sign(null, Buffer.from(hash, "utf-8"), privateKey);
   return signature.toString("hex");
+}
+
+/**
+ * Resolves the active signing key and its key ID once, binds that exact key ID to
+ * the event's signingKeyVersion, deterministically computes the SHA-256 event hash over
+ * the canonical payload, and signs the hash with Ed25519.
+ * Guarantees zero divergence between the event's recorded key version and the key that produced the signature.
+ */
+export function signLedgerEvent(
+  eventBase: Omit<ActionLedgerEvent, "hash" | "signature">,
+  previousHash: string = GENESIS_LEDGER_HASH,
+  signingKeySeed?: string,
+  keyVersion?: string
+): ActionLedgerEvent {
+  const { keyId, privateKey } = resolveEd25519KeyPair(signingKeySeed, keyVersion);
+
+  const eventToHash: ActionLedgerEvent = {
+    ...eventBase,
+    previousHash,
+    signingKeyVersion: keyId,
+  } as ActionLedgerEvent;
+
+  const hash = computeEventHash(eventToHash, previousHash);
+  const signatureBuffer = crypto.sign(null, Buffer.from(hash, "utf-8"), privateKey);
+  const signature = signatureBuffer.toString("hex");
+
+  return {
+    ...eventToHash,
+    hash,
+    signature,
+  };
 }
 
 /**
@@ -357,7 +454,8 @@ export interface LedgerCheckpoint {
  */
 export function createLedgerCheckpoint(
   events: ActionLedgerEvent[],
-  signingKeySeed?: string
+  signingKeySeed?: string,
+  keyVersion?: string
 ): LedgerCheckpoint {
   if (!events || events.length === 0) {
     throw new Error("Cannot create a ledger checkpoint from an empty event stream.");
@@ -368,8 +466,9 @@ export function createLedgerCheckpoint(
     throw new Error("Target event for ledger checkpoint lacks valid sequenceNumber or hash.");
   }
 
-  const { keyId } = resolveEd25519KeyPair(signingKeySeed);
-  const signingKeyVersion = latest.signingKeyVersion || keyId;
+  // Resolve the checkpoint's actual signing key and key ID together
+  const { keyId, privateKey } = resolveEd25519KeyPair(signingKeySeed, keyVersion);
+  const signingKeyVersion = keyId;
   const timestamp = new Date().toISOString();
 
   const checkpointPayload = {
@@ -382,7 +481,8 @@ export function createLedgerCheckpoint(
 
   const canonicalString = JSON.stringify(checkpointPayload);
   const checkpointDigest = crypto.createHash("sha256").update(canonicalString).digest("hex");
-  const signature = signEventHash(checkpointDigest, signingKeySeed);
+  const signatureBuffer = crypto.sign(null, Buffer.from(checkpointDigest, "utf-8"), privateKey);
+  const signature = signatureBuffer.toString("hex");
 
   return {
     sessionId: latest.sessionId || "",

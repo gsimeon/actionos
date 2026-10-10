@@ -10,6 +10,8 @@ export interface OutboundWebhookPayload<T = Record<string, unknown>> {
     | "policy.renewed"
     | "saga.compensated"
     | "saga.compensation_failed"
+    | "saga.compensation_pending"
+    | "saga.compensation_uncertain"
     | "recovery.reconciled"
     | "recovery.dead_lettered";
   timestamp: string;

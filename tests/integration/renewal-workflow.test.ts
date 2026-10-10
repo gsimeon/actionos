@@ -3,6 +3,11 @@ import assert from "node:assert/strict";
 import { orchestrator } from "@/lib/actionos/orchestrator";
 import { getStore, resetStore } from "@/lib/actionos/mock-store";
 import { DEMO_CONTEXT } from "@/lib/security/auth-context";
+import {
+  setPaymentProvider,
+  type IPaymentProvider,
+  type PaymentInitiationInput,
+} from "@/lib/payments";
 
 describe("ActionOS Vehicle Insurance Renewal Workflow (End-to-End Acceptance Test)", () => {
   it("should process full renewal cycle from natural language to certificate issuance", async () => {
@@ -128,5 +133,142 @@ describe("ActionOS Vehicle Insurance Renewal Workflow (End-to-End Acceptance Tes
     const { verifyLedgerIntegrity } = await import("@/lib/actionos/crypto-ledger");
     const integrity = verifyLedgerIntegrity(sagaResult.events);
     assert.equal(integrity.valid, true, "Compensated ledger chain must remain cryptographically unbroken");
+  });
+
+  it("Scenario 2: should cleanly halt and not renew policy when payment is rejected/failed", async () => {
+    resetStore();
+    const store = getStore();
+    const initialPolicy = store.policies.find((p) => p.policy_number === "AUTO-2026-00182");
+    assert.equal(initialPolicy?.status, "expiring");
+    assert.equal(initialPolicy?.expiry_date, "2026-10-14");
+
+    // Configure a failing payment provider
+    const failingProvider: IPaymentProvider = {
+      name: "Declined Payment Rail",
+      async requestPayment(input: PaymentInitiationInput) {
+        return { status: "failed", reference: input.reference };
+      },
+      async verifyPayment(ref: string) {
+        return {
+          status: "failed",
+          amount: 0,
+          currency: "NGN",
+          providerReference: ref,
+          paidAt: new Date().toISOString(),
+        };
+      },
+      async refundPayment() {
+        return { status: "failed", refundReference: "", amount: 0 };
+      },
+    };
+
+    setPaymentProvider(failingProvider);
+
+    try {
+      const step1 = await orchestrator.startWorkflow({
+        inputText: "Renew AUTO-2026-00182 now",
+        channel: "web",
+        executionContext: DEMO_CONTEXT,
+      });
+      assert.equal(step1.status, "awaiting_authorization");
+
+      // Customer authorizes, but payment rail declines the transaction
+      const execResult = await orchestrator.authorizeAndExecute(
+        step1.sessionId,
+        true,
+        DEMO_CONTEXT
+      );
+
+      // Workflow halts and fails cleanly (escalated to human supervisor to prevent duplicate charge)
+      assert.ok(execResult.status === "failed" || execResult.status === "escalated");
+      assert.match(execResult.message, /Execution halted at step 'request_payment'|Payment/);
+
+      // Crucial regulatory invariant: Policy must NOT be renewed!
+      const currentPolicy = store.policies.find((p) => p.policy_number === "AUTO-2026-00182");
+      assert.equal(currentPolicy?.status, "expiring", "Policy status must remain expiring after payment decline");
+      assert.equal(currentPolicy?.expiry_date, "2026-10-14", "Expiry date must remain un-advanced");
+
+      // Action ledger must record payment failure
+      const failEvent = execResult.events.find((e) => e.action.includes("failed") || e.status === "failed");
+      assert.ok(failEvent, "Ledger must record failed execution event for supervisory audit");
+    } finally {
+      setPaymentProvider(null);
+    }
+  });
+
+  it("Scenario 3: should reconcile uncertain payment after gateway timeout without double charging", async () => {
+    resetStore();
+    const store = getStore();
+
+    let requestPaymentCallCount = 0;
+    let verifyCallCount = 0;
+
+    // Simulate gateway timeout on initial attempt, but charge actually succeeded at bank
+    const uncertainProvider: IPaymentProvider = {
+      name: "Uncertain Gateway Rail",
+      async requestPayment() {
+        requestPaymentCallCount++;
+        // First initiation: simulate timeout right after debiting customer account
+        throw new Error("GATEWAY_TIMEOUT: Downstream bank switch timed out after charge");
+      },
+      async verifyPayment(ref: string) {
+        verifyCallCount++;
+        // During reconciliation inspection, query confirms customer was indeed charged for exact quote
+        return {
+          status: "succeeded",
+          amount: 87500,
+          currency: "NGN",
+          providerReference: `gw_${ref}`,
+          paidAt: new Date().toISOString(),
+        };
+      },
+      async refundPayment() {
+        return { status: "refunded", refundReference: "ref", amount: 87500 };
+      },
+    };
+
+    setPaymentProvider(uncertainProvider);
+
+    try {
+      const step1 = await orchestrator.startWorkflow({
+        inputText: "Renew Toyota Camry AUTO-2026-00182",
+        channel: "web",
+        executionContext: DEMO_CONTEXT,
+      });
+      assert.equal(step1.status, "awaiting_authorization");
+
+      // 1. Authorize: triggers timeout during execution
+      const execResult = await orchestrator.authorizeAndExecute(
+        step1.sessionId,
+        true,
+        DEMO_CONTEXT
+      );
+
+      // Session escalates to protect customer from duplicate charges
+      assert.equal(execResult.status, "escalated");
+      assert.equal(requestPaymentCallCount, 1);
+
+      // 2. Recovery / Reconciliation worker runs for the escalated session
+      const reconciliationOutcome = await orchestrator.reconcileOrRollback(
+        step1.sessionId,
+        DEMO_CONTEXT
+      );
+
+      // 3. Reconciled safely: detects stranded charge and verifies compensating refund without re-charging customer
+      assert.equal(reconciliationOutcome.reconciliationAction, "refunded_uncompleted");
+      assert.equal(
+        requestPaymentCallCount,
+        1,
+        "Reconciliation must never call requestPayment a second time"
+      );
+      assert.ok(verifyCallCount >= 1, "Reconciliation must query verification endpoint");
+
+      // Policy remains un-advanced: no unearned statutory coverage is granted without completed renewal
+      const finalPolicy = store.policies.find((p) => p.policy_number === "AUTO-2026-00182");
+      assert.equal(finalPolicy?.status, "expiring", "Policy must remain expiring since downstream renewal did not finish");
+      assert.equal(finalPolicy?.expiry_date, "2026-10-14", "Expiry date must remain unchanged");
+    } finally {
+      setPaymentProvider(null);
+    }
   });
 });

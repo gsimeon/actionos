@@ -215,8 +215,14 @@ export class ActionOSGuardrails {
   /**
    * 6. Independent Payment Verification
    */
-  validatePaymentSettlement(paymentStatus: string, expectedAmount: number, actualAmount: number): GuardrailCheckResult {
-    if (paymentStatus !== "succeeded") {
+  validatePaymentSettlement(
+    paymentStatus: string,
+    expectedAmount: number,
+    actualAmount: number,
+    expectedCurrency: string = "NGN",
+    actualCurrency: string = "NGN"
+  ): GuardrailCheckResult {
+    if (paymentStatus !== "succeeded" && paymentStatus !== "confirmed") {
       return {
         passed: false,
         rule: "PAYMENT_SETTLEMENT",
@@ -225,12 +231,21 @@ export class ActionOSGuardrails {
       };
     }
 
-    if (actualAmount < expectedAmount) {
+    if (expectedCurrency.toUpperCase() !== actualCurrency.toUpperCase()) {
+      return {
+        passed: false,
+        rule: "PAYMENT_CURRENCY_MATCH",
+        reason: `Settled currency (${actualCurrency}) does not match expected quote currency (${expectedCurrency}).`,
+        code: "CURRENCY_MISMATCH",
+      };
+    }
+
+    if (Math.abs(actualAmount - expectedAmount) > 0.01) {
       return {
         passed: false,
         rule: "PAYMENT_AMOUNT_MATCH",
-        reason: `Settled payment amount (₦${actualAmount}) is less than required premium (₦${expectedAmount}).`,
-        code: "UNDERPAID_PAYMENT",
+        reason: `Settled payment amount (₦${actualAmount}) does not match authorized quote premium (₦${expectedAmount}).`,
+        code: actualAmount < expectedAmount ? "UNDERPAID_PAYMENT" : "PAYMENT_AMOUNT_MISMATCH",
       };
     }
 

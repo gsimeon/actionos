@@ -57,18 +57,30 @@ ActionOS autonomously:
 
 The application includes an offline-ready **Demo Mode** (`ACTIONOS_RUNTIME_MODE=demo`) requiring no external credentials.
 
-### Installation
+### Installation & Clean Dependency Setup
+
+ActionOS enforces reproducible dependency installation across local workstations and GitHub Actions CI pipelines:
+
 ```bash
 # Clone and enter directory
 cd actionos
 
-# Install dependencies
-npm install --legacy-peer-deps
+# 1. Clean, reproducible installation matching CI pipeline (Recommended)
+npm ci
 
-# Run test suite
+# Note on npm install:
+# In clean checkouts, 'npm ci' installs exact locked versions from package-lock.json deterministically.
+# If executing an incremental 'npm install' in dev environments where peer-dependency 
+# version conflicts arise across Next.js / React 19 plugins, use:
+# npm install --legacy-peer-deps
+
+# 2. Run verification pipeline
+npm run typecheck
+npm run lint
 npm test
+npm run build
 
-# Launch development server
+# 3. Launch development server
 npm run dev
 ```
 

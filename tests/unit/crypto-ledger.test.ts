@@ -3,11 +3,15 @@ import assert from "node:assert/strict";
 import {
   computeEventHash,
   signEventHash,
+  signLedgerEvent,
+  getActiveLedgerKeyVersion,
   verifyEventSignature,
   verifyLedgerIntegrity,
   registerLedgerPublicKey,
   getLedgerPublicKey,
   clearLedgerKeyRegistry,
+  exportDurableKeyRegistry,
+  loadDurableKeyRegistry,
   createLedgerCheckpoint,
   verifyLedgerCheckpoint,
   getLedgerKeyInfo,
@@ -536,5 +540,163 @@ describe("ActionOS Cryptographic Action Ledger (Tamper-Evidence & Integrity)", (
     const forgedResult = verifyLedgerCheckpoint(forgedCheckpoint, events);
     assert.equal(forgedResult.valid, false);
     assert.match(forgedResult.reason || "", /Invalid checkpoint signature/);
+  });
+
+  it("should unify signing key ID with event metadata and guarantee zero divergence across environment changes", () => {
+    const originalVersion = process.env.ACTION_LEDGER_KEY_VERSION;
+    const originalKey = process.env.ACTION_LEDGER_SIGNING_KEY;
+    try {
+      process.env.ACTION_LEDGER_KEY_VERSION = "v3-future-epoch";
+      process.env.ACTION_LEDGER_SIGNING_KEY = "test-signing-seed-v3";
+
+      const eventBase = {
+        id: "ev_unified_001",
+        sessionId: "sess_unified",
+        sequenceNumber: 1,
+        timestamp: new Date().toISOString(),
+        action: "policy_quote_signed",
+        description: "Quote signed under v3 active key",
+        actor: "ActionOS Engine" as const,
+        status: "verified" as const,
+        eventClass: "consequential" as const,
+        isCompensating: false,
+      };
+
+      const completeEvent = signLedgerEvent(eventBase, GENESIS_LEDGER_HASH);
+
+      // Invariant: signingKeyVersion matches active keyId exactly, not a stale hardcoded value
+      assert.equal(completeEvent.signingKeyVersion, "v3-future-epoch");
+      assert.equal(getActiveLedgerKeyVersion(), "v3-future-epoch");
+
+      // Invariant: Signature is verifiable with the recorded key version
+      assert.ok(completeEvent.hash && completeEvent.signature);
+      const sigValid = verifyEventSignature(
+        completeEvent.hash,
+        completeEvent.signature,
+        completeEvent.signingKeyVersion || undefined
+      );
+      assert.equal(sigValid, true);
+
+      // Invariant: verifyLedgerIntegrity with signature verification passes
+      const integrityCheck = verifyLedgerIntegrity([completeEvent], { verifySignatures: true });
+      assert.equal(integrityCheck.valid, true);
+    } finally {
+      if (originalVersion !== undefined) {
+        process.env.ACTION_LEDGER_KEY_VERSION = originalVersion;
+      } else {
+        delete process.env.ACTION_LEDGER_KEY_VERSION;
+      }
+      if (originalKey !== undefined) {
+        process.env.ACTION_LEDGER_SIGNING_KEY = originalKey;
+      } else {
+        delete process.env.ACTION_LEDGER_SIGNING_KEY;
+      }
+      clearLedgerKeyRegistry({ clearDurable: true });
+    }
+  });
+
+  it("should verify historical events and external checkpoints across key rotation and application restart (memory wipe)", () => {
+    const originalKey = process.env.ACTION_LEDGER_SIGNING_KEY;
+    const originalVersion = process.env.ACTION_LEDGER_KEY_VERSION;
+    const originalHistorical = process.env.ACTION_LEDGER_HISTORICAL_KEYS;
+    clearLedgerKeyRegistry({ clearDurable: true });
+
+    try {
+      // 1. Initial key epoch: v1
+      process.env.ACTION_LEDGER_KEY_VERSION = "v1-2025";
+      process.env.ACTION_LEDGER_SIGNING_KEY = "epoch-seed-v1-2025";
+
+      const event1 = signLedgerEvent(
+        {
+          id: "ev_epoch1_001",
+          sessionId: "sess_rotation_restart",
+          sequenceNumber: 1,
+          timestamp: "2025-12-31T23:59:59.000Z",
+          action: "customer_quote_created",
+          description: "Quote issued under v1 key",
+          actor: "ActionOS Engine" as const,
+          status: "verified" as const,
+          eventClass: "informational" as const,
+          isCompensating: false,
+        },
+        GENESIS_LEDGER_HASH
+      );
+      assert.equal(event1.signingKeyVersion, "v1-2025");
+
+      // 2. Rotate to active key epoch: v2
+      process.env.ACTION_LEDGER_KEY_VERSION = "v2-2026";
+      process.env.ACTION_LEDGER_SIGNING_KEY = "epoch-seed-v2-2026";
+
+      const event2 = signLedgerEvent(
+        {
+          id: "ev_epoch2_002",
+          sessionId: "sess_rotation_restart",
+          sequenceNumber: 2,
+          timestamp: "2026-01-01T00:00:01.000Z",
+          action: "policy_renewed",
+          description: "Policy renewed under v2 key",
+          actor: "ActionOS Engine" as const,
+          status: "verified" as const,
+          eventClass: "critical" as const,
+          isCompensating: false,
+        },
+        event1.hash
+      );
+      assert.equal(event2.signingKeyVersion, "v2-2026");
+
+      // 3. Create external checkpoint under active v2 key
+      // Checkpoint must record v2-2026 (the actual signing key), NOT inherit v1 from older events
+      const checkpoint = createLedgerCheckpoint([event1, event2]);
+      assert.equal(checkpoint.signingKeyVersion, "v2-2026");
+      assert.equal(checkpoint.sequenceNumber, 2);
+      assert.equal(checkpoint.eventHash, event2.hash);
+
+      // Verify that durable registry contains both keys before memory wipe
+      const durableExport = exportDurableKeyRegistry();
+      assert.ok(durableExport["v1-2025"], "Durable registry must contain v1 public key");
+      assert.ok(durableExport["v2-2026"], "Durable registry must contain v2 public key");
+
+      // 4. SIMULATE APPLICATION RESTART / IN-MEMORY REGISTRY WIPE
+      clearLedgerKeyRegistry(); // Wipes in-memory Map only; durable store in env remains
+
+      // Explicitly verify loadDurableKeyRegistry reads and rehydrates durable store
+      loadDurableKeyRegistry();
+      assert.ok(getLedgerPublicKey("v1-2025"), "loadDurableKeyRegistry must restore v1 public key");
+      assert.ok(getLedgerPublicKey("v2-2026"), "loadDurableKeyRegistry must restore v2 public key");
+
+      // 5. Verify the entire event stream with signature verification enabled
+      // getLedgerPublicKey dynamically uses durable store
+      const integrityCheck = verifyLedgerIntegrity([event1, event2], { verifySignatures: true });
+      assert.equal(
+        integrityCheck.valid,
+        true,
+        `Historical events from both key versions must remain verifiable after restart: ${integrityCheck.reason}`
+      );
+
+      // 6. Verify checkpoint against event stream after restart
+      const checkpointCheck = verifyLedgerCheckpoint(checkpoint, [event1, event2]);
+      assert.equal(
+        checkpointCheck.valid,
+        true,
+        `External checkpoint must remain verifiable across rotation and restart: ${checkpointCheck.reason}`
+      );
+    } finally {
+      if (originalKey !== undefined) {
+        process.env.ACTION_LEDGER_SIGNING_KEY = originalKey;
+      } else {
+        delete process.env.ACTION_LEDGER_SIGNING_KEY;
+      }
+      if (originalVersion !== undefined) {
+        process.env.ACTION_LEDGER_KEY_VERSION = originalVersion;
+      } else {
+        delete process.env.ACTION_LEDGER_KEY_VERSION;
+      }
+      if (originalHistorical !== undefined) {
+        process.env.ACTION_LEDGER_HISTORICAL_KEYS = originalHistorical;
+      } else {
+        delete process.env.ACTION_LEDGER_HISTORICAL_KEYS;
+      }
+      clearLedgerKeyRegistry({ clearDurable: true });
+    }
   });
 });

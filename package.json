@@ -8,7 +8,10 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/**/*.test.ts"
+    "test": "tsx --test tests/**/*.test.ts",
+    "test:unit": "tsx --test tests/unit/**/*.test.ts",
+    "test:integration": "tsx --test tests/integration/**/*.test.ts",
+    "test:security": "tsx --test tests/unit/*security*.test.ts tests/integration/supabase-security-and-webhooks.test.ts tests/integration/ledger-persistence-and-privacy.test.ts tests/integration/schema-migration.test.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",

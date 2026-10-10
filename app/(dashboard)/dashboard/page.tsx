@@ -373,7 +373,7 @@ export default function DashboardOverviewPage() {
               </li>
               <li className="flex items-start gap-2">
                 <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
-                <span><strong>Payment Sandbox:</strong> Deterministic Paystack/Flutterwave rail with webhook idempotency</span>
+                <span><strong>Payment Sandbox:</strong> Deterministic Paystack rail (Flutterwave roadmap) with webhook idempotency</span>
               </li>
               <li className="flex items-start gap-2">
                 <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />

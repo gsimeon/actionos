@@ -1,8 +1,10 @@
 import type { IActionOSTool, ToolResult, WorkflowExecutionContext } from "@/types/actionos";
 import { getPaymentProvider } from "@/lib/payments";
+import { getRepositoryContainer } from "@/lib/repositories";
 
 export interface RequestPaymentInput {
   customerId: string;
+  email?: string;
   amount: number;
   currency?: string;
   policyNumber: string;
@@ -34,8 +36,11 @@ export class RequestPaymentTool implements IActionOSTool<RequestPaymentInput, Pa
       return { valid: false, error: "Input must be an object" };
     }
     const data = input as RequestPaymentInput;
-    if (!data.customerId || !data.amount) {
-      return { valid: false, error: "customerId and amount are required" };
+    if (!data.customerId || typeof data.customerId !== "string" || !data.customerId.trim()) {
+      return { valid: false, error: "customerId is required and must be a non-empty string" };
+    }
+    if (typeof data.amount !== "number" || isNaN(data.amount) || data.amount <= 0 || !isFinite(data.amount)) {
+      return { valid: false, error: "amount must be a positive non-zero number" };
     }
     return { valid: true, data };
   }
@@ -52,9 +57,28 @@ export class RequestPaymentTool implements IActionOSTool<RequestPaymentInput, Pa
         ? `act_${sanitizedSession}_q_${sanitizedQuote}`
         : `act_${sanitizedSession}_pay_${sanitizedPolicy}`);
 
+    // Resolve customer email from repository if not directly provided
+    const repos = getRepositoryContainer();
+    let customerEmail = input.email;
+    if (!customerEmail && input.customerId) {
+      try {
+        const customer = await repos.customers.findById(input.customerId, {
+          organizationId: context.auth.organizationId,
+          customerId: context.auth.customerId,
+          role: context.auth.role,
+        });
+        if (customer?.email) {
+          customerEmail = customer.email;
+        }
+      } catch {
+        // Fall back gracefully
+      }
+    }
+
     try {
       const res = await getPaymentProvider().requestPayment({
         customerId: input.customerId,
+        email: customerEmail,
         amount: input.amount,
         currency: input.currency || "NGN",
         reference,
@@ -63,6 +87,7 @@ export class RequestPaymentTool implements IActionOSTool<RequestPaymentInput, Pa
           policyNumber: input.policyNumber,
           renewalId: input.renewalId,
           quoteId: input.quoteId,
+          email: customerEmail,
           idempotencyKey: reference,
         },
       });

@@ -17,6 +17,8 @@ import { orchestrator } from "@/lib/actionos/orchestrator";
 import { resetStore } from "@/lib/actionos/mock-store";
 import { getRepositoryContainer } from "@/lib/repositories";
 import { verifyPaystackWebhookSignature, POST as paymentWebhookHandler } from "@/app/api/webhooks/payment/route";
+import { ActionOSGuardrails } from "@/lib/actionos/guardrails";
+import { VerifyPaymentTool } from "@/lib/actionos/tools/verify-payment";
 import type { ActionLedgerEvent } from "@/types/actionos";
 
 class DeterministicFakePaymentProvider implements IPaymentProvider {
@@ -588,6 +590,234 @@ describe("Payment Provider Adapter Isolation & Production Fail-Closed Tests", ()
         1,
         "Reconciliation must verify existing transaction reference and never trigger a second charge"
       );
+    });
+  });
+
+  describe("PaystackPaymentProvider Hardening & Strict Validation", () => {
+    const originalFetch = global.fetch;
+
+    afterEach(() => {
+      global.fetch = originalFetch;
+    });
+
+    it("rejects non-positive, NaN, or non-finite payment amounts", async () => {
+      const provider = new PaystackPaymentProvider("sk_live_test_key_123");
+
+      await assert.rejects(
+        () =>
+          provider.requestPayment({
+            customerId: "cust_1",
+            amount: 0,
+            currency: "NGN",
+            reference: "ref_zero_amt",
+          }),
+        /Amount must be a positive non-zero number/
+      );
+
+      await assert.rejects(
+        () =>
+          provider.requestPayment({
+            customerId: "cust_1",
+            amount: -5000,
+            currency: "NGN",
+            reference: "ref_neg_amt",
+          }),
+        /Amount must be a positive non-zero number/
+      );
+
+      await assert.rejects(
+        () =>
+          provider.requestPayment({
+            customerId: "cust_1",
+            amount: NaN,
+            currency: "NGN",
+            reference: "ref_nan_amt",
+          }),
+        /Amount must be a positive non-zero number/
+      );
+    });
+
+    it("rejects invalid currency codes", async () => {
+      const provider = new PaystackPaymentProvider("sk_live_test_key_123");
+
+      await assert.rejects(
+        () =>
+          provider.requestPayment({
+            customerId: "cust_1",
+            amount: 85000,
+            currency: "NAIRA",
+            reference: "ref_bad_curr",
+          }),
+        /Currency must be a 3-letter ISO code/
+      );
+    });
+
+    it("strictly requires real customer email in production mode and prevents generic fallback", async () => {
+      const originalMode = process.env.ACTIONOS_RUNTIME_MODE;
+      try {
+        process.env.ACTIONOS_RUNTIME_MODE = "production";
+        const provider = new PaystackPaymentProvider("sk_live_test_key_123");
+
+        await assert.rejects(
+          () =>
+            provider.requestPayment({
+              customerId: "cust_1",
+              amount: 85000,
+              currency: "NGN",
+              reference: "ref_prod_no_email",
+              metadata: {},
+            }),
+          /Customer email is strictly required for live Paystack payment initiation/
+        );
+      } finally {
+        process.env.ACTIONOS_RUNTIME_MODE = originalMode;
+      }
+    });
+
+    it("converts amount accurately to integer kobo in outgoing Paystack request", async () => {
+      let capturedBody: { amount?: number; email?: string; currency?: string } | null = null;
+      global.fetch = async (_url, init) => {
+        capturedBody = JSON.parse(init?.body as string) as { amount?: number; email?: string; currency?: string };
+        return new Response(
+          JSON.stringify({
+            status: true,
+            data: { authorization_url: "https://checkout.paystack.com/auth_123" },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      };
+
+      const provider = new PaystackPaymentProvider("sk_live_test_key_123");
+      const res = await provider.requestPayment({
+        customerId: "cust_1",
+        amount: 87500.5,
+        currency: "NGN",
+        reference: "ref_kobo_test",
+        metadata: { email: "real.customer@example.com" },
+      });
+
+      assert.equal(res.status, "processing");
+      assert.ok(capturedBody);
+      const payload = capturedBody as { amount?: number; email?: string; currency?: string };
+      assert.equal(payload.amount, 8750050, "₦87,500.50 must convert accurately to 8,750,050 kobo");
+      assert.equal(payload.email, "real.customer@example.com");
+      assert.equal(payload.currency, "NGN");
+    });
+
+    it("distinguishes refund_pending from refund_confirmed and never treats pending refund as complete", async () => {
+      const provider = new PaystackPaymentProvider("sk_live_test_key_123");
+
+      // 1. Initial refund response: Paystack returns status 'pending' / 'processing'
+      global.fetch = async () => {
+        return new Response(
+          JSON.stringify({
+            status: true,
+            message: "Refund has been queued",
+            data: { id: 778899, status: "pending", amount: 8750000, currency: "NGN" },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      };
+
+      const pendingRefund = await provider.refundPayment("ref_tx_refund_01", 87500);
+      assert.equal(
+        pendingRefund.status,
+        "refund_pending",
+        "Initial Paystack refund request acceptance must be mapped to refund_pending, NOT completed refunded"
+      );
+      assert.equal(pendingRefund.refundReference, "778899");
+
+      // 2. Confirmed refund response: Paystack returns status 'processed' / 'success'
+      global.fetch = async () => {
+        return new Response(
+          JSON.stringify({
+            status: true,
+            message: "Refund processed",
+            data: { id: 778899, status: "processed", amount: 8750000, currency: "NGN" },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      };
+
+      const confirmedRefund = await provider.refundPayment("ref_tx_refund_01", 87500);
+      assert.equal(
+        confirmedRefund.status,
+        "refund_confirmed",
+        "Confirmed settlement reversal must be mapped to refund_confirmed"
+      );
+    });
+  });
+
+  describe("Calling Workflow Verification Response Enforcement", () => {
+    it("guardrail rejects payment settlement if verified amount does not match authorized quote", () => {
+      const guardrails = new ActionOSGuardrails();
+
+      // Case 1: Underpaid payment (₦50,000 paid for ₦87,500 quote)
+      const underpaidCheck = guardrails.validatePaymentSettlement("succeeded", 87500, 50000, "NGN", "NGN");
+      assert.equal(underpaidCheck.passed, false);
+      assert.equal(underpaidCheck.code, "UNDERPAID_PAYMENT");
+
+      // Case 2: Overpaid or mismatched payment (₦90,000 paid for ₦87,500 quote)
+      const overpaidCheck = guardrails.validatePaymentSettlement("succeeded", 87500, 90000, "NGN", "NGN");
+      assert.equal(overpaidCheck.passed, false);
+      assert.equal(overpaidCheck.code, "PAYMENT_AMOUNT_MISMATCH");
+
+      // Case 3: Currency mismatch (paid in USD instead of required NGN)
+      const currMismatch = guardrails.validatePaymentSettlement("succeeded", 87500, 87500, "NGN", "USD");
+      assert.equal(currMismatch.passed, false);
+      assert.equal(currMismatch.code, "CURRENCY_MISMATCH");
+
+      // Case 4: Exact match passes
+      const exactCheck = guardrails.validatePaymentSettlement("succeeded", 87500, 87500, "NGN", "NGN");
+      assert.equal(exactCheck.passed, true);
+    });
+
+    it("VerifyPaymentTool rejects verification if settled currency or amount differs from expected quote", async () => {
+      const mismatchedProvider: IPaymentProvider = {
+        name: "Mismatched Gateway",
+        async requestPayment(input: PaymentInitiationInput) {
+          return { status: "succeeded", reference: input.reference };
+        },
+        async verifyPayment(ref: string) {
+          return {
+            status: "succeeded",
+            amount: 50000, // Quote expects 87,500
+            currency: "NGN",
+            providerReference: `prov_${ref}`,
+            paidAt: new Date().toISOString(),
+          };
+        },
+        async refundPayment() {
+          return { status: "refunded", refundReference: "ref", amount: 0 };
+        },
+      };
+
+      setPaymentProvider(mismatchedProvider);
+
+      const tool = new VerifyPaymentTool();
+      const result = await tool.execute(
+        {
+          reference: "ref_mismatch_check",
+          expectedAmount: 87500,
+          expectedCurrency: "NGN",
+        },
+        {
+          sessionId: "sess_verify_test",
+          auth: {
+            organizationId: "org_1",
+            customerId: "cust_1",
+            userId: "cust_1",
+            profileId: "profile_1",
+            role: "customer",
+            isDemo: false,
+          },
+          channel: "web",
+          isSimulated: false,
+        }
+      );
+
+      assert.equal(result.success, false);
+      assert.equal(result.error?.code, "UNDERPAID_PAYMENT");
     });
   });
 });

@@ -6,7 +6,7 @@ import { ActionOSVerifier } from "./verifier";
 import { ActionOSGuardrails } from "./guardrails";
 import { getRepositoryContainer, type TenantContext } from "@/lib/repositories";
 import { toolRegistry } from "./tool-registry";
-import { computeEventHash, signEventHash, GENESIS_LEDGER_HASH } from "./crypto-ledger";
+import { signLedgerEvent, GENESIS_LEDGER_HASH } from "./crypto-ledger";
 import { webhookDispatcher } from "./webhook-dispatcher";
 import type {
   ActionSession,
@@ -28,6 +28,7 @@ import { createWorkflowExecutionContext } from "@/lib/runtime/execution-context"
 import { computeQuoteSignature, verifyQuoteSignature } from "@/lib/actionos/quote-signature";
 import { getPaymentProvider } from "@/lib/payments";
 import type { RefundPaymentInput } from "./tools/refund-payment";
+import { RenewPolicyTool } from "./tools/renew-policy";
 
 /**
  * Sanitizes audio URLs by stripping query parameters (access tokens, SAS tokens, HMAC signatures)
@@ -152,26 +153,16 @@ export class ActionOSOrchestrator {
         : ev.action.includes("authorization") || ev.action.includes("certificate")
         ? "consequential"
         : "informational");
-    const signingKeyVersion = "v1-2026";
     const isCompensating = Boolean(ev.isCompensating);
 
-    const eventToHash: ActionLedgerEvent = {
+    const eventBase = {
       ...sanitizedEv,
       sequenceNumber,
-      previousHash,
       eventClass,
-      signingKeyVersion,
       isCompensating,
-    } as ActionLedgerEvent;
-
-    const hash = computeEventHash(eventToHash, previousHash);
-    const signature = signEventHash(hash);
-
-    const completeEvent: ActionLedgerEvent = {
-      ...eventToHash,
-      hash,
-      signature,
     };
+
+    const completeEvent = signLedgerEvent(eventBase, previousHash);
 
     events.push(completeEvent);
 
@@ -815,13 +806,17 @@ export class ActionOSOrchestrator {
       const amountMatches = confirmedAmount === amount;
       const currencyMatches = confirmedCurrency.toUpperCase() === (currency || "NGN").toUpperCase();
 
-      if (refundRes.success && refundRes.data?.status === "refunded" && amountMatches && currencyMatches) {
+      const isConfirmed =
+        refundRes.success &&
+        (refundRes.data?.refundState === "refund_confirmed" || refundRes.data?.status === "refunded");
+
+      if (isConfirmed && amountMatches && currencyMatches) {
         await this.appendLedgerEvent(events, {
           id: `ev_${Date.now()}_saga_rollback`,
           sessionId,
           timestamp: new Date().toISOString(),
           action: "saga_compensating_refund",
-          description: `Saga Rollback Verified: Automatic reversal of ${formatCurrency(amount, currency)} confirmed by gateway (Ref: ${refundRes.data.refundReference})`,
+          description: `Saga Rollback Verified: Automatic reversal of ${formatCurrency(amount, currency)} confirmed by gateway (Ref: ${refundRes.data?.refundReference})`,
           status: "verified",
           actor: "Saga Compensator",
           isCompensating: true,
@@ -834,8 +829,8 @@ export class ActionOSOrchestrator {
             refundState: "refund_confirmed",
             refundStatus: "refund_confirmed",
             isRefundConfirmed: true,
-            refundReference: refundRes.data.refundReference,
-            refundedAt: refundRes.data.refundedAt,
+            refundReference: refundRes.data?.refundReference,
+            refundedAt: refundRes.data?.refundedAt,
           },
           tenantContext
         );
@@ -843,12 +838,12 @@ export class ActionOSOrchestrator {
         webhookDispatcher.broadcast("saga.compensated", {
           sessionId,
           reason,
-          refundReference: refundRes.data.refundReference,
+          refundReference: refundRes.data?.refundReference,
           amount,
         });
 
-        return { success: true, refundReference: refundRes.data.refundReference, refundState: "refund_confirmed" };
-      } else if (refundRes.success && refundRes.data?.status === "refunded") {
+        return { success: true, refundReference: refundRes.data?.refundReference, refundState: "refund_confirmed" };
+      } else if (isConfirmed) {
         const mismatchReason = `Refund amount or currency mismatch: expected ${amount} ${currency || "NGN"}, but gateway confirmed ${confirmedAmount} ${confirmedCurrency}`;
         await this.appendLedgerEvent(events, {
           id: `ev_${Date.now()}_saga_rollback_mismatch`,
@@ -884,40 +879,115 @@ export class ActionOSOrchestrator {
         return { success: false, error: mismatchReason, refundState: "refund_pending" };
       } else {
         const failureReason = refundRes.error?.message || "Refund was not confirmed by gateway";
+        const rawState = refundRes.data?.refundState || refundRes.data?.status;
+        const isPending = rawState === "refund_pending" || rawState === "pending" || refundRes.error?.code === "REFUND_PENDING";
+        const isUnknown = rawState === "refund_unknown" || rawState === "unknown" || refundRes.error?.code === "REFUND_UNKNOWN";
 
-        await this.appendLedgerEvent(events, {
-          id: `ev_${Date.now()}_saga_rollback_failed`,
-          sessionId,
-          timestamp: new Date().toISOString(),
-          action: "saga_compensating_refund_failed",
-          description: `Saga Rollback Failed: Reversal of ${formatCurrency(amount, currency)} could not be verified (${failureReason}). Escalated for supervisor refund.`,
-          status: "failed",
-          actor: "Saga Compensator",
-          isCompensating: true,
-          metadata: { paymentReference, reason, error: failureReason },
-        });
+        if (isPending) {
+          const pendingRef = refundRes.data?.refundReference || paymentReference;
+          await this.appendLedgerEvent(events, {
+            id: `ev_${Date.now()}_saga_rollback_pending`,
+            sessionId,
+            timestamp: new Date().toISOString(),
+            action: "saga_compensating_refund_pending",
+            description: `Saga Rollback Pending: Automatic reversal request of ${formatCurrency(amount, currency)} submitted and accepted by gateway (Ref: ${pendingRef}). Awaiting final settlement confirmation.`,
+            status: "pending",
+            actor: "Saga Compensator",
+            isCompensating: true,
+            metadata: { paymentReference, reason, refundReference: pendingRef },
+          });
 
-        const refundState = refundRes.data?.status === "failed" || !refundRes.success ? "refund_failed" : "refund_pending";
-        await repos.sessions.updateMetadata(
-          sessionId,
-          {
-            refundState,
-            refundStatus: refundState,
-            refundFailureReason: failureReason,
-            requiresManualRefund: true,
-          },
-          tenantContext
-        );
+          await repos.sessions.updateMetadata(
+            sessionId,
+            {
+              refundState: "refund_pending",
+              refundStatus: "refund_pending",
+              refundReference: pendingRef,
+              reconciliation_required: true,
+              requiresDeferredReconciliation: true,
+              requiresManualRefund: false,
+            },
+            tenantContext
+          );
 
-        webhookDispatcher.broadcast("saga.compensation_failed", {
-          sessionId,
-          reason,
-          paymentReference,
-          amount,
-          error: failureReason,
-        });
+          webhookDispatcher.broadcast("saga.compensation_pending", {
+            sessionId,
+            reason,
+            paymentReference,
+            refundReference: pendingRef,
+            amount,
+          });
 
-        return { success: false, error: failureReason, refundState: refundState as "refund_failed" | "refund_pending" };
+          return { success: false, refundReference: pendingRef, refundState: "refund_pending" };
+        } else if (isUnknown) {
+          await this.appendLedgerEvent(events, {
+            id: `ev_${Date.now()}_saga_rollback_unknown`,
+            sessionId,
+            timestamp: new Date().toISOString(),
+            action: "saga_compensating_refund_unknown",
+            description: `Saga Rollback Ambiguous: Gateway response uncertain for reversal of ${formatCurrency(amount, currency)} (${failureReason}). Escalated for supervisor investigation.`,
+            status: "failed",
+            actor: "Saga Compensator",
+            isCompensating: true,
+            metadata: { paymentReference, reason, error: failureReason },
+          });
+
+          await repos.sessions.updateMetadata(
+            sessionId,
+            {
+              refundState: "refund_unknown",
+              refundStatus: "refund_unknown",
+              refundFailureReason: failureReason,
+              reconciliation_required: true,
+              requiresManualRefund: true,
+            },
+            tenantContext
+          );
+
+          webhookDispatcher.broadcast("saga.compensation_uncertain", {
+            sessionId,
+            reason,
+            paymentReference,
+            amount,
+            error: failureReason,
+          });
+
+          return { success: false, error: failureReason, refundState: "refund_unknown" };
+        } else {
+          await this.appendLedgerEvent(events, {
+            id: `ev_${Date.now()}_saga_rollback_failed`,
+            sessionId,
+            timestamp: new Date().toISOString(),
+            action: "saga_compensating_refund_failed",
+            description: `Saga Rollback Failed: Reversal of ${formatCurrency(amount, currency)} could not be verified (${failureReason}). Escalated for supervisor refund.`,
+            status: "failed",
+            actor: "Saga Compensator",
+            isCompensating: true,
+            metadata: { paymentReference, reason, error: failureReason },
+          });
+
+          await repos.sessions.updateMetadata(
+            sessionId,
+            {
+              refundState: "refund_failed",
+              refundStatus: "refund_failed",
+              refundFailureReason: failureReason,
+              reconciliation_required: true,
+              requiresManualRefund: true,
+            },
+            tenantContext
+          );
+
+          webhookDispatcher.broadcast("saga.compensation_failed", {
+            sessionId,
+            reason,
+            paymentReference,
+            amount,
+            error: failureReason,
+          });
+
+          return { success: false, error: failureReason, refundState: "refund_failed" };
+        }
       }
     } catch (refundErr) {
       const failureReason = refundErr instanceof Error ? refundErr.message : String(refundErr);
@@ -1031,6 +1101,33 @@ export class ActionOSOrchestrator {
       if (role === "customer") {
         throw new Error("Identity enforcement violation: customerId is required to execute workflow.");
       }
+    }
+
+    // Idempotency check: if session is already completed or executing, return safe response immediately
+    if (session.status === "completed") {
+      return {
+        sessionId,
+        status: "completed",
+        intent: plan.intent,
+        confidence: plan.confidence,
+        message: "Action session was already completed successfully.",
+        authorizationRequired: false,
+        authorizationDetails: null,
+        events,
+      };
+    }
+
+    if (session.status === "executing" || session.status === "verifying") {
+      return {
+        sessionId,
+        status: session.status,
+        intent: plan.intent,
+        confidence: plan.confidence,
+        message: `Action session is currently ${session.status}. Please check back shortly.`,
+        authorizationRequired: false,
+        authorizationDetails: null,
+        events,
+      };
     }
 
     const sm = new ActionStateMachine(session.status);
@@ -1411,7 +1508,13 @@ export class ActionOSOrchestrator {
       throw new Error("Execution violation: newExpiry is required in authorizationDetails.");
     }
 
+    const customerRecord = targetCustomerId
+      ? await repos.customers.findById(targetCustomerId, tenantContext)
+      : null;
+
     let paymentReference = "";
+    let paymentSettled = false;
+    let policyRenewed = false;
     let renewalOutput: { newExpiry?: string; policyNumber?: string } = {};
     const executedMutations: Array<{ tool: string; input: Record<string, unknown> }> = [];
 
@@ -1468,17 +1571,39 @@ export class ActionOSOrchestrator {
           stepOverride.currency = dbQuote.currency || "NGN";
           stepOverride.policyNumber = policyNumber;
           stepOverride.quoteId = dbQuote.id;
+          if (customerRecord?.email) {
+            stepOverride.email = customerRecord.email;
+          }
           const sanitizedSession = sessionId.replace(/-/g, "").substring(0, 16);
           const sanitizedQuote = dbQuote.id.replace(/-/g, "").substring(0, 16);
           stepOverride.idempotencyKey = `act_${sanitizedSession}_q_${sanitizedQuote}`;
         } else if (step.tool_name === "verify_payment") {
           stepOverride.reference = paymentReference;
           stepOverride.expectedAmount = dbQuote.amount;
+          stepOverride.expectedCurrency = dbQuote.currency || "NGN";
         } else if (step.tool_name === "renew_policy") {
           stepOverride.policyNumber = policyNumber;
           stepOverride.paymentReference = paymentReference;
+          stepOverride.expectedAmount = dbQuote.amount;
+          stepOverride.expectedCurrency = dbQuote.currency || "NGN";
           stepOverride.underwriter = dbQuote.provider_name;
         } else if (step.tool_name === "generate_certificate") {
+          if (!policyRenewed || (!paymentSettled && paymentReference)) {
+            const failErr = "Precondition violation: Policy renewal and verified payment settlement must pass before generating certificate record.";
+            sm.transition("failed", failErr);
+            session.status = "failed";
+            await repos.sessions.updateStatus(sessionId, "failed", undefined, tenantContext);
+            return {
+              sessionId,
+              status: "failed",
+              intent: plan.intent,
+              confidence: plan.confidence,
+              message: failErr,
+              authorizationRequired: false,
+              authorizationDetails: null,
+              events,
+            };
+          }
           stepOverride.customerId = targetCustomerId;
           stepOverride.policyNumber = policyNumber;
           if (currentExpiry) {
@@ -1584,12 +1709,14 @@ export class ActionOSOrchestrator {
           await repos.sessions.updateMetadata(sessionId, session.metadata, tenantContext);
         } else if (step.tool_name === "verify_payment") {
           if (result.success) {
+            paymentSettled = true;
             session.metadata = {
               ...session.metadata,
               paymentVerification: {
                 reference: paymentReference,
                 verified: true,
-                verifiedAt: new Date().toISOString(),
+                verifiedAt: (result.data?.verifiedAt as string) || new Date().toISOString(),
+                paidAt: result.data?.paidAt as string | undefined,
                 amount: result.data?.amount,
                 currency: result.data?.currency,
                 providerReference: result.data?.providerReference,
@@ -1599,6 +1726,9 @@ export class ActionOSOrchestrator {
             await repos.sessions.updateMetadata(sessionId, session.metadata, tenantContext);
           }
         } else if (step.tool_name === "renew_policy") {
+          if (result.success) {
+            policyRenewed = true;
+          }
           renewalOutput = result.data as { newExpiry: string; policyNumber: string };
         }
       }
@@ -1638,12 +1768,19 @@ export class ActionOSOrchestrator {
         let isPaymentSettled = false;
         if (paymentReference) {
           const tx = await repos.transactions.findByReference(paymentReference, tenantContext);
+          const expectedQuoteAmount = dbQuote?.amount;
+          const expectedQuoteCurrency = (dbQuote?.currency || "NGN").toUpperCase();
+
           if (tx?.status === "succeeded") {
-            isPaymentSettled = true;
+            if (!expectedQuoteAmount || (Math.abs(tx.amount - expectedQuoteAmount) <= 0.01 && (tx.currency || "NGN").toUpperCase() === expectedQuoteCurrency)) {
+              isPaymentSettled = true;
+            }
           } else {
             const providerVerify = await getPaymentProvider().verifyPayment(paymentReference).catch(() => null);
-            if (providerVerify?.status === "succeeded") {
-              isPaymentSettled = true;
+            if (providerVerify?.status === "succeeded" || providerVerify?.status === "confirmed") {
+              if (!expectedQuoteAmount || (Math.abs(providerVerify.amount - expectedQuoteAmount) <= 0.01 && (providerVerify.currency || "NGN").toUpperCase() === expectedQuoteCurrency)) {
+                isPaymentSettled = true;
+              }
             }
           }
         }
@@ -1764,10 +1901,31 @@ export class ActionOSOrchestrator {
       };
     } catch (unhandledErr: unknown) {
       const errMsg = unhandledErr instanceof Error ? unhandledErr.message : String(unhandledErr);
-      let refundSuccess = false;
+      let refundOutcome: SagaRefundOutcome = { success: false, refundState: "refund_failed" };
+
       if (paymentReference) {
+        // Record unresolved post-payment failure immediately in durable session metadata
         try {
-          const refundOutcome = await this.executeVerifiedSagaRefund({
+          await repos.sessions.updateMetadata(
+            sessionId,
+            {
+              unresolvedDbFailure: true,
+              paymentSettled: true,
+              paymentReference,
+              quoteAmount,
+              quoteCurrency,
+              reconciliationState: "database_failure_post_payment",
+              reconciliation_required: true,
+              lastExecutionError: errMsg,
+            },
+            tenantContext
+          );
+        } catch (metaErr) {
+          console.error(`[ActionOS] Failed to record unresolved state in session metadata: ${metaErr}`);
+        }
+
+        try {
+          refundOutcome = await this.executeVerifiedSagaRefund({
             sessionId,
             paymentReference,
             amount: quoteAmount,
@@ -1777,7 +1935,6 @@ export class ActionOSOrchestrator {
             events,
             tenantContext,
           });
-          refundSuccess = refundOutcome.success;
         } catch (refundErr) {
           console.error(`[ActionOS] Recovery refund failed: ${refundErr}`);
         }
@@ -1787,14 +1944,37 @@ export class ActionOSOrchestrator {
       session.status = "escalated";
       await repos.sessions.updateStatus(sessionId, "escalated", undefined, tenantContext);
 
+      // Record final refund outcome into session metadata
+      if (paymentReference) {
+        try {
+          await repos.sessions.updateMetadata(
+            sessionId,
+            {
+              refundState: refundOutcome.refundState || (refundOutcome.success ? "refund_confirmed" : "refund_failed"),
+              reconciliation_required: refundOutcome.refundState !== "refund_confirmed",
+            },
+            tenantContext
+          );
+        } catch (postMetaErr) {
+          console.error(`[ActionOS] Failed to update post-refund metadata: ${postMetaErr}`);
+        }
+      }
+
+      let messageText = `We ran into an issue executing your action: ${errMsg}.`;
+      if (refundOutcome.refundState === "refund_confirmed") {
+        messageText += ` Your payment of ${formatCurrency(quoteAmount, quoteCurrency)} was automatically refunded.`;
+      } else if (refundOutcome.refundState === "refund_pending") {
+        messageText += ` A refund of ${formatCurrency(quoteAmount, quoteCurrency)} has been submitted and is pending settlement with the payment provider.`;
+      } else {
+        messageText += ` An automated refund could not be verified. A supervisor has been alerted to review your account.`;
+      }
+
       return {
         sessionId,
         status: "escalated",
         intent: plan.intent,
         confidence: plan.confidence,
-        message: refundSuccess
-          ? `We ran into an issue executing your action: ${errMsg}. Your payment of ${formatCurrency(quoteAmount, quoteCurrency)} was automatically refunded.`
-          : `We ran into an issue executing your action: ${errMsg}. An automated refund could not be verified. A supervisor has been alerted to review your account.`,
+        message: messageText,
         authorizationRequired: false,
         authorizationDetails: null,
         events,
@@ -1829,17 +2009,71 @@ export class ActionOSOrchestrator {
       throw new Error(`Session not found for reconciliation: ${sessionId}`);
     }
 
-    if (session.status !== "executing") {
+    const sessionMeta = (session.metadata || {}) as Record<string, unknown>;
+    const isEligible =
+      session.status === "executing" ||
+      session.status === "escalated" ||
+      sessionMeta.reconciliation_required === true ||
+      sessionMeta.requiresDeferredReconciliation === true;
+
+    if (!isEligible) {
       return {
         sessionId,
         resolvedStatus: session.status,
         reconciliationAction: "escalated",
-        message: `Session is in '${session.status}', not 'executing'. No reconciliation needed.`,
+        message: `Session is in '${session.status}', not 'executing' or 'escalated'. No reconciliation needed.`,
       };
     }
 
-    const sessionMeta = (session.metadata || {}) as Record<string, unknown>;
     const authDetails = session.metadata?.authorizationDetails as AuthorizationDetails | undefined;
+    const paymentAttempt = sessionMeta.paymentAttempt as Record<string, unknown> | undefined;
+
+    // Check if session has a pending or unresolved refund that can now be verified authoritatively
+    const refundRef = (sessionMeta.refundReference || (paymentAttempt?.refundReference as string | undefined)) as string | undefined;
+    if ((sessionMeta.refundState === "refund_pending" || sessionMeta.refundState === "refund_unknown") && refundRef) {
+      const provider = getPaymentProvider();
+      if (typeof provider.verifyRefund === "function") {
+        try {
+          const refundVerification = await provider.verifyRefund(refundRef);
+          if (refundVerification.status === "refund_confirmed") {
+            await repos.sessions.updateMetadata(
+              sessionId,
+              {
+                refundState: "refund_confirmed",
+                reconciliation_required: false,
+                requiresDeferredReconciliation: false,
+                paymentReconciliationState: "refunded_uncompleted",
+              },
+              tenantContext
+            );
+            return {
+              sessionId,
+              resolvedStatus: session.status,
+              reconciliationAction: "refunded_uncompleted",
+              message: "Pending refund has been confirmed by payment provider verification.",
+            };
+          } else if (refundVerification.status === "refund_failed") {
+            await repos.sessions.updateMetadata(
+              sessionId,
+              {
+                refundState: "refund_failed",
+                reconciliation_required: true,
+                requiresManualRefund: true,
+              },
+              tenantContext
+            );
+            return {
+              sessionId,
+              resolvedStatus: session.status,
+              reconciliationAction: "reconciliation_required",
+              message: "Pending refund failed with payment provider. Escalated for manual supervisor refund.",
+            };
+          }
+        } catch (err) {
+          console.warn(`[Reconcile] verifyRefund check failed: ${err}`);
+        }
+      }
+    }
     const policyNumber = authDetails?.policyNumber || (sessionMeta.policyNumber as string | undefined);
     const sanitizedSession = sessionId.replace(/-/g, "").substring(0, 16);
     const sanitizedPolicy = policyNumber ? policyNumber.replace(/[^a-zA-Z0-9]/g, "") : "unknown";
@@ -1849,7 +2083,6 @@ export class ActionOSOrchestrator {
     const quoteRef = sanitizedQuote ? `act_${sanitizedSession}_q_${sanitizedQuote}` : undefined;
     const legacyRef = policyNumber ? `act_${sanitizedSession}_pay_${sanitizedPolicy}` : undefined;
     const persistedRef = sessionMeta.paymentReference as string | undefined;
-    const paymentAttempt = sessionMeta.paymentAttempt as Record<string, unknown> | undefined;
     const attemptRef = paymentAttempt?.reference as string | undefined;
     const attemptPaymentRef = paymentAttempt?.paymentReference as string | undefined;
     const attemptProviderRef = paymentAttempt?.providerReference as string | undefined;
@@ -1898,11 +2131,29 @@ export class ActionOSOrchestrator {
       }
     }
 
-    let isSettled = tx?.status === "succeeded";
+    const expectedAmount =
+      authDetails?.amount ||
+      (typeof consentRecord?.quoteAmount === "number" ? consentRecord.quoteAmount : undefined) ||
+      (typeof sessionMeta.quoteAmount === "number" ? sessionMeta.quoteAmount : undefined);
+    const expectedCurrency = (
+      authDetails?.currency ||
+      (sessionMeta.currency as string | undefined) ||
+      "NGN"
+    ).toUpperCase();
+
+    let isSettled = false;
     let settledAmount = tx?.amount;
     let settledCurrency = tx?.currency || "NGN";
 
-    // If transaction not found in DB, reconcile directly against payment provider
+    if (tx?.status === "succeeded") {
+      const amountMatches = !expectedAmount || Math.abs(tx.amount - expectedAmount) <= 0.01;
+      const currencyMatches = (tx.currency || "NGN").toUpperCase() === expectedCurrency;
+      if (amountMatches && currencyMatches) {
+        isSettled = true;
+      }
+    }
+
+    // If transaction not found in DB or not verified, reconcile directly against payment provider
     let isPaymentPending = false;
     let isGatewayUnreachable = false;
     let providerConfirmedUnpaidCount = 0;
@@ -1911,12 +2162,20 @@ export class ActionOSOrchestrator {
       for (const ref of candidateRefs) {
         try {
           const verifyRes = await getPaymentProvider().verifyPayment(ref);
-          if (verifyRes.status === "succeeded") {
-            isSettled = true;
-            effectiveRef = ref;
-            settledAmount = verifyRes.amount;
-            settledCurrency = verifyRes.currency;
-            break;
+          if (verifyRes.status === "succeeded" || verifyRes.status === "confirmed") {
+            const amountMatches = !expectedAmount || Math.abs(verifyRes.amount - expectedAmount) <= 0.01;
+            const currencyMatches = (verifyRes.currency || "NGN").toUpperCase() === expectedCurrency;
+            if (amountMatches && currencyMatches) {
+              isSettled = true;
+              effectiveRef = ref;
+              settledAmount = verifyRes.amount;
+              settledCurrency = verifyRes.currency;
+              break;
+            } else {
+              console.warn(
+                `[Reconcile] Gateway payment verification mismatch for ${ref}: expected ${expectedAmount} ${expectedCurrency}, got ${verifyRes.amount} ${verifyRes.currency}`
+              );
+            }
           } else if (verifyRes.status === "pending") {
             isPaymentPending = true;
             effectiveRef = ref;
@@ -1979,7 +2238,57 @@ export class ActionOSOrchestrator {
         };
       }
 
-      // Payment succeeded but policy renewal failed: perform compensating refund
+      // If unresolved database failure occurred after payment, attempt safe completion of renewal first
+      if (policyNumber && sessionMeta.unresolvedDbFailure) {
+        try {
+          const recoveryExecCtx = createWorkflowExecutionContext(
+            {
+              userId: session.customer_id || "recovery_agent",
+              profileId: "recovery_profile",
+              organizationId: session.organization_id,
+              customerId: session.customer_id || undefined,
+              role: "manager",
+              isDemo: false,
+            },
+            { sessionId, planId: "recovery_plan", channel: session.channel, language: session.language }
+          );
+
+          const renewTool = new RenewPolicyTool();
+          const renewOutcome = await renewTool.execute(
+            {
+              policyNumber,
+              paymentReference: effectiveRef,
+              expectedAmount: settledAmount,
+              expectedCurrency: settledCurrency,
+            },
+            recoveryExecCtx
+          );
+
+          if (renewOutcome.success) {
+            await repos.sessions.updateStatus(sessionId, "completed", new Date().toISOString(), tenantContext);
+            await repos.sessions.updateMetadata(
+              sessionId,
+              {
+                reconciliation_required: false,
+                requiresDeferredReconciliation: false,
+                unresolvedDbFailure: false,
+                paymentReconciliationState: "reconciled_renewed_post_db_failure",
+              },
+              tenantContext
+            );
+            return {
+              sessionId,
+              resolvedStatus: "completed",
+              reconciliationAction: "completed_renewal",
+              message: "Payment confirmed settled. Post-payment database failure resolved by completing policy renewal safely.",
+            };
+          }
+        } catch (renewErr) {
+          console.warn(`[Reconcile] Post-payment renewal replay failed: ${renewErr}`);
+        }
+      }
+
+      // Payment succeeded but policy renewal could not be completed: perform compensating refund
       const recoveryExecCtx = createWorkflowExecutionContext(
         {
           userId: session.customer_id || "recovery_agent",
@@ -2021,13 +2330,14 @@ export class ActionOSOrchestrator {
           reconciliationAction: "refunded_uncompleted",
           message: "Payment was settled but downstream renewal failed. Customer refund was verified and session escalated.",
         };
-      } else if (refundOutcome.refundState === "refund_failed") {
+      } else if (refundOutcome.refundState === "refund_pending" || refundOutcome.refundState === "refund_failed") {
         await repos.sessions.updateMetadata(
           sessionId,
           {
-            refundState: "refund_failed",
+            refundState: refundOutcome.refundState,
             reconciliation_required: true,
-            requiresManualRefund: true,
+            requiresManualRefund: refundOutcome.refundState === "refund_failed",
+            requiresDeferredReconciliation: refundOutcome.refundState === "refund_pending",
           },
           tenantContext
         );
@@ -2035,7 +2345,10 @@ export class ActionOSOrchestrator {
           sessionId,
           resolvedStatus: "escalated",
           reconciliationAction: "refund_pending_escalated",
-          message: "Payment was settled and renewal failed, but automated refund could not be verified. Session escalated with refund_pending status.",
+          message:
+            refundOutcome.refundState === "refund_pending"
+              ? "Payment was settled and renewal failed. Compensating refund is pending settlement with gateway. Session escalated."
+              : "Payment was settled and renewal failed, but automated refund could not be verified. Session escalated with refund_pending status.",
         };
       } else {
         await repos.sessions.updateMetadata(
@@ -2084,6 +2397,16 @@ export class ActionOSOrchestrator {
       reconciliationAction: "reconciliation_required",
       message: "Payment status could not be conclusively determined with the gateway rail. Session kept open for manual reconciliation.",
     };
+  }
+
+  /**
+   * Reconciles uncertain payment and recovers or rolls back executing/escalated session.
+   */
+  async reconcileOrRollback(
+    sessionId: string,
+    tenantContext?: TenantContext
+  ) {
+    return this.reconcileExecutingSession(sessionId, tenantContext);
   }
 }
 

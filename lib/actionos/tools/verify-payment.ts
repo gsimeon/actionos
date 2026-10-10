@@ -5,6 +5,7 @@ import { ActionOSGuardrails } from "@/lib/actionos/guardrails";
 export interface VerifyPaymentInput {
   reference: string;
   expectedAmount: number;
+  expectedCurrency?: string;
 }
 
 export interface VerifyPaymentOutput {
@@ -12,7 +13,8 @@ export interface VerifyPaymentOutput {
   reference: string;
   amount: number;
   currency: string;
-  paidAt: string;
+  paidAt?: string;
+  verifiedAt: string;
   isSimulated: boolean;
   gatewayChannel: "sandbox_simulation" | "paystack_live";
   verificationSource: string;
@@ -42,10 +44,13 @@ export class VerifyPaymentTool implements IActionOSTool<VerifyPaymentInput, Veri
       const verification = await getPaymentProvider().verifyPayment(input.reference);
 
       const guardrails = new ActionOSGuardrails();
+      const expectedCurr = input.expectedCurrency || "NGN";
       const settlementCheck = guardrails.validatePaymentSettlement(
         verification.status,
         input.expectedAmount || 0,
-        verification.amount
+        verification.amount,
+        expectedCurr,
+        verification.currency
       );
 
       if (!settlementCheck.passed) {
@@ -68,6 +73,7 @@ export class VerifyPaymentTool implements IActionOSTool<VerifyPaymentInput, Veri
           amount: verification.amount,
           currency: verification.currency,
           paidAt: verification.paidAt,
+          verifiedAt: verification.verifiedAt || new Date().toISOString(),
           isSimulated,
           gatewayChannel: isSimulated ? "sandbox_simulation" : "paystack_live",
           verificationSource: isSimulated

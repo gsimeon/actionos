@@ -99,7 +99,41 @@ export async function POST(
       );
     }
 
-    // 3. Action is awaiting authorization check
+    // 3. Idempotent check: if session is already completed or in-flight, return safe response
+    if (session.status === "completed") {
+      const existingEvents = (await repos.ledger.getEventsBySessionId(session.id, context)) || [];
+      return NextResponse.json(
+        {
+          success: true,
+          actionStatus: "completed",
+          message: "Action session was already completed successfully.",
+          data: {
+            sessionId: session.id,
+            status: "completed",
+            events: existingEvents,
+          },
+        },
+        { status: 200 }
+      );
+    }
+
+    if (session.status === "executing" || session.status === "verifying") {
+      const existingEvents = (await repos.ledger.getEventsBySessionId(session.id, context)) || [];
+      return NextResponse.json(
+        {
+          success: true,
+          actionStatus: session.status,
+          message: `Action session is currently ${session.status}. Please check back shortly.`,
+          data: {
+            sessionId: session.id,
+            status: session.status,
+            events: existingEvents,
+          },
+        },
+        { status: 202 }
+      );
+    }
+
     if (session.status !== "awaiting_authorization") {
       return NextResponse.json(
         {

@@ -31,6 +31,7 @@ import type { ActionLedgerEvent } from "@/types/actionos";
 import { createClient as createSupabaseClient, SupabaseClient } from "@supabase/supabase-js";
 import { DatabaseError } from "@/lib/repositories/errors";
 import { isProductionMode, isDemoMode } from "@/lib/runtime/mode";
+import { getActiveLedgerKeyVersion } from "@/lib/actionos/crypto-ledger";
 
 export function assertSupabaseProductionConfig(): void {
   if (isProductionMode()) {
@@ -1151,7 +1152,7 @@ export class SupabaseLedgerRepository implements ILedgerRepository {
         previous_hash: event.previousHash ?? "",
         event_hash: event.hash ?? "",
         signature: event.signature ?? "",
-        signing_key_version: event.signingKeyVersion ?? "v1-2026",
+        signing_key_version: event.signingKeyVersion ?? getActiveLedgerKeyVersion(),
         event_class: event.eventClass ?? "informational",
         is_compensating: Boolean(event.isCompensating),
         metadata: event.metadata ?? {},

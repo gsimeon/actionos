@@ -100,10 +100,47 @@ If a request is retried, the system safely returns previously settled records wi
 
 ---
 
-## 5. Extensibility to Future Verticals
+## 5. Payment Hardening, Webhook Safety & Reconciliation
+
+ActionOS implements strict defenses for payment and renewal orchestration:
+
+### A. Authoritative Refund State Modeling
+Paystack refund requests return an immediate acceptance response (`POST /refund`), which only indicates the request is queued. ActionOS accurately models four canonical refund lifecycle states:
+- `refund_pending`: Request accepted by payment rail; awaiting bank settlement confirmation.
+- `refund_confirmed`: Authoritative settlement confirmed by Paystack `refund.processed` webhook or `verifyRefund` polling.
+- `refund_failed`: Explicitly rejected by gateway or banking rail.
+- `refund_unknown`: Network timeout, HTTP 500+, or ambiguous provider response. Escalated for human-in-the-loop review.
+
+### B. Trusted Server-Side Payment Verification
+A policy renewal (`renew_policy`) will **never** commit unless the payment is verified:
+- Settled transaction amount must match the persisted quote amount within 0.01 tolerance.
+- Settled currency must match the quote currency (e.g., `NGN`).
+- Reversing transactions (`transaction_type: "refund"`) are strictly rejected.
+- Tenant isolation is enforced: the transaction must belong to the active customer and organization.
+
+### C. Webhook Deduplication & Out-of-Order Safety
+- Webhooks are cryptographically validated using HMAC-SHA512 with timing-safe comparison.
+- Duplicate deliveries are acknowledged idempotently (`{ duplicate: true }`) without repeated side-effects.
+- Terminal `refunded` transactions can **never** be overwritten by delayed `charge.success` or `charge.failed` webhooks.
+- Already `succeeded` transactions can **never** regress to `failed` or `pending` due to out-of-order delivery.
+
+### D. Post-Payment Database Failure Recovery
+If payment succeeds but a downstream database operation fails:
+- The orchestrator records the unresolved state (`unresolvedDbFailure: true`, `paymentSettled: true`, `reconciliation_required: true`, `reconciliationState: "database_failure_post_payment"`).
+- The recovery worker reconciles the session by completing the renewal safely using the existing settled payment reference, or falls back to compensating refund.
+- Customers are **never** blindly double-debited on retry.
+
+### E. Production vs. Demo Isolation
+- Production mode strictly requires `PAYSTACK_SECRET_KEY` and prohibits simulated mock provider execution.
+- Sensitive information (cards, BVN, NIN, authorization headers, Bearer tokens) is redacted from logs and error responses.
+
+---
+
+## 6. Extensibility to Future Verticals
 
 ActionOS was architected as an extensible engine. Adding new verticals (e.g., `ActionOS Health`, `ActionOS Civic`, `ActionOS Business`) requires:
 1. Defining new domain tools in `lib/actionos/tools/`
 2. Registering tools in `ToolRegistry`
 3. Adding the intent workflow in `ActionOSPlanner`
 No modifications to the core orchestrator, state machine, or audit ledger are required.
+

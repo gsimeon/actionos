@@ -7,11 +7,22 @@ let currentPaymentProvider: IPaymentProvider | null = null;
 
 /**
  * Resolves the authoritative payment provider instance based on runtime mode.
- * - In production: strictly requires real gateway credentials (PAYSTACK_SECRET_KEY) and fails closed if missing.
- * - In demo/test mode: defaults to the mockPaymentProvider simulation driver unless explicitly overridden.
+ * 
+ * Provider Support Status:
+ * - Production: Paystack Gateway (PaystackPaymentProvider) strictly requiring PAYSTACK_SECRET_KEY.
+ * - Demo/Test: MockPaymentProvider deterministic simulation driver.
+ * - Flutterwave: Planned roadmap integration. Flutterwave is not production-ready until
+ *   its adapter, settlement verification, and webhook paths are fully implemented and verified.
+ * 
+ * In production mode, fails closed immediately if PAYSTACK_SECRET_KEY is missing.
  */
 export function getPaymentProvider(): IPaymentProvider {
   if (currentPaymentProvider) {
+    if (isProductionMode() && currentPaymentProvider === mockPaymentProvider) {
+      throw new Error(
+        "Production runtime requires PAYSTACK_SECRET_KEY for authoritative payment settlement and reconciliation. Demo mock payment provider is strictly disabled in production."
+      );
+    }
     return currentPaymentProvider;
   }
 

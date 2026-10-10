@@ -6,6 +6,7 @@ import type {
   PaymentRefundResult,
 } from "./provider";
 import { getRepositoryContainer } from "@/lib/repositories";
+import { isProductionMode } from "@/lib/runtime/mode";
 
 interface PaymentStoreEntry {
   reference: string;
@@ -20,8 +21,17 @@ interface PaymentStoreEntry {
 export class MockPaymentProvider implements IPaymentProvider {
   public readonly name = "ActionOS Mock Paystack Rail (Simulation)";
   private simulatedPayments = new Map<string, PaymentStoreEntry>();
+  public simulateRefundPending = false;
+  public simulateRefundUnknown = false;
+  public simulateRefundFailure = false;
 
   async requestPayment(input: PaymentInitiationInput): Promise<PaymentInitiationResult> {
+    if (isProductionMode()) {
+      throw new Error(
+        "Production isolation violation: Mock payment provider simulation is strictly disabled in production runtime mode."
+      );
+    }
+
     // Idempotency check: if payment with this reference was already processed, return existing record
     const cached = this.simulatedPayments.get(input.reference);
     if (cached && cached.status === "succeeded") {
@@ -100,6 +110,12 @@ export class MockPaymentProvider implements IPaymentProvider {
   }
 
   async verifyPayment(reference: string): Promise<PaymentVerificationResult> {
+    if (isProductionMode()) {
+      throw new Error(
+        "Production isolation violation: Mock payment provider simulation is strictly disabled in production runtime mode."
+      );
+    }
+
     let record = this.simulatedPayments.get(reference);
 
     if (!record) {
@@ -124,7 +140,8 @@ export class MockPaymentProvider implements IPaymentProvider {
         amount: 0,
         currency: "NGN",
         providerReference: "",
-        paidAt: new Date().toISOString(),
+        paidAt: undefined,
+        verifiedAt: new Date().toISOString(),
       };
     }
 
@@ -133,21 +150,52 @@ export class MockPaymentProvider implements IPaymentProvider {
       amount: record.amount,
       currency: record.currency,
       providerReference: record.providerReference,
-      paidAt: record.paidAt,
+      paidAt: record.status === "succeeded" ? record.paidAt : undefined,
+      verifiedAt: new Date().toISOString(),
     };
   }
 
   async refundPayment(
     reference: string,
     amount?: number,
-    options?: { simulateRefundFailure?: boolean }
+    options?: {
+      simulateRefundFailure?: boolean;
+      simulateRefundPending?: boolean;
+      simulateRefundUnknown?: boolean;
+    }
   ): Promise<PaymentRefundResult> {
-    if (options?.simulateRefundFailure) {
+    if (isProductionMode()) {
+      throw new Error(
+        "Production isolation violation: Mock payment provider simulation is strictly disabled in production runtime mode."
+      );
+    }
+
+    if (options?.simulateRefundFailure || this.simulateRefundFailure) {
       return {
-        status: "failed",
+        status: "refund_failed",
         refundReference: "",
         amount: amount || 0,
+        currency: "NGN",
         error: "Payment rail rejected refund reversal: Gateway simulation declined reversal",
+      };
+    }
+
+    if (options?.simulateRefundPending || this.simulateRefundPending) {
+      return {
+        status: "refund_pending",
+        refundReference: `ref_sim_pend_${Date.now()}`,
+        amount: amount || 0,
+        currency: "NGN",
+      };
+    }
+
+    if (options?.simulateRefundUnknown || this.simulateRefundUnknown) {
+      return {
+        status: "refund_unknown",
+        refundReference: `ref_sim_unk_${Date.now()}`,
+        amount: amount || 0,
+        currency: "NGN",
+        error: "Payment gateway simulation timeout: Response ambiguous",
       };
     }
 
@@ -165,10 +213,57 @@ export class MockPaymentProvider implements IPaymentProvider {
     }
 
     return {
-      status: "refunded",
+      status: "refund_confirmed",
       refundReference: refundRef,
       amount: amount ?? (record?.amount || 0),
       currency: record?.currency || tx?.currency || "NGN",
+      rawStatus: "processed",
+    };
+  }
+
+  async verifyRefund(refundReference: string): Promise<PaymentRefundResult> {
+    if (isProductionMode()) {
+      throw new Error(
+        "Production isolation violation: Mock payment provider simulation is strictly disabled in production runtime mode."
+      );
+    }
+
+    const repos = getRepositoryContainer();
+    const tx = await repos.transactions.findByReference(refundReference).catch(() => null);
+    const amount = tx ? Math.abs(tx.amount) : 87500;
+    const currency = tx?.currency || "NGN";
+
+    if (this.simulateRefundPending || refundReference.includes("_still_pend")) {
+      return {
+        status: "refund_pending",
+        refundReference,
+        amount,
+        currency,
+      };
+    }
+    if (refundReference.includes("fail")) {
+      return {
+        status: "refund_failed",
+        refundReference,
+        amount,
+        currency,
+        error: "Simulated refund verification reported failure",
+      };
+    }
+    if (refundReference.includes("unk")) {
+      return {
+        status: "refund_unknown",
+        refundReference,
+        amount,
+        currency,
+        error: "Simulated refund verification ambiguous",
+      };
+    }
+    return {
+      status: "refund_confirmed",
+      refundReference,
+      amount,
+      currency,
     };
   }
 }

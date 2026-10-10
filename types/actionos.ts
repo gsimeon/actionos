@@ -162,29 +162,18 @@ export interface SagaCompensationStep {
   success?: boolean;
 }
 
-// Payment Provider Interface
-export interface PaymentProvider {
-  name: string;
-  requestPayment(input: {
-    customerId: string;
-    amount: number;
-    currency: string;
-    reference: string;
-    metadata?: Record<string, unknown>;
-  }): Promise<{
-    status: "processing" | "succeeded" | "failed";
-    reference: string;
-    gatewayUrl?: string;
-  }>;
+export type {
+  CanonicalRefundState,
+  CanonicalPaymentLifecycleState,
+  PaymentRefundResult,
+  PaymentVerificationResult,
+  PaymentInitiationResult,
+  PaymentInitiationInput,
+  IPaymentProvider,
+} from "@/lib/payments/provider";
 
-  verifyPayment(reference: string): Promise<{
-    status: "succeeded" | "failed" | "pending";
-    amount: number;
-    currency: string;
-    providerReference: string;
-    paidAt: string;
-  }>;
-}
+// Payment Provider Interface (Canonical ActionOS alias for IPaymentProvider)
+export type PaymentProvider = import("@/lib/payments/provider").IPaymentProvider;
 
 // Guardrail Verification Result
 export interface GuardrailCheckResult {
