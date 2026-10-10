@@ -11,6 +11,8 @@ import type {
   INotificationRepository,
   IAuditRepository,
   ILedgerRepository,
+  IWebhookEventRepository,
+  WebhookEventRecord,
   RepositoryContainer,
   TenantContext,
 } from "../interfaces";
@@ -883,6 +885,43 @@ export class DemoQuoteRepository implements IQuoteRepository {
   }
 }
 
+export class DemoWebhookEventRepository implements IWebhookEventRepository {
+  private events: Map<string, WebhookEventRecord> = new Map();
+
+  async recordEvent(event: {
+    provider: string;
+    eventId: string;
+    eventType: string;
+    reference: string;
+    status: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<{ isDuplicate: boolean; event: WebhookEventRecord }> {
+    const key = `${event.provider}:${event.eventId}`;
+    const existing = this.events.get(key);
+    if (existing) {
+      return { isDuplicate: true, event: existing };
+    }
+
+    const record: WebhookEventRecord = {
+      id: generateDemoId("wh_evt"),
+      provider: event.provider,
+      event_id: event.eventId,
+      event_type: event.eventType,
+      reference: event.reference,
+      status: event.status,
+      created_at: new Date().toISOString(),
+      metadata: event.metadata,
+    };
+    this.events.set(key, record);
+    return { isDuplicate: false, event: record };
+  }
+
+  async findByEventId(provider: string, eventId: string): Promise<WebhookEventRecord | null> {
+    const key = `${provider}:${eventId}`;
+    return this.events.get(key) || null;
+  }
+}
+
 export class DemoRepositoryContainer implements RepositoryContainer {
   public readonly isDemo = true;
   public readonly customers = new DemoCustomerRepository();
@@ -897,4 +936,5 @@ export class DemoRepositoryContainer implements RepositoryContainer {
   public readonly notifications = new DemoNotificationRepository();
   public readonly audit = new DemoAuditRepository();
   public readonly ledger = new DemoLedgerRepository();
+  public readonly webhookEvents = new DemoWebhookEventRepository();
 }

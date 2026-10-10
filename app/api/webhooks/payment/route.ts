@@ -191,6 +191,37 @@ export async function POST(req: Request) {
       });
     }
 
+    // Database uniqueness constraint deduplication check if providerEventId is present
+    if (repos.webhookEvents && providerEventId) {
+      try {
+        const existingRecorded = await repos.webhookEvents.findByEventId("paystack", providerEventId);
+        if (existingRecorded) {
+          return NextResponse.json({
+            success: true,
+            data: {
+              acknowledged: true,
+              duplicate: true,
+              reference: ref,
+              eventId: providerEventId,
+              status: existingTx.status,
+            },
+          });
+        }
+      } catch (err) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: {
+              code: "DATABASE_LOOKUP_FAILED",
+              message: "Database error during webhook deduplication lookup. Gateway retry requested.",
+              details: err instanceof Error ? err.message : String(err),
+            },
+          },
+          { status: 500 }
+        );
+      }
+    }
+
     // Acquire concurrency lock
     inFlightWebhookRequests.add(dedupeKey);
 
@@ -311,6 +342,19 @@ export async function POST(req: Request) {
           }
 
           if (linkedQuote) {
+            if (linkedQuote.expires_at && new Date(linkedQuote.expires_at).getTime() < Date.now()) {
+              return NextResponse.json(
+                {
+                  success: false,
+                  error: {
+                    code: "QUOTE_EXPIRED",
+                    message: `Linked authorized quote '${linkedQuote.id}' has expired. Cannot settle payment against an expired quote.`,
+                  },
+                },
+                { status: 422 }
+              );
+            }
+
             const isQuoteKoboMatch = Math.abs(rawAmount / 100 - linkedQuote.amount) <= 0.01;
             const isQuoteNairaMatch = Math.abs(rawAmount - linkedQuote.amount) <= 0.01;
             if (!isQuoteKoboMatch && !isQuoteNairaMatch) {
@@ -421,6 +465,21 @@ export async function POST(req: Request) {
         await repos.transactions.updateStatus(existingTx.id, txStatus, undefined, {
           metadata: updatedMetadata,
         });
+
+        if (repos.webhookEvents && providerEventId) {
+          await repos.webhookEvents.recordEvent({
+            provider: "paystack",
+            eventId: providerEventId,
+            eventType: payload.event,
+            reference: ref,
+            status: txStatus,
+            metadata: {
+              amount: payload.data.amount,
+              currency: payload.data.currency,
+            },
+          });
+        }
+
         // In-memory cache is committed ONLY after successful database persistence
         processedWebhookMemoryCache.add(dedupeKey);
       } catch (dbError) {

@@ -130,6 +130,29 @@ export interface IQuoteRepository {
   acceptQuote(id: string, sessionId: string, tenant?: TenantContext): Promise<Quote | null>;
 }
 
+export interface WebhookEventRecord {
+  id: string;
+  provider: string;
+  event_id: string;
+  event_type: string;
+  reference: string;
+  status: string;
+  created_at: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface IWebhookEventRepository {
+  recordEvent(event: {
+    provider: string;
+    eventId: string;
+    eventType: string;
+    reference: string;
+    status: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<{ isDuplicate: boolean; event: WebhookEventRecord }>;
+  findByEventId(provider: string, eventId: string): Promise<WebhookEventRecord | null>;
+}
+
 export interface RepositoryContainer {
   readonly isDemo: boolean;
   customers: ICustomerRepository;
@@ -144,4 +167,5 @@ export interface RepositoryContainer {
   notifications: INotificationRepository;
   audit: IAuditRepository;
   ledger: ILedgerRepository;
+  webhookEvents: IWebhookEventRepository;
 }

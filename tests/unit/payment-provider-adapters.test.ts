@@ -16,7 +16,11 @@ import { formatCurrency, formatNaira } from "@/lib/utils";
 import { orchestrator } from "@/lib/actionos/orchestrator";
 import { resetStore } from "@/lib/actionos/mock-store";
 import { getRepositoryContainer } from "@/lib/repositories";
-import { verifyPaystackWebhookSignature, POST as paymentWebhookHandler } from "@/app/api/webhooks/payment/route";
+import {
+  verifyPaystackWebhookSignature,
+  resetProcessedWebhookMemoryCache,
+  POST as paymentWebhookHandler,
+} from "@/app/api/webhooks/payment/route";
 import { ActionOSGuardrails } from "@/lib/actionos/guardrails";
 import { VerifyPaymentTool } from "@/lib/actionos/tools/verify-payment";
 import type { ActionLedgerEvent } from "@/types/actionos";
@@ -1150,6 +1154,120 @@ describe("Payment Provider Adapter Isolation & Production Fail-Closed Tests", ()
         process.env.ACTIONOS_VERIFY_WEBHOOK_WITH_PROVIDER = originalEnv;
         setPaymentProvider(null);
       }
+    });
+
+    it("rejects settlement with 422 QUOTE_EXPIRED when linked authorized quote has expired", async () => {
+      const repos = getRepositoryContainer();
+      const txRef = "ref_expired_quote_test_011";
+      const quoteId = "quote_expired_011";
+
+      await repos.quotes.create({
+        id: quoteId,
+        session_id: "sess_expired_011",
+        organization_id: "org_webhook_test",
+        customer_id: "cust_webhook_test",
+        policy_id: "pol_expired_011",
+        provider_name: "Leadway",
+        amount: 87500,
+        currency: "NGN",
+        expires_at: new Date(Date.now() - 3600000).toISOString(), // Expired 1 hour ago
+        status: "issued",
+      });
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_webhook_test",
+        organization_id: "org_webhook_test",
+        amount: 87500,
+        currency: "NGN",
+        status: "pending",
+        metadata: { quote_id: quoteId },
+      });
+
+      const req = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: "charge.success",
+          data: {
+            id: 110099,
+            reference: txRef,
+            amount: 8750000,
+            currency: "NGN",
+            status: "success",
+          },
+        }),
+      });
+
+      const res = await paymentWebhookHandler(req);
+      assert.equal(res.status, 422);
+      const json = (await res.json()) as { error?: { code: string; message: string } };
+      assert.equal(json.error?.code, "QUOTE_EXPIRED");
+      assert(json.error?.message.includes("has expired"));
+
+      // Verify transaction did NOT transition to succeeded
+      const tx = await repos.transactions.findByReference(txRef);
+      assert.equal(tx?.status, "pending");
+    });
+
+    it("persists webhook event into webhookEvents repository and detects duplicates via database uniqueness", async () => {
+      const repos = getRepositoryContainer();
+      const txRef = "ref_db_unique_evt_012";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_webhook_test",
+        organization_id: "org_webhook_test",
+        amount: 87500,
+        currency: "NGN",
+        status: "pending",
+      });
+
+      const eventId = 44556677;
+      const reqPayload = JSON.stringify({
+        event: "charge.success",
+        data: {
+          id: eventId,
+          reference: txRef,
+          amount: 8750000,
+          currency: "NGN",
+          status: "success",
+        },
+      });
+
+      // 1. First delivery
+      const req1 = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: reqPayload,
+      });
+
+      const res1 = await paymentWebhookHandler(req1);
+      assert.equal(res1.status, 200);
+      const json1 = (await res1.json()) as { data: { acknowledged: boolean; duplicate: boolean } };
+      assert.equal(json1.data.duplicate, false);
+
+      // Verify event was recorded in repos.webhookEvents
+      const recorded = await repos.webhookEvents.findByEventId("paystack", String(eventId));
+      assert(recorded !== null, "Webhook event must be recorded in webhookEvents repository");
+      assert.equal(recorded?.event_id, String(eventId));
+      assert.equal(recorded?.reference, txRef);
+
+      // 2. Second delivery across isolated memory (simulating a separate serverless worker)
+      resetProcessedWebhookMemoryCache();
+
+      const req2 = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: reqPayload,
+      });
+
+      const res2 = await paymentWebhookHandler(req2);
+      assert.equal(res2.status, 200);
+      const json2 = (await res2.json()) as { data: { acknowledged: boolean; duplicate: boolean } };
+      assert.equal(json2.data.duplicate, true, "Separate worker must detect duplicate via database uniqueness");
     });
   });
 

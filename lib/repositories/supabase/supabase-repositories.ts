@@ -11,6 +11,8 @@ import type {
   INotificationRepository,
   IAuditRepository,
   ILedgerRepository,
+  IWebhookEventRepository,
+  WebhookEventRecord,
   RepositoryContainer,
   TenantContext,
 } from "../interfaces";
@@ -1366,6 +1368,66 @@ export class SupabaseQuoteRepository implements IQuoteRepository {
   }
 }
 
+export class SupabaseWebhookEventRepository implements IWebhookEventRepository {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private client: SupabaseClient<any>;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  constructor(client: SupabaseClient<any> = getSupabaseClient()) {
+    this.client = client;
+  }
+
+  async recordEvent(event: {
+    provider: string;
+    eventId: string;
+    eventType: string;
+    reference: string;
+    status: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<{ isDuplicate: boolean; event: WebhookEventRecord }> {
+    // Attempt atomic insertion utilizing PostgreSQL UNIQUE constraint (provider, event_id)
+    const { data, error } = await this.client
+      .from("payment_webhook_events")
+      .insert({
+        provider: event.provider,
+        event_id: event.eventId,
+        event_type: event.eventType,
+        reference: event.reference,
+        status: event.status,
+        metadata: event.metadata ?? {},
+      })
+      .select("*")
+      .single();
+
+    if (error) {
+      // 23505 is PostgreSQL unique_violation code
+      if (error.code === "23505" || error.message?.includes("duplicate key")) {
+        const existing = await this.findByEventId(event.provider, event.eventId);
+        if (existing) {
+          return { isDuplicate: true, event: existing };
+        }
+      }
+      throw new DatabaseError(`Failed to record webhook event: ${error.message}`, error.code, error);
+    }
+
+    return { isDuplicate: false, event: data as WebhookEventRecord };
+  }
+
+  async findByEventId(provider: string, eventId: string): Promise<WebhookEventRecord | null> {
+    const { data, error } = await this.client
+      .from("payment_webhook_events")
+      .select("*")
+      .eq("provider", provider)
+      .eq("event_id", eventId)
+      .maybeSingle();
+
+    if (error) {
+      throw new DatabaseError(`Webhook event lookup failed: ${error.message}`, error.code, error);
+    }
+    return (data || null) as WebhookEventRecord | null;
+  }
+}
+
 export class SupabaseRepositoryContainer implements RepositoryContainer {
   public readonly isDemo = false;
   public readonly customers = new SupabaseCustomerRepository();
@@ -1380,4 +1442,5 @@ export class SupabaseRepositoryContainer implements RepositoryContainer {
   public readonly notifications = new SupabaseNotificationRepository();
   public readonly audit = new SupabaseAuditRepository();
   public readonly ledger = new SupabaseLedgerRepository();
+  public readonly webhookEvents = new SupabaseWebhookEventRepository();
 }
