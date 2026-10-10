@@ -1003,6 +1003,31 @@ describe("Payment Provider Adapter Isolation & Production Fail-Closed Tests", ()
       assert.equal(txAfter?.status, "pending", "Unrelated event must never mark transaction as failed");
     });
 
+    it("safely acknowledges and ignores unrelated Paystack webhooks that do not contain a reference field", async () => {
+      // An unrelated event (e.g. dedicated_account.assign.success or transfer.success) without any 'reference'
+      const unhandledEventPayload = JSON.stringify({
+        event: "dedicated_account.assign.success",
+        data: {
+          id: 99887766,
+          customer: { id: 12345, email: "someone@domain.com" },
+          dedicated_account: { account_name: "ActionOS Test", account_number: "9988776655" },
+        },
+      });
+
+      const req = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: unhandledEventPayload,
+      });
+
+      const res = await paymentWebhookHandler(req);
+      assert.equal(res.status, 200);
+      const json = (await res.json()) as { data: { acknowledged: boolean; ignored: boolean; reason: string } };
+      assert.equal(json.data.acknowledged, true);
+      assert.equal(json.data.ignored, true);
+      assert.equal(json.data.reason, "unrecognized_event");
+    });
+
     it("handles concurrent deliveries safely without race conditions or duplicate execution", async () => {
       const repos = getRepositoryContainer();
       const txRef = "ref_concurrent_delivery_008";

@@ -99,6 +99,33 @@ export async function POST(req: Request) {
       );
     }
 
+    // 2. Allowlist Supported Webhook Events
+    // Only verified payment and refund events are processed. Unrelated event types (e.g., transfer.success,
+    // subscription.create, invoice.create) are safely acknowledged and ignored immediately without corrupting
+    // transaction financial status or triggering unneeded database lookups.
+    const SUPPORTED_WEBHOOK_EVENTS = new Set([
+      "charge.success",
+      "charge.failed",
+      "charge.declined",
+      "refund.processed",
+      "refund.pending",
+      "refund.processing",
+      "refund.failed",
+    ]);
+
+    if (!SUPPORTED_WEBHOOK_EVENTS.has(payload.event)) {
+      return NextResponse.json({
+        success: true,
+        data: {
+          acknowledged: true,
+          ignored: true,
+          reason: "unrecognized_event",
+          event: payload.event,
+          reference: typeof payload.data?.reference === "string" ? payload.data.reference.trim() : undefined,
+        },
+      });
+    }
+
     const ref = typeof payload.data.reference === "string" ? payload.data.reference.trim() : "";
     if (!ref) {
       return NextResponse.json(
@@ -191,10 +218,11 @@ export async function POST(req: Request) {
       });
     }
 
-    // Database uniqueness constraint deduplication check if providerEventId is present
-    if (repos.webhookEvents && providerEventId) {
+    // Database uniqueness constraint deduplication check
+    const eventRecordId = providerEventId || dedupeKey;
+    if (repos.webhookEvents) {
       try {
-        const existingRecorded = await repos.webhookEvents.findByEventId("paystack", providerEventId);
+        const existingRecorded = await repos.webhookEvents.findByEventId("paystack", eventRecordId);
         if (existingRecorded) {
           return NextResponse.json({
             success: true,
@@ -466,16 +494,17 @@ export async function POST(req: Request) {
           metadata: updatedMetadata,
         });
 
-        if (repos.webhookEvents && providerEventId) {
+        if (repos.webhookEvents) {
           await repos.webhookEvents.recordEvent({
             provider: "paystack",
-            eventId: providerEventId,
+            eventId: eventRecordId,
             eventType: payload.event,
             reference: ref,
             status: txStatus,
             metadata: {
               amount: payload.data.amount,
               currency: payload.data.currency,
+              provider_event_id: providerEventId,
             },
           });
         }

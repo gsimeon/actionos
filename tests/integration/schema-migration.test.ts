@@ -69,19 +69,8 @@ describe("Supabase Schema, Migration Replayability & Type Alignment Validation",
   });
 
   it("should verify mandatory Row Level Security (RLS) is enabled on all sensitive tenant tables", () => {
-    const schemaSql = fs.readFileSync(
-      path.join(migrationsDir, "20261007000000_actionos_schema.sql"),
-      "utf-8"
-    );
-    const ledgerSql = fs.readFileSync(
-      path.join(migrationsDir, "20261008000000_action_ledger_events.sql"),
-      "utf-8"
-    );
-    const quotesSql = fs.readFileSync(
-      path.join(migrationsDir, "20261008010000_quotes.sql"),
-      "utf-8"
-    );
-    const allSql = schemaSql + "\n" + ledgerSql + "\n" + quotesSql;
+    const migrationFiles = fs.readdirSync(migrationsDir).filter((f) => f.endsWith(".sql"));
+    const allSql = migrationFiles.map((f) => fs.readFileSync(path.join(migrationsDir, f), "utf-8")).join("\n");
 
     const rlsTables = [
       "organizations",
@@ -99,10 +88,11 @@ describe("Supabase Schema, Migration Replayability & Type Alignment Validation",
       "documents",
       "notifications",
       "action_ledger_events",
+      "payment_webhook_events",
     ];
 
     for (const table of rlsTables) {
-      const rlsRegex = new RegExp(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY;`, "i");
+      const rlsRegex = new RegExp(`ALTER TABLE (public\\.)?${table} ENABLE ROW LEVEL SECURITY;`, "i");
       assert.ok(
         rlsRegex.test(allSql),
         `RLS must be explicitly enabled for sensitive table: ${table}`
