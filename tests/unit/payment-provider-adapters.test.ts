@@ -25,7 +25,14 @@ class DeterministicFakePaymentProvider implements IPaymentProvider {
   public readonly name = "Deterministic Test Payment Provider";
   public initiationBehavior: "succeeded" | "failed" | "processing" = "succeeded";
   public verificationBehavior: "succeeded" | "failed" | "pending" | "timeout" = "succeeded";
-  public refundBehavior: "refunded" | "failed" | "timeout" = "refunded";
+  public refundBehavior:
+    | "refund_confirmed"
+    | "refund_pending"
+    | "refund_failed"
+    | "refund_unknown"
+    | "refunded"
+    | "failed"
+    | "timeout" = "refund_confirmed";
   public lastRequestedInput?: PaymentInitiationInput;
   public lastVerifiedReference?: string;
   public lastRefundedReference?: string;
@@ -53,7 +60,8 @@ class DeterministicFakePaymentProvider implements IPaymentProvider {
       amount: 85000,
       currency: "NGN",
       providerReference: `prov_ver_${reference}`,
-      paidAt: new Date().toISOString(),
+      paidAt: this.verificationBehavior === "succeeded" ? new Date().toISOString() : undefined,
+      verifiedAt: new Date().toISOString(),
     };
   }
 
@@ -62,20 +70,64 @@ class DeterministicFakePaymentProvider implements IPaymentProvider {
     if (this.refundBehavior === "timeout") {
       throw new Error("GATEWAY_TIMEOUT: refund endpoint unreachable");
     }
-    if (this.refundBehavior === "failed") {
+    if (this.refundBehavior === "failed" || this.refundBehavior === "refund_failed") {
       return {
-        status: "failed",
-        refundReference: "",
+        status: "refund_failed",
         amount: amount || 0,
         currency: "NGN",
         error: "Card issuer declined reversal",
       };
     }
+    if (this.refundBehavior === "refund_pending") {
+      return {
+        status: "refund_pending",
+        refundReference: `ref_det_pend_${Date.now()}`,
+        amount: amount || 85000,
+        currency: "NGN",
+        rawStatus: "pending",
+      };
+    }
+    if (this.refundBehavior === "refund_unknown") {
+      return {
+        status: "refund_unknown",
+        amount: amount || 0,
+        currency: "NGN",
+        error: "Ambiguous gateway response",
+      };
+    }
     return {
-      status: "refunded",
+      status: "refund_confirmed",
       refundReference: `ref_det_${Date.now()}`,
       amount: amount || 85000,
       currency: "NGN",
+      rawStatus: "processed",
+    };
+  }
+
+  async verifyRefund(refundReference: string): Promise<PaymentRefundResult> {
+    if (refundReference.includes("fail")) {
+      return {
+        status: "refund_failed",
+        amount: 0,
+        currency: "NGN",
+        error: "Card issuer confirmed decline",
+      };
+    }
+    if (refundReference.includes("pend")) {
+      return {
+        status: "refund_pending",
+        refundReference,
+        amount: 85000,
+        currency: "NGN",
+        rawStatus: "pending",
+      };
+    }
+    return {
+      status: "refund_confirmed",
+      refundReference,
+      amount: 85000,
+      currency: "NGN",
+      rawStatus: "processed",
     };
   }
 }
@@ -232,7 +284,7 @@ describe("Payment Provider Adapter Isolation & Production Fail-Closed Tests", ()
         async refundPayment(reference: string, amount?: number) {
           // Intentionally return mismatched currency or amount
           return {
-            status: "refunded",
+            status: "refund_confirmed",
             refundReference: `ref_mismatch_${Date.now()}`,
             amount: (amount || 85000) - 1000, // Short refunded by 1000
             currency: "NGN",
@@ -319,7 +371,7 @@ describe("Payment Provider Adapter Isolation & Production Fail-Closed Tests", ()
         },
         async refundPayment(reference: string, amount?: number) {
           return {
-            status: "refunded",
+            status: "refund_confirmed",
             refundReference: `ref_exact_${Date.now()}`,
             amount: amount || 85000,
             currency: "NGN",
@@ -746,6 +798,244 @@ describe("Payment Provider Adapter Isolation & Production Fail-Closed Tests", ()
         "Confirmed settlement reversal must be mapped to refund_confirmed"
       );
     });
+
+    it("rejects payment initiation when amount has fractional kobo or invalid precision", async () => {
+      const provider = new PaystackPaymentProvider("sk_live_test_key_123");
+
+      await assert.rejects(
+        () =>
+          provider.requestPayment({
+            customerId: "cust_1",
+            amount: 87500.123,
+            currency: "NGN",
+            reference: "ref_frac_kobo",
+            metadata: { email: "user@test.ng" },
+          }),
+        /Invalid amount precision.*cannot exceed 2 decimal places/
+      );
+    });
+
+    it("rejects payment initiation when customer email is malformed or uses generic fallback", async () => {
+      const provider = new PaystackPaymentProvider("sk_live_test_key_123");
+
+      await assert.rejects(
+        () =>
+          provider.requestPayment({
+            customerId: "cust_1",
+            amount: 87500,
+            currency: "NGN",
+            reference: "ref_bad_email",
+            metadata: { email: "not-an-email" },
+          }),
+        /Invalid customer email format/
+      );
+
+      await assert.rejects(
+        () =>
+          provider.requestPayment({
+            customerId: "cust_1",
+            amount: 87500,
+            currency: "NGN",
+            reference: "ref_generic_email",
+            metadata: { email: "customer@actionos.ng" },
+          }),
+        /Generic fallback email 'customer@actionos.ng' is prohibited/
+      );
+
+      await assert.rejects(
+        () =>
+          provider.requestPayment({
+            customerId: "",
+            amount: 87500,
+            currency: "NGN",
+            reference: "ref_missing_cust",
+            metadata: { email: "valid@test.ng" },
+          }),
+        /Customer identity \(customerId\) is required/
+      );
+
+      await assert.rejects(
+        () =>
+          provider.requestPayment({
+            customerId: "cust_1",
+            amount: 87500,
+            currency: "NGN",
+            reference: "",
+            metadata: { email: "valid@test.ng" },
+          }),
+        /Transaction reference is required/
+      );
+    });
+
+    it("preserves provider payment timestamp as optional and records local verifiedAt separately", async () => {
+      const provider = new PaystackPaymentProvider("sk_live_test_key_123");
+
+      // Case 1: Provider provides paid_at
+      global.fetch = async () => {
+        return new Response(
+          JSON.stringify({
+            status: true,
+            data: {
+              status: "success",
+              amount: 8750000,
+              currency: "NGN",
+              reference: "ref_with_paid_at",
+              paid_at: "2026-10-10T08:30:00.000Z",
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      };
+
+      const result1 = await provider.verifyPayment("ref_with_paid_at");
+      assert.equal(result1.status, "succeeded");
+      assert.equal(result1.paidAt, "2026-10-10T08:30:00.000Z");
+      assert.ok(result1.verifiedAt, "Local verifiedAt timestamp must be recorded");
+
+      // Case 2: Provider omits paid_at (e.g. pending or omitted by gateway)
+      global.fetch = async () => {
+        return new Response(
+          JSON.stringify({
+            status: true,
+            data: {
+              status: "success",
+              amount: 8750000,
+              currency: "NGN",
+              reference: "ref_no_paid_at",
+              paid_at: null,
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      };
+
+      const result2 = await provider.verifyPayment("ref_no_paid_at");
+      assert.equal(result2.status, "succeeded");
+      assert.equal(result2.paidAt, undefined, "Missing paid_at must not be fabricated");
+      assert.ok(result2.verifiedAt, "Local verifiedAt timestamp must still be recorded");
+    });
+
+    it("handles refund failure when Paystack rejects request without inventing synthetic reference", async () => {
+      const provider = new PaystackPaymentProvider("sk_live_test_key_123");
+
+      global.fetch = async () => {
+        return new Response(
+          JSON.stringify({
+            status: false,
+            message: "Transaction has already been fully refunded",
+          }),
+          { status: 400, headers: { "Content-Type": "application/json" } }
+        );
+      };
+
+      const refundResult = await provider.refundPayment("ref_already_refunded", 87500);
+      assert.equal(refundResult.status, "refund_failed");
+      assert.equal(refundResult.refundReference, undefined, "Must not invent synthetic fallback reference");
+      assert.ok(refundResult.error?.includes("already been fully refunded") || refundResult.error?.includes("400"));
+    });
+
+    it("handles malformed non-JSON response from Paystack without inventing synthetic reference", async () => {
+      const provider = new PaystackPaymentProvider("sk_live_test_key_123");
+
+      global.fetch = async () => {
+        return new Response("<html><body>502 Bad Gateway</body></html>", {
+          status: 200,
+          headers: { "Content-Type": "text/html" },
+        });
+      };
+
+      const refundResult = await provider.refundPayment("ref_malformed", 87500);
+      assert.equal(refundResult.status, "refund_unknown");
+      assert.equal(refundResult.refundReference, undefined, "Must not invent synthetic reference on malformed response");
+      assert.ok(refundResult.error?.includes("Malformed JSON"));
+    });
+
+    it("handles ambiguous response with missing data.id without inventing synthetic reference", async () => {
+      const provider = new PaystackPaymentProvider("sk_live_test_key_123");
+
+      global.fetch = async () => {
+        return new Response(
+          JSON.stringify({
+            status: true,
+            message: "Refund accepted",
+            data: { status: "pending", amount: 8750000, currency: "NGN" }, // no id!
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      };
+
+      const refundResult = await provider.refundPayment("ref_no_id", 87500);
+      assert.equal(refundResult.status, "refund_unknown");
+      assert.equal(refundResult.refundReference, undefined, "Must not invent synthetic reference when data.id is missing");
+      assert.ok(refundResult.error?.includes("omitted authoritative identifier (data.id)"));
+    });
+
+    it("handles gateway network timeout during refund without inventing synthetic reference", async () => {
+      const provider = new PaystackPaymentProvider("sk_live_test_key_123");
+
+      global.fetch = async () => {
+        throw new Error("ETIMEDOUT: Connection timed out to api.paystack.co");
+      };
+
+      const refundResult = await provider.refundPayment("ref_timeout", 87500);
+      assert.equal(refundResult.status, "refund_unknown");
+      assert.equal(refundResult.refundReference, undefined, "Must not invent synthetic reference on network timeout");
+      assert.ok(refundResult.error?.includes("timeout"));
+    });
+
+    it("verifies refund status via verifyRefund polling endpoint", async () => {
+      const provider = new PaystackPaymentProvider("sk_live_test_key_123");
+
+      // Case 1: Transitioned to processed
+      global.fetch = async () => {
+        return new Response(
+          JSON.stringify({
+            status: true,
+            data: { id: 778899, status: "processed", amount: 8750000, currency: "NGN" },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      };
+      const verifyRes1 = await provider.verifyRefund("778899");
+      assert.equal(verifyRes1.status, "refund_confirmed");
+      assert.equal(verifyRes1.refundReference, "778899");
+
+      // Case 2: Still pending
+      global.fetch = async () => {
+        return new Response(
+          JSON.stringify({
+            status: true,
+            data: { id: 778899, status: "pending", amount: 8750000, currency: "NGN" },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      };
+      const verifyRes2 = await provider.verifyRefund("778899");
+      assert.equal(verifyRes2.status, "refund_pending");
+
+      // Case 3: Failed
+      global.fetch = async () => {
+        return new Response(
+          JSON.stringify({
+            status: true,
+            data: { id: 778899, status: "failed", amount: 8750000, currency: "NGN" },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      };
+      const verifyRes3 = await provider.verifyRefund("778899");
+      assert.equal(verifyRes3.status, "refund_failed");
+
+      // Case 4: Gateway 500 error
+      global.fetch = async () => {
+        return new Response(JSON.stringify({ status: false, message: "Gateway error" }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      };
+      const verifyRes4 = await provider.verifyRefund("778899");
+      assert.equal(verifyRes4.status, "refund_unknown");
+    });
   });
 
   describe("Calling Workflow Verification Response Enforcement", () => {
@@ -788,7 +1078,7 @@ describe("Payment Provider Adapter Isolation & Production Fail-Closed Tests", ()
           };
         },
         async refundPayment() {
-          return { status: "refunded", refundReference: "ref", amount: 0 };
+          return { status: "refund_confirmed", refundReference: "ref", amount: 0 };
         },
       };
 

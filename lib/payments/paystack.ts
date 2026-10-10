@@ -5,7 +5,6 @@ import type {
   PaymentVerificationResult,
   PaymentRefundResult,
 } from "./provider";
-import { isProductionMode } from "@/lib/runtime/mode";
 
 /**
  * Production Paystack Payment Gateway Integration Driver
@@ -60,6 +59,10 @@ export class PaystackPaymentProvider implements IPaymentProvider {
       throw new Error("Calculated minor currency units (kobo) must be greater than zero.");
     }
 
+    if (!input.reference || typeof input.reference !== "string" || !input.reference.trim()) {
+      throw new Error("Transaction reference is required before initializing a payment transaction.");
+    }
+
     const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     const candidateEmail = (
       input.email ||
@@ -67,28 +70,25 @@ export class PaystackPaymentProvider implements IPaymentProvider {
       ((input as unknown as Record<string, unknown>).customerEmail as string | undefined)
     )?.trim();
 
-    const isLive = isProductionMode() || (this.secretKey.length > 0 && !this.secretKey.startsWith("sk_test_"));
-
     if (!candidateEmail) {
-      if (isLive) {
-        throw new Error(
-          "Customer email is strictly required for live Paystack payment initiation. Silent fallback to generic address is prohibited."
-        );
-      }
-    } else {
-      if (!EMAIL_REGEX.test(candidateEmail)) {
-        throw new Error(
-          `Invalid customer email format: '${candidateEmail}'. A valid email address is required for payment initialization.`
-        );
-      }
-      if (isProductionMode() && candidateEmail.toLowerCase() === "customer@actionos.ng") {
-        throw new Error(
-          "Generic fallback email 'customer@actionos.ng' is prohibited for live payment initialization in production. A verified customer email is required."
-        );
-      }
+      throw new Error(
+        "Customer email is strictly required for live Paystack payment initiation. Silent fallback to generic address is prohibited."
+      );
     }
 
-    const email = candidateEmail || "customer@actionos.ng";
+    if (!EMAIL_REGEX.test(candidateEmail)) {
+      throw new Error(
+        `Invalid customer email format: '${candidateEmail}'. A valid email address is required for payment initialization.`
+      );
+    }
+
+    if (candidateEmail.toLowerCase() === "customer@actionos.ng") {
+      throw new Error(
+        "Generic fallback email 'customer@actionos.ng' is prohibited for Paystack payment initialization. A verified customer email is required."
+      );
+    }
+
+    const email = candidateEmail;
 
     let response: Response;
     try {
@@ -227,7 +227,6 @@ export class PaystackPaymentProvider implements IPaymentProvider {
       const errMsg = err instanceof Error ? err.message : String(err);
       return {
         status: "refund_unknown",
-        refundReference: `ref_unknown_${Date.now()}`,
         amount: amount || 0,
         currency: "NGN",
         error: `Gateway connection failure / timeout during refund request: ${errMsg}`,
@@ -242,7 +241,6 @@ export class PaystackPaymentProvider implements IPaymentProvider {
       if (response.status >= 500) {
         return {
           status: "refund_unknown",
-          refundReference: `ref_unknown_${Date.now()}`,
           amount: amount || 0,
           currency: "NGN",
           error: `HTTP ${response.status}: Gateway server error or timeout during refund: ${errMsg}`,
@@ -252,7 +250,6 @@ export class PaystackPaymentProvider implements IPaymentProvider {
       // HTTP 4xx indicates client rejection (e.g., transaction not found, unrefundable, already reversed)
       return {
         status: "refund_failed",
-        refundReference: `ref_fail_${Date.now()}`,
         amount: amount || 0,
         currency: "NGN",
         error: `HTTP ${response.status}: ${errMsg}`,
@@ -265,7 +262,6 @@ export class PaystackPaymentProvider implements IPaymentProvider {
     } catch {
       return {
         status: "refund_unknown",
-        refundReference: `ref_unknown_${Date.now()}`,
         amount: amount || 0,
         currency: "NGN",
         error: "Malformed JSON response from Paystack refund endpoint",
@@ -277,7 +273,6 @@ export class PaystackPaymentProvider implements IPaymentProvider {
       const errMsg = typeof json.message === "string" ? json.message : "Paystack declined refund request";
       return {
         status: "refund_failed",
-        refundReference: `ref_fail_${Date.now()}`,
         amount: amount || 0,
         currency: "NGN",
         error: errMsg,
@@ -286,9 +281,20 @@ export class PaystackPaymentProvider implements IPaymentProvider {
 
     const data = (json.data && typeof json.data === "object" ? json.data : {}) as Record<string, unknown>;
     const rawStatus = (typeof data.status === "string" ? data.status : "").toLowerCase().trim();
-    const refundRef = data.id !== undefined && data.id !== null ? String(data.id) : `ref_${Date.now()}`;
+    const refundRef = data.id !== undefined && data.id !== null ? String(data.id) : undefined;
     const refundAmount = typeof data.amount === "number" ? data.amount / 100 : (amount || 0);
     const refundCurrency = (typeof data.currency === "string" ? data.currency : "NGN").toUpperCase();
+
+    // If provider omitted reference id on a supposedly accepted/processed refund, do not invent one
+    if (!refundRef) {
+      return {
+        status: "refund_unknown",
+        amount: refundAmount,
+        currency: refundCurrency,
+        error: "Paystack refund response omitted authoritative identifier (data.id). Synthetic fallback reference generation is prohibited.",
+        rawStatus,
+      };
+    }
 
     // Model pending, confirmed, failed, and unknown outcomes accurately:
     // - processed / success: authoritative settlement completed

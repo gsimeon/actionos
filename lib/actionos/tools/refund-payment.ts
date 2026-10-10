@@ -15,7 +15,7 @@ export interface RefundPaymentInput {
 }
 
 export interface RefundPaymentOutput {
-  refundReference: string;
+  refundReference?: string;
   originalReference: string;
   amount: number;
   currency: string;
@@ -85,7 +85,8 @@ export class RefundPaymentTool implements IActionOSTool<RefundPaymentInput, Refu
     const isPending = refundProviderRes.status === "refund_pending";
     const isUnknown = refundProviderRes.status === "refund_unknown" || refundProviderRes.status === "unknown";
 
-    const refundRef = refundProviderRes.refundReference || `ref_rev_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const refundRef = refundProviderRes.refundReference;
+    const dbTxRef = refundRef || `tx_refund_${input.reference}_${Date.now()}`;
     const providerName = paymentProvider.name.includes("Paystack Gateway") ? "paystack" : "mock_paystack";
 
     if (isConfirmed) {
@@ -97,11 +98,12 @@ export class RefundPaymentTool implements IActionOSTool<RefundPaymentInput, Refu
           amount: -Math.abs(input.amount),
           currency: input.currency || "NGN",
           provider: providerName,
-          reference: refundRef,
+          reference: dbTxRef,
           status: "succeeded",
           transaction_type: "refund",
           metadata: {
             originalReference: input.reference,
+            gatewayRefundReference: refundRef || null,
             reason: input.reason,
             isSagaCompensating: true,
             gatewayVerified: true,
@@ -135,11 +137,12 @@ export class RefundPaymentTool implements IActionOSTool<RefundPaymentInput, Refu
           amount: -Math.abs(input.amount),
           currency: input.currency || "NGN",
           provider: providerName,
-          reference: refundRef,
+          reference: dbTxRef,
           status: "pending",
           transaction_type: "refund",
           metadata: {
             originalReference: input.reference,
+            gatewayRefundReference: refundRef || null,
             reason: input.reason,
             isSagaCompensating: true,
             gatewayVerified: false,

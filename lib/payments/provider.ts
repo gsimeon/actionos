@@ -69,7 +69,7 @@ export interface PaymentRefundResult {
     | "failed"
     | "refund_unknown"
     | "unknown";
-  refundReference: string;
+  refundReference?: string;
   amount: number;
   currency?: string;
   error?: string;

@@ -63,13 +63,14 @@ describe("Paystack Payment & Renewal Orchestration Hardening Regression Suite", 
         assert.equal(refundRes.data?.status, "pending");
 
         // Verify transaction in DB is marked 'pending', NOT 'succeeded'
-        const refundTx = await repos.transactions.findByReference(refundRes.data.refundReference);
+        assert.ok(refundRes.data?.refundReference, "Pending refund must return a refundReference");
+        const refundTx = await repos.transactions.findByReference(refundRes.data.refundReference!);
         assert.ok(refundTx, "Pending refund transaction must exist in repository");
         assert.equal(refundTx.status, "pending", "Pending refund transaction must NOT be marked succeeded");
 
         // Subsequent verification: provider confirms settlement
         mockPaymentProvider.simulateRefundPending = false;
-        const verifyRes = await mockPaymentProvider.verifyRefund(refundRes.data.refundReference);
+        const verifyRes = await mockPaymentProvider.verifyRefund(refundRes.data.refundReference!);
         assert.equal(verifyRes.status, "refund_confirmed");
         assert.equal(verifyRes.amount, quoteAmount);
       } finally {

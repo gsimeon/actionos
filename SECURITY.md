@@ -44,16 +44,36 @@ These records may only be inserted or mutated by trusted server-side code or Sup
   - `manager`: ₦10,000,000 maximum
   - `admin`: Unlimited
 - **Independent Settlement Verification:** A policy is never renewed based on client claims. The verifier queries the payment gateway out-of-band to confirm actual settlement.
+- **Quote Invariant Verification:** Trusted renewal orchestration strictly validates settled amount (within 0.01 tolerance), settled currency (`NGN`), and transaction reference against the authorized quote before committing renewals. Reversing refund transactions are rejected.
 
 ---
 
-## 4. Idempotency & Replay Protection
+## 4. Payment Rail Hardening & Authoritative Refund Lifecycle
+
+- **Strict Live Payment Initiation Validation:**
+  - Mandatory customer identity (`customerId`) and verified customer email format matching `EMAIL_REGEX`. Silent fallback to generic email (`customer@actionos.ng`) is strictly prohibited.
+  - Positive finite amount with minor-unit (kobo) precision validation (rejects fractional kobo exceeding 2 decimal places).
+  - Explicit currency validation restricted to `NGN` for domestic policy settlements.
+  - Non-empty unique transaction reference required before contacting the payment rail.
+- **Timestamp Integrity:**
+  - Preserves provider payment timestamp (`paid_at`) as optional rather than fabricating current system time.
+  - Separately records authoritative local verification timestamp (`verifiedAt`).
+- **Authoritative 4-State Refund Lifecycle:**
+  - Initial `POST /refund` acceptance maps strictly to `refund_pending` (as Paystack queues requests for processing). Never prematurely marked as complete.
+  - Settlement reversal is only marked `refund_confirmed` once authoritative provider proof (`processed` / `success`) is confirmed via `GET /refund/:id` or webhook.
+  - Terminal declinations map to `refund_failed`.
+  - Gateway timeouts, HTTP 500+, and malformed or ambiguous responses map to `refund_unknown`.
+  - **Zero Synthetic Fallbacks:** When provider identifiers (`data.id`) are omitted or network errors occur, the adapter never invents dummy references (e.g. `ref_${Date.now()}`); `refundReference` is left `undefined` and flagged for supervisor reconciliation.
+
+---
+
+## 5. Idempotency & Replay Protection
 
 Payment and renewal actions generate deterministic idempotency keys:
 - `action:{session_id}:payment`
 - `action:{session_id}:renewal`
 
-Duplicate network requests or retries reuse existing transaction references, preventing duplicate debiting or duplicate certificate issuance.
+Duplicate network requests or retries reuse existing transaction references, preventing duplicate debiting or duplicate certificate issuance. Replayed webhooks are acknowledged idempotently (`{ duplicate: true }`) without triggering duplicate state transitions.
 
 ---
 
