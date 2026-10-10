@@ -139,6 +139,7 @@ export class MockPaymentProvider implements IPaymentProvider {
         status: "failed",
         amount: 0,
         currency: "NGN",
+        reference: "",
         providerReference: "",
         paidAt: undefined,
         verifiedAt: new Date().toISOString(),
@@ -240,6 +241,8 @@ export class MockPaymentProvider implements IPaymentProvider {
       return {
         status: "refund_pending",
         refundReference,
+        refundId: `rf_id_${refundReference}`,
+        transactionReference: tx?.reference,
         amount,
         currency,
       };
@@ -248,6 +251,8 @@ export class MockPaymentProvider implements IPaymentProvider {
       return {
         status: "refund_failed",
         refundReference,
+        refundId: `rf_id_${refundReference}`,
+        transactionReference: tx?.reference,
         amount,
         currency,
         error: "Simulated refund verification reported failure",
@@ -257,6 +262,8 @@ export class MockPaymentProvider implements IPaymentProvider {
       return {
         status: "refund_unknown",
         refundReference,
+        refundId: `rf_id_${refundReference}`,
+        transactionReference: tx?.reference,
         amount,
         currency,
         error: "Simulated refund verification ambiguous",
@@ -265,6 +272,7 @@ export class MockPaymentProvider implements IPaymentProvider {
     return {
       status: "refund_confirmed",
       refundReference,
+      refundId: `rf_id_${refundReference}`,
       transactionReference: tx?.reference,
       amount,
       currency,

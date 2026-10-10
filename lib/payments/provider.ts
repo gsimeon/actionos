@@ -55,8 +55,11 @@ export interface PaymentVerificationResult {
   status: "confirmed" | "succeeded" | "failed" | "pending";
   amount: number;
   currency: string;
+  /** Merchant transaction reference sent to provider (matches ActionOS transaction reference) */
   reference?: string;
+  /** Provider-reported payment reference */
   providerReference: string;
+  /** Provider-specific numeric or alphanumeric transaction identifier (e.g. Paystack data.id) */
   providerTransactionId?: string;
   paidAt?: string;
   verifiedAt?: string;
@@ -71,13 +74,18 @@ export interface PaymentRefundResult {
     | "failed"
     | "refund_unknown"
     | "unknown";
+  /** Merchant or provider alphanumeric refund reference (e.g. data.refund_reference) */
   refundReference?: string;
+  /** Provider gateway numeric or string refund identifier (e.g. Paystack data.id) */
   refundId?: string;
+  /** Original merchant transaction reference associated with the refund */
   transactionReference?: string;
   amount: number;
   currency?: string;
   error?: string;
   rawStatus?: string;
+  gatewayResponse?: string;
+  raw?: unknown;
 }
 
 export interface RefundPaymentOptions {

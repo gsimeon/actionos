@@ -3379,4 +3379,372 @@ describe("Payment Provider Adapter Isolation & Production Fail-Closed Tests", ()
       }
     });
   });
+
+  describe("Paystack Realistic Contract Tests: Reference Separation, Typed Interfaces, & Explicit Refund Mapping", () => {
+    const origFetch = globalThis.fetch;
+    const origRuntimeMode = process.env.ACTIONOS_RUNTIME_MODE;
+    const origSecretKey = process.env.PAYSTACK_SECRET_KEY;
+
+    afterEach(() => {
+      globalThis.fetch = origFetch;
+      process.env.ACTIONOS_RUNTIME_MODE = origRuntimeMode;
+      process.env.PAYSTACK_SECRET_KEY = origSecretKey;
+      setPaymentProvider(null);
+      resetProcessedWebhookMemoryCache();
+    });
+
+    it("should preserve Paystack data.reference as merchant reference and separate data.id as providerTransactionId", async () => {
+      globalThis.fetch = async () => {
+        return new Response(
+          JSON.stringify({
+            status: true,
+            message: "Verification successful",
+            data: {
+              id: 2009297,
+              domain: "live",
+              status: "success",
+              reference: "ref_wh_auth_01",
+              amount: 8750000,
+              currency: "NGN",
+              paid_at: "2026-10-10T12:00:00.000Z",
+              gateway_response: "Successful",
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      };
+
+      const provider = new PaystackPaymentProvider("sk_live_test_contract_key");
+      const result = await provider.verifyPayment("ref_wh_auth_01");
+
+      assert.equal(result.status, "succeeded");
+      assert.equal(result.reference, "ref_wh_auth_01", "Merchant reference must be preserved from data.reference");
+      assert.equal(result.providerReference, "ref_wh_auth_01", "providerReference should hold merchant payment reference");
+      assert.equal(result.providerTransactionId, "2009297", "data.id must be stored separately as providerTransactionId");
+      assert.equal(result.amount, 87500);
+      assert.equal(result.currency, "NGN");
+    });
+
+    it("should settle transaction successfully in webhook when Paystack returns separate numeric data.id without false reference mismatch", async () => {
+      process.env.ACTIONOS_RUNTIME_MODE = "production";
+      process.env.PAYSTACK_SECRET_KEY = "test_paystack_secret_key_prod_auth";
+
+      const repos = getRepositoryContainer();
+      const txRef = "ref_wh_auth_01";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_wh_test",
+        organization_id: "org_wh_test",
+        amount: 87500,
+        currency: "NGN",
+        status: "pending",
+      });
+
+      // Mock fetch returning realistic Paystack verification response where data.id is integer 2009297 and data.reference is ref_wh_auth_01
+      globalThis.fetch = async (url) => {
+        if (typeof url === "string" && url.includes("/transaction/verify/")) {
+          return new Response(
+            JSON.stringify({
+              status: true,
+              message: "Verification successful",
+              data: {
+                id: 2009297,
+                domain: "live",
+                status: "success",
+                reference: txRef,
+                amount: 8750000,
+                currency: "NGN",
+                paid_at: "2026-10-10T12:00:00.000Z",
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+        return new Response("Not found", { status: 404 });
+      };
+
+      const realPaystackProvider = new PaystackPaymentProvider("test_paystack_secret_key_prod_auth");
+      setPaymentProvider(realPaystackProvider);
+
+      const rawPayload = JSON.stringify({
+        event: "charge.success",
+        data: {
+          id: 2009297,
+          reference: txRef,
+          amount: 8750000,
+          currency: "NGN",
+          status: "success",
+          paid_at: "2026-10-10T12:00:00.000Z",
+        },
+      });
+
+      const signature = crypto
+        .createHmac("sha512", "test_paystack_secret_key_prod_auth")
+        .update(rawPayload)
+        .digest("hex");
+
+      const req = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-paystack-signature": signature,
+        },
+        body: rawPayload,
+      });
+
+      const res = await paymentWebhookHandler(req);
+      assert.equal(res.status, 200, "Webhook must not fail with PROVIDER_REFERENCE_MISMATCH when data.id is numeric");
+      const json = (await res.json()) as { success: boolean; data: { status: string } };
+      assert.equal(json.success, true);
+      assert.equal(json.data.status, "succeeded");
+
+      const tx = await repos.transactions.findByReference(txRef);
+      assert.equal(tx?.status, "succeeded");
+      assert.equal(tx?.metadata?.provider_transaction_id, "2009297");
+    });
+
+    it("should fail closed in webhook when Paystack verification omits currency without synthesized default", async () => {
+      process.env.ACTIONOS_RUNTIME_MODE = "production";
+      process.env.PAYSTACK_SECRET_KEY = "test_paystack_secret_key_prod_auth";
+
+      const repos = getRepositoryContainer();
+      const txRef = "ref_wh_missing_currency_99";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_wh_test",
+        organization_id: "org_wh_test",
+        amount: 87500,
+        currency: "NGN",
+        status: "pending",
+      });
+
+      globalThis.fetch = async (url) => {
+        if (typeof url === "string" && url.includes("/transaction/verify/")) {
+          return new Response(
+            JSON.stringify({
+              status: true,
+              message: "Verification successful",
+              data: {
+                id: 3004112,
+                status: "success",
+                reference: txRef,
+                amount: 8750000,
+                // currency omitted from provider evidence
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+        return new Response("Not found", { status: 404 });
+      };
+
+      const realPaystackProvider = new PaystackPaymentProvider("test_paystack_secret_key_prod_auth");
+      setPaymentProvider(realPaystackProvider);
+
+      const rawPayload = JSON.stringify({
+        event: "charge.success",
+        data: {
+          id: 3004112,
+          reference: txRef,
+          amount: 8750000,
+          currency: "NGN",
+          status: "success",
+        },
+      });
+
+      const signature = crypto
+        .createHmac("sha512", "test_paystack_secret_key_prod_auth")
+        .update(rawPayload)
+        .digest("hex");
+
+      const req = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-paystack-signature": signature,
+        },
+        body: rawPayload,
+      });
+
+      const res = await paymentWebhookHandler(req);
+      assert.equal(res.status, 422);
+      const json = (await res.json()) as { error: { code: string; message: string } };
+      assert.equal(json.error.code, "PROVIDER_CURRENCY_REQUIRED");
+
+      const tx = await repos.transactions.findByReference(txRef);
+      assert.equal(tx?.status, "pending");
+    });
+
+    it("should explicitly map and match realistic Paystack refund responses with separate id and refund_reference", async () => {
+      process.env.ACTIONOS_RUNTIME_MODE = "production";
+      process.env.PAYSTACK_SECRET_KEY = "test_paystack_secret_key_prod_refund";
+
+      const repos = getRepositoryContainer();
+      const txRef = "ref_wh_contract_refund_55";
+      const refundRef = "rf_paystack_proc_9988";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_wh_test",
+        organization_id: "org_wh_test",
+        amount: 87500,
+        currency: "NGN",
+        status: "succeeded",
+        metadata: { original_payment_status: "succeeded" },
+      });
+
+      globalThis.fetch = async (url) => {
+        if (typeof url === "string" && url.includes("/refund/")) {
+          return new Response(
+            JSON.stringify({
+              status: true,
+              message: "Refund fetched",
+              data: {
+                id: 55443322,
+                refund_reference: refundRef,
+                amount: 8750000,
+                currency: "NGN",
+                status: "processed",
+                transaction: {
+                  id: 2009297,
+                  reference: txRef,
+                },
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+        return new Response("Not found", { status: 404 });
+      };
+
+      const realPaystackProvider = new PaystackPaymentProvider("test_paystack_secret_key_prod_refund");
+      setPaymentProvider(realPaystackProvider);
+
+      const rawPayload = JSON.stringify({
+        event: "refund.processed",
+        data: {
+          id: 55443322,
+          reference: txRef,
+          refund_reference: refundRef,
+          amount: 8750000,
+          currency: "NGN",
+          status: "processed",
+        },
+      });
+
+      const signature = crypto
+        .createHmac("sha512", "test_paystack_secret_key_prod_refund")
+        .update(rawPayload)
+        .digest("hex");
+
+      const req = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-paystack-signature": signature,
+        },
+        body: rawPayload,
+      });
+
+      const res = await paymentWebhookHandler(req);
+      assert.equal(res.status, 200, "Webhook must match refund and provider refund response without false mismatch");
+      const json = (await res.json()) as { success: boolean; data: { status: string; refundReference?: string } };
+      assert.equal(json.success, true);
+      assert.equal(json.data.status, "refunded");
+
+      const tx = await repos.transactions.findByReference(txRef);
+      assert.equal(tx?.status, "refunded");
+      assert.equal(tx?.metadata?.original_payment_status, "succeeded");
+      assert.equal(tx?.metadata?.refund_reference, refundRef);
+      assert.equal(tx?.metadata?.refund_id, "55443322");
+    });
+
+    it("should handle duplicate webhook delivery idempotently in production", async () => {
+      process.env.ACTIONOS_RUNTIME_MODE = "production";
+      process.env.PAYSTACK_SECRET_KEY = "test_paystack_secret_key_prod_dup";
+
+      const repos = getRepositoryContainer();
+      const txRef = "ref_wh_dup_test_01";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_wh_test",
+        organization_id: "org_wh_test",
+        amount: 87500,
+        currency: "NGN",
+        status: "pending",
+      });
+
+      globalThis.fetch = async (url) => {
+        if (typeof url === "string" && url.includes("/transaction/verify/")) {
+          return new Response(
+            JSON.stringify({
+              status: true,
+              message: "Verification successful",
+              data: {
+                id: 4005112,
+                status: "success",
+                reference: txRef,
+                amount: 8750000,
+                currency: "NGN",
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+        return new Response("Not found", { status: 404 });
+      };
+
+      const realPaystackProvider = new PaystackPaymentProvider("test_paystack_secret_key_prod_dup");
+      setPaymentProvider(realPaystackProvider);
+
+      const rawPayload = JSON.stringify({
+        event: "charge.success",
+        data: {
+          id: 4005112,
+          reference: txRef,
+          amount: 8750000,
+          currency: "NGN",
+          status: "success",
+        },
+      });
+
+      const signature = crypto
+        .createHmac("sha512", "test_paystack_secret_key_prod_dup")
+        .update(rawPayload)
+        .digest("hex");
+
+      const makeReq = () =>
+        new Request("https://actionos.ng/api/webhooks/payment", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-paystack-signature": signature,
+          },
+          body: rawPayload,
+        });
+
+      // Delivery 1: initial successful settlement
+      const res1 = await paymentWebhookHandler(makeReq());
+      assert.equal(res1.status, 200);
+      const json1 = (await res1.json()) as { success: boolean; data: { status: string } };
+      assert.equal(json1.success, true);
+      assert.equal(json1.data.status, "succeeded");
+
+      // Delivery 2: duplicate delivery
+      const res2 = await paymentWebhookHandler(makeReq());
+      assert.equal(res2.status, 200);
+      const json2 = (await res2.json()) as { success: boolean; data: { acknowledged: boolean; duplicate: boolean } };
+      assert.equal(json2.success, true);
+      assert.equal(json2.data.acknowledged, true);
+      assert.equal(json2.data.duplicate, true);
+    });
+  });
 });
+

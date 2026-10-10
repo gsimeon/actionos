@@ -308,6 +308,8 @@ export async function POST(req: Request) {
       let txStatus: Transaction["status"];
       let refundLifecycleState: CanonicalRefundState | undefined;
       let verifiedProviderTxId: string | undefined;
+      let verifiedRefundId: string | undefined;
+      let verifiedRefundReference: string | undefined;
       const expectedAmount = existingTx.amount;
       const expectedCurrency = (existingTx.currency || "NGN").toUpperCase().trim();
       const isRefundEvent = payload.event.startsWith("refund.");
@@ -644,7 +646,9 @@ export async function POST(req: Request) {
             // Strict equality is required; loose substring containment is rejected.
             const verifiedPaymentRef = (
               verification.reference ||
-              verification.providerReference ||
+              (verification.providerReference && verification.providerReference !== verification.providerTransactionId
+                ? verification.providerReference
+                : "") ||
               ""
             ).trim();
             const normTxRef = ref.trim();
@@ -821,17 +825,19 @@ export async function POST(req: Request) {
             (process.env.ACTIONOS_VERIFY_WEBHOOK_WITH_PROVIDER === "true" ||
               process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION === "true"));
 
-        const refundRef =
+        const webhookRefundReference =
           (typeof payload.data.refund_reference === "string" ? payload.data.refund_reference.trim() : "") ||
-          (typeof (payload.data as Record<string, unknown>).refund_id === "string" ||
-          typeof (payload.data as Record<string, unknown>).refund_id === "number"
-            ? String((payload.data as Record<string, unknown>).refund_id).trim()
-            : "") ||
-          (typeof payload.data.transaction_reference === "string" &&
-          typeof payload.data.reference === "string" &&
-          payload.data.reference.trim() !== ref
+          (typeof payload.data.reference === "string" && payload.data.reference.trim() !== ref
             ? payload.data.reference.trim()
             : "");
+
+        const webhookRefundId =
+          typeof (payload.data as Record<string, unknown>).refund_id === "string" ||
+          typeof (payload.data as Record<string, unknown>).refund_id === "number"
+            ? String((payload.data as Record<string, unknown>).refund_id).trim()
+            : "";
+
+        const refundRef = webhookRefundReference || webhookRefundId;
 
         if (payload.event === "refund.processed") {
           // Rule: In production, require refund identifier before confirming refund
@@ -890,13 +896,21 @@ export async function POST(req: Request) {
                   );
                 }
 
-                const verifiedRefundId = (
-                  refundVerification.refundReference ||
-                  refundVerification.refundId ||
-                  ""
-                ).trim();
+                const providerRefundRef = (refundVerification.refundReference || "").trim();
+                const providerRefundId = (refundVerification.refundId || "").trim();
 
-                if (!verifiedRefundId) {
+                // Explicit matching between webhook and provider refund identifiers:
+                // - Matches if alphanumeric refundReference corresponds (e.g. data.refund_reference)
+                // - Matches if numeric/gateway refundId corresponds (e.g. data.id or data.refund_id)
+                // - Matches if query parameter matches either returned provider identifier
+                const matchesRefundRef = Boolean(
+                  (webhookRefundReference && providerRefundRef && webhookRefundReference === providerRefundRef) ||
+                  (webhookRefundId && providerRefundId && webhookRefundId === providerRefundId) ||
+                  (refundRef && (refundRef === providerRefundRef || refundRef === providerRefundId)) ||
+                  (webhookRefundReference && providerRefundId && webhookRefundReference === providerRefundId)
+                );
+
+                if (!providerRefundRef && !providerRefundId) {
                   if (isProductionMode() || process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION === "true") {
                     return respond(
                       NextResponse.json(
@@ -904,21 +918,21 @@ export async function POST(req: Request) {
                           success: false,
                           error: {
                             code: "PROVIDER_REFUND_REFERENCE_REQUIRED",
-                            message: "Authoritative provider refund verification must report an explicit refund identifier. Refusing refund settlement.",
+                            message: "Authoritative provider refund verification must report an explicit refund identifier (refundReference or refundId). Refusing refund settlement.",
                           },
                         },
                         { status: 422 }
                       )
                     );
                   }
-                } else if (verifiedRefundId !== refundRef.trim()) {
+                } else if (!matchesRefundRef) {
                   return respond(
                     NextResponse.json(
                       {
                         success: false,
                         error: {
                           code: "PROVIDER_REFUND_REFERENCE_MISMATCH",
-                          message: `Authoritative provider refund reference '${verifiedRefundId}' does not match expected refund reference '${refundRef}'. Refusing to mark transaction refunded.`,
+                          message: `Authoritative provider refund reference '${providerRefundRef || providerRefundId}' does not match expected refund reference '${refundRef}'. Refusing to mark transaction refunded.`,
                         },
                       },
                       { status: 422 }
@@ -1008,6 +1022,9 @@ export async function POST(req: Request) {
                     )
                   );
                 }
+
+                verifiedRefundId = providerRefundId || webhookRefundId;
+                verifiedRefundReference = providerRefundRef || webhookRefundReference;
               } catch (refErr) {
                 if (isProductionMode() || process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION === "true") {
                   return respond(
@@ -1142,8 +1159,11 @@ export async function POST(req: Request) {
         updatedMetadata.refund_status = refundLifecycleState;
         updatedMetadata.refund_event = payload.event;
         updatedMetadata.refund_updated_at = new Date().toISOString();
-        if (payload.data.refund_reference || payload.data.reference) {
-          updatedMetadata.refund_reference = (payload.data.refund_reference || payload.data.reference) as string;
+        if (verifiedRefundReference || payload.data.refund_reference || payload.data.reference) {
+          updatedMetadata.refund_reference = (verifiedRefundReference || payload.data.refund_reference || payload.data.reference) as string;
+        }
+        if (verifiedRefundId || (payload.data as Record<string, unknown>).refund_id) {
+          updatedMetadata.refund_id = (verifiedRefundId || (payload.data as Record<string, unknown>).refund_id) as string;
         }
         if (typeof payload.data.amount === "number") {
           updatedMetadata.refund_amount = payload.data.amount;

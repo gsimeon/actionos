@@ -237,7 +237,6 @@ export class PaystackPaymentProvider implements IPaymentProvider {
       return {
         status: "refund_unknown",
         amount: amount || 0,
-        currency: "NGN",
         error: `Gateway connection failure / timeout during refund request: ${errMsg}`,
       };
     }
@@ -251,7 +250,6 @@ export class PaystackPaymentProvider implements IPaymentProvider {
         return {
           status: "refund_unknown",
           amount: amount || 0,
-          currency: "NGN",
           error: `HTTP ${response.status}: Gateway server error or timeout during refund: ${errMsg}`,
         };
       }
@@ -260,7 +258,6 @@ export class PaystackPaymentProvider implements IPaymentProvider {
       return {
         status: "refund_failed",
         amount: amount || 0,
-        currency: "NGN",
         error: `HTTP ${response.status}: ${errMsg}`,
       };
     }
@@ -272,7 +269,6 @@ export class PaystackPaymentProvider implements IPaymentProvider {
       return {
         status: "refund_unknown",
         amount: amount || 0,
-        currency: "NGN",
         error: "Malformed JSON response from Paystack refund endpoint",
       };
     }
@@ -283,19 +279,35 @@ export class PaystackPaymentProvider implements IPaymentProvider {
       return {
         status: "refund_failed",
         amount: amount || 0,
-        currency: "NGN",
         error: errMsg,
       };
     }
 
     const data = (json.data && typeof json.data === "object" ? json.data : {}) as Record<string, unknown>;
     const rawStatus = (typeof data.status === "string" ? data.status : "").toLowerCase().trim();
-    const refundRef = data.id !== undefined && data.id !== null ? String(data.id) : undefined;
+    const refundId = data.id !== undefined && data.id !== null ? String(data.id).trim() : undefined;
+    const refundRef =
+      typeof data.refund_reference === "string" && data.refund_reference.trim()
+        ? data.refund_reference.trim()
+        : (typeof data.reference === "string" && data.reference.trim()
+          ? data.reference.trim()
+          : refundId);
     const refundAmount = typeof data.amount === "number" ? data.amount / 100 : (amount || 0);
-    const refundCurrency = (typeof data.currency === "string" ? data.currency : "NGN").toUpperCase();
+    const refundCurrency =
+      typeof data.currency === "string" && data.currency.trim()
+        ? data.currency.toUpperCase().trim()
+        : "";
+
+    const txObj =
+      data.transaction && typeof data.transaction === "object"
+        ? (data.transaction as Record<string, unknown>)
+        : undefined;
+    const txRef =
+      (txObj && typeof txObj.reference === "string" ? txObj.reference.trim() : undefined) ||
+      (typeof data.transaction_reference === "string" ? data.transaction_reference.trim() : reference.trim());
 
     // If provider omitted reference id on a supposedly accepted/processed refund, do not invent one
-    if (!refundRef) {
+    if (!refundId && !refundRef) {
       return {
         status: "refund_unknown",
         amount: refundAmount,
@@ -314,7 +326,9 @@ export class PaystackPaymentProvider implements IPaymentProvider {
     if (rawStatus === "processed" || rawStatus === "success") {
       return {
         status: "refund_confirmed",
+        refundId,
         refundReference: refundRef,
+        transactionReference: txRef,
         amount: refundAmount,
         currency: refundCurrency,
         rawStatus,
@@ -322,7 +336,9 @@ export class PaystackPaymentProvider implements IPaymentProvider {
     } else if (rawStatus === "pending" || rawStatus === "processing" || msg.includes("queued")) {
       return {
         status: "refund_pending",
+        refundId,
         refundReference: refundRef,
+        transactionReference: txRef,
         amount: refundAmount,
         currency: refundCurrency,
         rawStatus: rawStatus || "pending",
@@ -331,7 +347,9 @@ export class PaystackPaymentProvider implements IPaymentProvider {
       const failNote = typeof data.merchant_note === "string" ? data.merchant_note : "Gateway reported refund status as failed";
       return {
         status: "refund_failed",
+        refundId,
         refundReference: refundRef,
+        transactionReference: txRef,
         amount: refundAmount,
         currency: refundCurrency,
         error: failNote,
@@ -340,7 +358,9 @@ export class PaystackPaymentProvider implements IPaymentProvider {
     } else {
       return {
         status: "refund_unknown",
+        refundId,
         refundReference: refundRef,
+        transactionReference: txRef,
         amount: refundAmount,
         currency: refundCurrency,
         error: `Ambiguous provider refund status: '${rawStatus || "unspecified"}'`,
@@ -373,7 +393,6 @@ export class PaystackPaymentProvider implements IPaymentProvider {
         status: "refund_unknown",
         refundReference,
         amount: 0,
-        currency: "NGN",
         error: `Gateway connection failure / timeout during refund verification: ${errMsg}`,
       };
     }
@@ -386,7 +405,6 @@ export class PaystackPaymentProvider implements IPaymentProvider {
           status: "refund_unknown",
           refundReference,
           amount: 0,
-          currency: "NGN",
           error: `HTTP ${response.status}: Gateway server error during refund verification: ${errMsg}`,
         };
       }
@@ -394,7 +412,6 @@ export class PaystackPaymentProvider implements IPaymentProvider {
         status: "refund_failed",
         refundReference,
         amount: 0,
-        currency: "NGN",
         error: `HTTP ${response.status}: ${errMsg}`,
       };
     }
@@ -407,7 +424,6 @@ export class PaystackPaymentProvider implements IPaymentProvider {
         status: "refund_unknown",
         refundReference,
         amount: 0,
-        currency: "NGN",
         error: "Malformed JSON response from Paystack refund verification",
       };
     }
@@ -418,17 +434,20 @@ export class PaystackPaymentProvider implements IPaymentProvider {
         status: "refund_failed",
         refundReference,
         amount: 0,
-        currency: "NGN",
         error: errMsg,
       };
     }
 
     const data = (json.data && typeof json.data === "object" ? json.data : {}) as Record<string, unknown>;
     const rawStatus = (typeof data.status === "string" ? data.status : "").toLowerCase().trim();
-    const confirmedRef =
-      data.id !== undefined && data.id !== null
-        ? String(data.id).trim()
-        : (typeof data.reference === "string" ? data.reference.trim() : "");
+    const refundId =
+      data.id !== undefined && data.id !== null ? String(data.id).trim() : undefined;
+    const refundRef =
+      typeof data.refund_reference === "string" && data.refund_reference.trim()
+        ? data.refund_reference.trim()
+        : (typeof data.reference === "string" && data.reference.trim()
+          ? data.reference.trim()
+          : undefined);
     const confirmedAmount = typeof data.amount === "number" ? data.amount / 100 : 0;
     const confirmedCurrency =
       typeof data.currency === "string" && data.currency.trim()
@@ -443,9 +462,12 @@ export class PaystackPaymentProvider implements IPaymentProvider {
       (txObj && typeof txObj.reference === "string" ? txObj.reference.trim() : undefined) ||
       (typeof data.transaction_reference === "string" ? data.transaction_reference.trim() : undefined);
 
+    const confirmedRef = refundRef || refundId || "";
+
     if (rawStatus === "processed" || rawStatus === "success") {
       return {
         status: "refund_confirmed",
+        refundId,
         refundReference: confirmedRef,
         transactionReference: txRef,
         amount: confirmedAmount,
@@ -455,6 +477,7 @@ export class PaystackPaymentProvider implements IPaymentProvider {
     } else if (rawStatus === "pending" || rawStatus === "processing") {
       return {
         status: "refund_pending",
+        refundId,
         refundReference: confirmedRef,
         transactionReference: txRef,
         amount: confirmedAmount,
@@ -464,6 +487,7 @@ export class PaystackPaymentProvider implements IPaymentProvider {
     } else if (rawStatus === "failed") {
       return {
         status: "refund_failed",
+        refundId,
         refundReference: confirmedRef,
         transactionReference: txRef,
         amount: confirmedAmount,
@@ -474,6 +498,7 @@ export class PaystackPaymentProvider implements IPaymentProvider {
     } else {
       return {
         status: "refund_unknown",
+        refundId,
         refundReference: confirmedRef,
         amount: confirmedAmount,
         currency: confirmedCurrency,
