@@ -1065,12 +1065,25 @@ export class SupabaseTransactionRepository implements ITransactionRepository {
       throw new DatabaseError(`Failed to record webhook event: ${eventErr.message}`, eventErr.code, eventErr);
     }
 
-    const updated = await this.updateStatus(id, status, tenant, extra);
-    return {
-      transaction: updated,
-      webhookEvent: eventData as WebhookEventRecord,
-      isDuplicate: false,
-    };
+    try {
+      const updated = await this.updateStatus(id, status, tenant, extra);
+      return {
+        transaction: updated,
+        webhookEvent: eventData as WebhookEventRecord,
+        isDuplicate: false,
+      };
+    } catch (statusErr) {
+      // Rollback inserted webhook event so subsequent provider retries can re-attempt cleanly
+      try {
+        await this.client
+          .from("payment_webhook_events")
+          .delete()
+          .eq("id", (eventData as { id: string }).id);
+      } catch {
+        // Ignore rollback cleanup errors and propagate original statusErr
+      }
+      throw statusErr;
+    }
   }
 }
 

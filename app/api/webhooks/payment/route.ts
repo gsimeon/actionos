@@ -134,40 +134,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const repos = getRepositoryContainer();
-    let existingTx: Transaction | null = null;
-    try {
-      existingTx = await repos.transactions.findByReference(ref);
-    } catch (dbErr) {
-      // Do not swallow database lookup failures into 404; return retryable 500
-      return NextResponse.json(
-        {
-          success: false,
-          error: {
-            code: "DATABASE_LOOKUP_FAILED",
-            message: `Database error querying transaction reference '${ref}'. Gateway retry requested.`,
-            details: dbErr instanceof Error ? dbErr.message : String(dbErr),
-          },
-        },
-        { status: 500 }
-      );
-    }
-
-    // 2. Validate transaction reference exists in persisted ActionOS records
-    if (!existingTx) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: {
-            code: "TRANSACTION_NOT_FOUND",
-            message: `Transaction reference '${ref}' was not found in ActionOS records. Webhooks for uninitiated transactions are rejected.`,
-          },
-        },
-        { status: 404 }
-      );
-    }
-
-    // 3. Durable Idempotency & Deduplication Check (Provider Event ID + State Invariant)
+    // 2. Durable Idempotency & Deduplication Check (Provider Event ID + State Invariant)
     const providerEventId =
       payload.data.id !== undefined && payload.data.id !== null
         ? String(payload.data.id)
@@ -195,7 +162,7 @@ export async function POST(req: Request) {
               concurrency_in_flight: true,
               reference: ref,
               eventId: providerEventId,
-              status: firstJson?.data?.status || existingTx.status,
+              status: firstJson?.data?.status || "succeeded",
             },
           });
         }
@@ -233,6 +200,43 @@ export async function POST(req: Request) {
     };
 
     try {
+      const repos = getRepositoryContainer();
+      let existingTx: Transaction | null = null;
+      try {
+        existingTx = await repos.transactions.findByReference(ref);
+      } catch (dbErr) {
+        // Do not swallow database lookup failures into 404; return retryable 500
+        return respond(
+          NextResponse.json(
+            {
+              success: false,
+              error: {
+                code: "DATABASE_LOOKUP_FAILED",
+                message: `Database error querying transaction reference '${ref}'. Gateway retry requested.`,
+                details: dbErr instanceof Error ? dbErr.message : String(dbErr),
+              },
+            },
+            { status: 500 }
+          )
+        );
+      }
+
+      // 3. Validate transaction reference exists in persisted ActionOS records
+      if (!existingTx) {
+        return respond(
+          NextResponse.json(
+            {
+              success: false,
+              error: {
+                code: "TRANSACTION_NOT_FOUND",
+                message: `Transaction reference '${ref}' was not found in ActionOS records. Webhooks for uninitiated transactions are rejected.`,
+              },
+            },
+            { status: 404 }
+          )
+        );
+      }
+
       const txMeta = (existingTx.metadata && typeof existingTx.metadata === "object"
         ? { ...existingTx.metadata }
         : {}) as Record<string, unknown>;
@@ -402,7 +406,24 @@ export async function POST(req: Request) {
           }
         }
 
-        if (payload.data.currency && webhookCurrency !== expectedCurrency) {
+        if (isProductionMode()) {
+          if (!payload.data.currency || typeof payload.data.currency !== "string" || !payload.data.currency.trim()) {
+            return respond(
+              NextResponse.json(
+                {
+                  success: false,
+                  error: {
+                    code: "CURRENCY_REQUIRED",
+                    message: "Production webhook payloads must explicitly supply a valid currency code",
+                  },
+                },
+                { status: 422 }
+              )
+            );
+          }
+        }
+
+        if (webhookCurrency !== expectedCurrency) {
           return respond(
             NextResponse.json(
               {
@@ -421,6 +442,26 @@ export async function POST(req: Request) {
         const quoteId =
           (existingTx.metadata?.quote_id as string | undefined) ||
           (existingTx.metadata?.quoteId as string | undefined);
+        const isQuoteRequired =
+          Boolean(quoteId) ||
+          existingTx.metadata?.requires_quote === true ||
+          existingTx.metadata?.requiresQuote === true;
+
+        if (isQuoteRequired && !quoteId) {
+          return respond(
+            NextResponse.json(
+              {
+                success: false,
+                error: {
+                  code: "QUOTE_REQUIRED",
+                  message: `Transaction '${existingTx.id}' requires a bound quote, but no quoteId is present in transaction metadata. Settlement rejected.`,
+                },
+              },
+              { status: 422 }
+            )
+          );
+        }
+
         let linkedQuote: Quote | null = null;
         if (quoteId) {
           try {
@@ -465,6 +506,37 @@ export async function POST(req: Request) {
                   error: {
                     code: "QUOTE_EXPIRED",
                     message: `Linked authorized quote '${linkedQuote.id}' has expired. Cannot settle payment against an expired quote.`,
+                  },
+                },
+                { status: 422 }
+              )
+            );
+          }
+
+          // Invariant: Transaction amount and quote amount must be mutually consistent
+          if (Math.abs(existingTx.amount - linkedQuote.amount) > 0.01) {
+            return respond(
+              NextResponse.json(
+                {
+                  success: false,
+                  error: {
+                    code: "QUOTE_AMOUNT_MISMATCH",
+                    message: `Transaction amount (${existingTx.amount}) does not match bound quote amount (${linkedQuote.amount}). Settlement rejected.`,
+                  },
+                },
+                { status: 422 }
+              )
+            );
+          }
+
+          if ((linkedQuote.currency || "NGN").toUpperCase().trim() !== expectedCurrency) {
+            return respond(
+              NextResponse.json(
+                {
+                  success: false,
+                  error: {
+                    code: "QUOTE_CURRENCY_MISMATCH",
+                    message: `Transaction currency (${expectedCurrency}) does not match bound quote currency (${linkedQuote.currency}). Settlement rejected.`,
                   },
                 },
                 { status: 422 }
@@ -522,11 +594,14 @@ export async function POST(req: Request) {
           }
         }
 
-        // Out-of-band authoritative direct provider verification when requested by trusted payment policy
-        if (
+        // Authoritative direct provider verification:
+        // Enforced for production settlement (unless explicitly bypassed), or when requested by test/policy flags
+        const shouldVerifyAuthoritatively =
+          (isProductionMode() && process.env.ACTIONOS_DISABLE_AUTHORITATIVE_VERIFICATION !== "true") ||
           process.env.ACTIONOS_VERIFY_WEBHOOK_WITH_PROVIDER === "true" ||
-          (isProductionMode() && process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION === "true")
-        ) {
+          process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION === "true";
+
+        if (shouldVerifyAuthoritatively) {
           try {
             const provider = getPaymentProvider();
             const verification = await provider.verifyPayment(ref);
@@ -543,6 +618,31 @@ export async function POST(req: Request) {
                   { status: 422 }
                 )
               );
+            }
+
+            // Verify provider reference consistency
+            if (verification.providerReference) {
+              const normProvRef = verification.providerReference.trim();
+              const normTxRef = ref.trim();
+              if (normProvRef !== normTxRef && !normProvRef.includes(normTxRef) && !normTxRef.includes(normProvRef)) {
+                const storedProvRef =
+                  (existingTx.metadata?.provider_reference as string) ||
+                  (existingTx.metadata?.providerReference as string);
+                if (storedProvRef && storedProvRef !== normProvRef) {
+                  return respond(
+                    NextResponse.json(
+                      {
+                        success: false,
+                        error: {
+                          code: "PROVIDER_REFERENCE_MISMATCH",
+                          message: `Authoritative provider reference '${normProvRef}' does not match transaction reference '${ref}'. Refusing settlement.`,
+                        },
+                      },
+                      { status: 422 }
+                    )
+                  );
+                }
+              }
             }
 
             // Authoritative verification must independently validate financial details: amount and currency
@@ -575,6 +675,19 @@ export async function POST(req: Request) {
                   )
                 );
               }
+            } else {
+              return respond(
+                NextResponse.json(
+                  {
+                    success: false,
+                    error: {
+                      code: "PROVIDER_VERIFICATION_FAILED",
+                      message: "Authoritative provider verification did not report a valid amount.",
+                    },
+                  },
+                  { status: 422 }
+                )
+              );
             }
 
             const verifiedCurrency = (verification.currency || "NGN").toUpperCase().trim();

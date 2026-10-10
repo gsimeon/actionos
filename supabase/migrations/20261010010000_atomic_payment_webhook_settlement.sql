@@ -22,22 +22,7 @@ DECLARE
   v_event_record RECORD;
   v_tx_updated RECORD;
 BEGIN
-  -- 1. Check if event was already recorded (idempotency check)
-  SELECT * INTO v_existing_event
-  FROM payment_webhook_events
-  WHERE provider = p_provider AND event_id = p_event_id;
-
-  IF FOUND THEN
-    SELECT * INTO v_tx FROM transactions WHERE id = p_transaction_id OR reference = p_reference;
-    RETURN jsonb_build_object(
-      'success', true,
-      'duplicate', true,
-      'transaction', row_to_json(v_tx),
-      'webhook_event', row_to_json(v_existing_event)
-    );
-  END IF;
-
-  -- 2. Lock transaction row to serialize concurrent writes
+  -- 1. Lock transaction row to serialize all concurrent operations across instances
   SELECT * INTO v_tx
   FROM transactions
   WHERE id = p_transaction_id OR reference = p_reference
@@ -48,6 +33,20 @@ BEGIN
       'success', false,
       'error', 'TRANSACTION_NOT_FOUND',
       'message', 'Transaction was not found in records'
+    );
+  END IF;
+
+  -- 2. Under transaction lock, check if event was already recorded (durable cross-instance deduplication)
+  SELECT * INTO v_existing_event
+  FROM payment_webhook_events
+  WHERE provider = p_provider AND event_id = p_event_id;
+
+  IF FOUND THEN
+    RETURN jsonb_build_object(
+      'success', true,
+      'duplicate', true,
+      'transaction', row_to_json(v_tx),
+      'webhook_event', row_to_json(v_existing_event)
     );
   END IF;
 
@@ -87,7 +86,21 @@ BEGIN
     p_status,
     COALESCE(p_event_metadata, '{}'::jsonb)
   )
+  ON CONFLICT (provider, event_id) DO NOTHING
   RETURNING * INTO v_event_record;
+
+  IF v_event_record IS NULL THEN
+    SELECT * INTO v_existing_event
+    FROM payment_webhook_events
+    WHERE provider = p_provider AND event_id = p_event_id;
+
+    RETURN jsonb_build_object(
+      'success', true,
+      'duplicate', true,
+      'transaction', row_to_json(v_tx),
+      'webhook_event', row_to_json(v_existing_event)
+    );
+  END IF;
 
   -- 5. Atomically update transaction status and merged metadata
   UPDATE transactions

@@ -314,6 +314,7 @@ describe("Durable Reconciliation Worker & Dead-Letter Handling", () => {
     it("should strictly reject unauthenticated or tampered webhooks in production mode", async () => {
       process.env.ACTIONOS_RUNTIME_MODE = "production";
       process.env.PAYSTACK_SECRET_KEY = "test_paystack_secret_key_888";
+      process.env.ACTIONOS_DISABLE_AUTHORITATIVE_VERIFICATION = "true";
 
       const repos = getRepositoryContainer();
       await repos.transactions.create(
@@ -329,7 +330,7 @@ describe("Durable Reconciliation Worker & Dead-Letter Handling", () => {
 
       const webhookBody = JSON.stringify({
         event: "charge.success",
-        data: { reference: "ref_wh_tamper_001", amount: 5000000 },
+        data: { reference: "ref_wh_tamper_001", amount: 5000000, currency: "NGN" },
       });
 
       // 1. Missing signature header in production -> 401
