@@ -575,6 +575,385 @@ describe("Payment Provider Adapter Isolation & Production Fail-Closed Tests", ()
       const txAfter2 = await repos.transactions.findByReference(txRef);
       assert.equal(txAfter2?.status, "succeeded");
     });
+
+    it("strictly rejects webhooks with unknown or uninitiated transaction references with 404", async () => {
+      const webhookPayload = JSON.stringify({
+        event: "charge.success",
+        data: {
+          id: 11223344,
+          reference: "ref_nonexistent_transaction_999",
+          amount: 8750000,
+          currency: "NGN",
+          status: "success",
+        },
+      });
+
+      const req = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: webhookPayload,
+      });
+
+      const res = await paymentWebhookHandler(req);
+      assert.equal(res.status, 404);
+      const json = (await res.json()) as { error?: { code: string; message: string } };
+      assert.equal(json.error?.code, "TRANSACTION_NOT_FOUND");
+    });
+
+    it("never marks a transaction succeeded solely because event name is charge.success when provider status contradicts it", async () => {
+      const repos = getRepositoryContainer();
+      const txRef = "ref_contradictory_event_001";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_webhook_test",
+        organization_id: "org_webhook_test",
+        amount: 87500,
+        currency: "NGN",
+        status: "pending",
+      });
+
+      // Event is charge.success, but payload status is explicitly failed/declined
+      const webhookPayload = JSON.stringify({
+        event: "charge.success",
+        data: {
+          id: 55443322,
+          reference: txRef,
+          amount: 8750000,
+          currency: "NGN",
+          status: "failed", // Contradicts event name!
+        },
+      });
+
+      const req = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: webhookPayload,
+      });
+
+      const res = await paymentWebhookHandler(req);
+      assert.equal(res.status, 422);
+      const json = (await res.json()) as { error?: { code: string; message: string } };
+      assert.equal(json.error?.code, "PROVIDER_STATUS_MISMATCH");
+
+      // Verify transaction in DB did NOT transition to succeeded
+      const tx = await repos.transactions.findByReference(txRef);
+      assert.equal(tx?.status, "pending", "Transaction must not transition to succeeded when provider status contradicts it");
+    });
+
+    it("rejects signed webhooks when amount or currency does not match the persisted transaction", async () => {
+      const repos = getRepositoryContainer();
+      const txRef = "ref_mismatch_validation_002";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_webhook_test",
+        organization_id: "org_webhook_test",
+        amount: 87500,
+        currency: "NGN",
+        status: "pending",
+      });
+
+      // 1. Amount mismatch (₦50,000 sent instead of ₦87,500)
+      const badAmountPayload = JSON.stringify({
+        event: "charge.success",
+        data: {
+          id: 111111,
+          reference: txRef,
+          amount: 5000000,
+          currency: "NGN",
+          status: "success",
+        },
+      });
+
+      const reqAmount = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: badAmountPayload,
+      });
+
+      const resAmount = await paymentWebhookHandler(reqAmount);
+      assert.equal(resAmount.status, 422);
+      const jsonAmount = (await resAmount.json()) as { error?: { code: string } };
+      assert.equal(jsonAmount.error?.code, "AMOUNT_MISMATCH");
+
+      // 2. Currency mismatch (USD sent instead of NGN)
+      const badCurrencyPayload = JSON.stringify({
+        event: "charge.success",
+        data: {
+          id: 222222,
+          reference: txRef,
+          amount: 8750000,
+          currency: "USD",
+          status: "success",
+        },
+      });
+
+      const reqCurrency = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: badCurrencyPayload,
+      });
+
+      const resCurrency = await paymentWebhookHandler(reqCurrency);
+      assert.equal(resCurrency.status, 422);
+      const jsonCurrency = (await resCurrency.json()) as { error?: { code: string } };
+      assert.equal(jsonCurrency.error?.code, "CURRENCY_MISMATCH");
+    });
+
+    it("returns HTTP 500 and does NOT swallow database update errors so gateway can retry delivery", async () => {
+      const repos = getRepositoryContainer();
+      const txRef = "ref_db_failure_retry_003";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_webhook_test",
+        organization_id: "org_webhook_test",
+        amount: 87500,
+        currency: "NGN",
+        status: "pending",
+      });
+
+      // Simulate transient database failure during status update
+      const originalUpdateStatus = repos.transactions.updateStatus;
+      try {
+        repos.transactions.updateStatus = async () => {
+          throw new Error("PostgreSQL connection pool exhausted: timeout acquiring connection");
+        };
+
+        const webhookPayload = JSON.stringify({
+          event: "charge.success",
+          data: {
+            id: 99881122,
+            reference: txRef,
+            amount: 8750000,
+            currency: "NGN",
+            status: "success",
+          },
+        });
+
+        const req = new Request("https://actionos.ng/api/webhooks/payment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: webhookPayload,
+        });
+
+        const res = await paymentWebhookHandler(req);
+
+        // Crucial invariant: MUST return 500 so gateway retries delivery, never swallow error as 200
+        assert.equal(res.status, 500);
+        const json = (await res.json()) as { error?: { code: string; message: string } };
+        assert.equal(json.error?.code, "DATABASE_UPDATE_FAILED");
+        assert(json.error?.message.includes("Provider retry requested"));
+      } finally {
+        repos.transactions.updateStatus = originalUpdateStatus;
+      }
+    });
+
+    it("tracks durable provider event identifier in transaction metadata for deduplication", async () => {
+      const repos = getRepositoryContainer();
+      const txRef = "ref_durable_event_id_004";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_webhook_test",
+        organization_id: "org_webhook_test",
+        amount: 87500,
+        currency: "NGN",
+        status: "pending",
+      });
+
+      const providerEventId = 77665544;
+      const webhookPayload = JSON.stringify({
+        event: "charge.success",
+        data: {
+          id: providerEventId,
+          reference: txRef,
+          amount: 8750000,
+          currency: "NGN",
+          status: "success",
+          paid_at: "2026-10-10T11:00:00.000Z",
+        },
+      });
+
+      // 1. First delivery succeeds
+      const req1 = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: webhookPayload,
+      });
+
+      const res1 = await paymentWebhookHandler(req1);
+      assert.equal(res1.status, 200);
+      const json1 = (await res1.json()) as { data: { acknowledged: boolean; duplicate: boolean } };
+      assert.equal(json1.data.duplicate, false);
+
+      // Verify metadata records provider event ID and processed events list
+      const tx = await repos.transactions.findByReference(txRef);
+      assert.equal(tx?.status, "succeeded");
+      assert.equal(tx?.metadata?.provider_event_id, String(providerEventId));
+      assert(Array.isArray(tx?.metadata?.processed_webhook_events));
+      assert(tx?.metadata?.processed_webhook_events.some((k: string) => k.includes(String(providerEventId))));
+
+      // 2. Second delivery with identical event ID is recognized as duplicate
+      const req2 = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: webhookPayload,
+      });
+
+      const res2 = await paymentWebhookHandler(req2);
+      assert.equal(res2.status, 200);
+      const json2 = (await res2.json()) as { data: { acknowledged: boolean; duplicate: boolean } };
+      assert.equal(json2.data.duplicate, true);
+    });
+
+    it("handles out-of-order events without allowing a stale failure or pending event to overwrite a confirmed succeeded payment", async () => {
+      const repos = getRepositoryContainer();
+      const txRef = "ref_ooo_safety_005";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_webhook_test",
+        organization_id: "org_webhook_test",
+        amount: 87500,
+        currency: "NGN",
+        status: "succeeded",
+        metadata: { processed_webhook_events: ["charge.success:99001"] },
+      });
+
+      // Arriving late: an out-of-order failure webhook event
+      const staleFailPayload = JSON.stringify({
+        event: "charge.failed",
+        data: {
+          id: 99002,
+          reference: txRef,
+          amount: 8750000,
+          currency: "NGN",
+          status: "failed",
+        },
+      });
+
+      const reqFail = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: staleFailPayload,
+      });
+
+      const resFail = await paymentWebhookHandler(reqFail);
+      assert.equal(resFail.status, 200);
+      const jsonFail = (await resFail.json()) as { data: { acknowledged: boolean; ignored?: string } };
+      assert.equal(jsonFail.data.acknowledged, true);
+      assert.equal(jsonFail.data.ignored, "out_of_order");
+
+      // Verify transaction status did NOT regress to failed
+      const txAfterFail = await repos.transactions.findByReference(txRef);
+      assert.equal(txAfterFail?.status, "succeeded", "Confirmed succeeded payment must not regress to failed on out-of-order webhook");
+
+      // Also verify terminal 'refunded' status cannot be overwritten by late charge.success
+      await repos.transactions.updateStatus(txRef, "refunded");
+      const lateSuccessPayload = JSON.stringify({
+        event: "charge.success",
+        data: {
+          id: 99003,
+          reference: txRef,
+          amount: 8750000,
+          currency: "NGN",
+          status: "success",
+        },
+      });
+
+      const reqSuccess = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: lateSuccessPayload,
+      });
+
+      const resSuccess = await paymentWebhookHandler(reqSuccess);
+      assert.equal(resSuccess.status, 200);
+      const jsonSuccess = (await resSuccess.json()) as { data: { acknowledged: boolean; ignored?: string } };
+      assert.equal(jsonSuccess.data.ignored, "out_of_order");
+
+      const txAfterSuccess = await repos.transactions.findByReference(txRef);
+      assert.equal(txAfterSuccess?.status, "refunded", "Terminal refunded state must never be overwritten by late charge.success");
+    });
+
+    it("recovers safely and settles transaction on redelivery after an initial database failure", async () => {
+      const repos = getRepositoryContainer();
+      const txRef = "ref_recovery_after_db_failure_006";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_webhook_test",
+        organization_id: "org_webhook_test",
+        amount: 87500,
+        currency: "NGN",
+        status: "pending",
+      });
+
+      const webhookPayload = JSON.stringify({
+        event: "charge.success",
+        data: {
+          id: 88776655,
+          reference: txRef,
+          amount: 8750000,
+          currency: "NGN",
+          status: "success",
+        },
+      });
+
+      // 1. First attempt fails due to transient database error
+      const originalUpdateStatus = repos.transactions.updateStatus;
+      let dbFailSimulated = true;
+      repos.transactions.updateStatus = async (ref, status, extra) => {
+        if (dbFailSimulated) {
+          throw new Error("Simulated transient dead-lock error");
+        }
+        return originalUpdateStatus.call(repos.transactions, ref, status, extra);
+      };
+
+      try {
+        const req1 = new Request("https://actionos.ng/api/webhooks/payment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: webhookPayload,
+        });
+
+        const res1 = await paymentWebhookHandler(req1);
+        assert.equal(res1.status, 500, "Initial delivery failure must return 500 to request provider retry");
+
+        // Verify status remains pending in database
+        const txPending = await repos.transactions.findByReference(txRef);
+        assert.equal(txPending?.status, "pending");
+
+        // 2. Provider retries delivery, database is now healthy
+        dbFailSimulated = false;
+
+        const req2 = new Request("https://actionos.ng/api/webhooks/payment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: webhookPayload,
+        });
+
+        const res2 = await paymentWebhookHandler(req2);
+        assert.equal(res2.status, 200, "Retried delivery after recovery must succeed with 200");
+        const json2 = (await res2.json()) as { data: { acknowledged: boolean; duplicate: boolean } };
+        assert.equal(json2.data.acknowledged, true);
+        assert.equal(json2.data.duplicate, false);
+
+        // Verify transaction successfully settled as succeeded
+        const txSettled = await repos.transactions.findByReference(txRef);
+        assert.equal(txSettled?.status, "succeeded", "Transaction must be settled after successful retry");
+      } finally {
+        repos.transactions.updateStatus = originalUpdateStatus;
+      }
+    });
   });
 
   describe("Uncertain Payment Recovery & Double-Charge Prevention", () => {

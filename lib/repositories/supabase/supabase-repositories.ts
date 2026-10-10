@@ -951,7 +951,12 @@ export class SupabaseTransactionRepository implements ITransactionRepository {
     return (data || null) as Transaction | null;
   }
 
-  async updateStatus(id: string, status: Transaction["status"], tenant?: TenantContext): Promise<Transaction> {
+  async updateStatus(
+    id: string,
+    status: Transaction["status"],
+    tenant?: TenantContext,
+    extra?: { metadata?: Record<string, unknown> }
+  ): Promise<Transaction> {
     if (tenant?.organizationId || tenant?.customerId) {
       let checkQuery = this.client.from("transactions").select("*, customer:customers!inner(*)").eq("id", id);
       if (tenant?.organizationId) checkQuery = checkQuery.eq("customer.organization_id", tenant.organizationId);
@@ -962,12 +967,17 @@ export class SupabaseTransactionRepository implements ITransactionRepository {
       }
     }
 
+    const updatePayload: Record<string, unknown> = {
+      status,
+      updated_at: new Date().toISOString(),
+    };
+    if (extra?.metadata) {
+      updatePayload.metadata = extra.metadata;
+    }
+
     let query = this.client
       .from("transactions")
-      .update({
-        status,
-        updated_at: new Date().toISOString(),
-      })
+      .update(updatePayload)
       .eq("id", id);
 
     if (tenant?.organizationId) {

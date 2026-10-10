@@ -92,6 +92,7 @@ export interface PaymentWebhookPayload {
     | "refund.failed"
     | string;
   data: {
+    id?: number | string;
     reference: string;
     amount?: number;
     currency?: string;
@@ -99,6 +100,7 @@ export interface PaymentWebhookPayload {
     customer_id?: string;
     paid_at?: string;
     refundReference?: string;
+    [key: string]: unknown;
   };
 }
 

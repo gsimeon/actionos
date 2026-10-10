@@ -81,7 +81,12 @@ export interface IActionStepRepository {
 export interface ITransactionRepository {
   create(data: Partial<Transaction> & { customer_id: string; amount: number; reference: string }, tenant?: TenantContext): Promise<Transaction>;
   findByReference(reference: string, tenant?: TenantContext): Promise<Transaction | null>;
-  updateStatus(id: string, status: Transaction["status"], tenant?: TenantContext): Promise<Transaction>;
+  updateStatus(
+    id: string,
+    status: Transaction["status"],
+    tenant?: TenantContext,
+    extra?: { metadata?: Record<string, unknown> }
+  ): Promise<Transaction>;
 }
 
 export interface IDocumentRepository {

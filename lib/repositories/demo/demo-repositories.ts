@@ -618,7 +618,12 @@ export class DemoTransactionRepository implements ITransactionRepository {
     return tx;
   }
 
-  async updateStatus(id: string, status: Transaction["status"], tenant?: TenantContext): Promise<Transaction> {
+  async updateStatus(
+    id: string,
+    status: Transaction["status"],
+    tenant?: TenantContext,
+    extra?: { metadata?: Record<string, unknown> }
+  ): Promise<Transaction> {
     const store = getStore();
     const tx = store.transactions.find((t) => t.id === id || t.reference === id);
     if (!tx) {
@@ -634,6 +639,9 @@ export class DemoTransactionRepository implements ITransactionRepository {
       }
     }
     tx.status = status;
+    if (extra?.metadata) {
+      tx.metadata = { ...tx.metadata, ...extra.metadata };
+    }
     tx.updated_at = new Date().toISOString();
     return tx;
   }

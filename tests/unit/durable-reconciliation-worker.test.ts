@@ -315,6 +315,18 @@ describe("Durable Reconciliation Worker & Dead-Letter Handling", () => {
       process.env.ACTIONOS_RUNTIME_MODE = "production";
       process.env.PAYSTACK_SECRET_KEY = "test_paystack_secret_key_888";
 
+      const repos = getRepositoryContainer();
+      await repos.transactions.create(
+        {
+          customer_id: mockTenantContext.customerId,
+          amount: 50000,
+          currency: "NGN",
+          reference: "ref_wh_tamper_001",
+          status: "pending",
+        },
+        mockTenantContext
+      );
+
       const webhookBody = JSON.stringify({
         event: "charge.success",
         data: { reference: "ref_wh_tamper_001", amount: 50000 },
