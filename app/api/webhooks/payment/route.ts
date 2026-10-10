@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { getRepositoryContainer } from "@/lib/repositories";
 import { isProductionMode } from "@/lib/runtime/mode";
 import { getPaymentProvider } from "@/lib/payments";
+import type { CanonicalRefundState } from "@/lib/payments/provider";
 import type { PaymentWebhookPayload } from "@/types/api";
 import type { Transaction, Quote } from "@/types/database";
 
@@ -126,7 +127,9 @@ export async function POST(req: Request) {
       });
     }
 
-    const ref = typeof payload.data.reference === "string" ? payload.data.reference.trim() : "";
+    const ref =
+      (typeof payload.data.reference === "string" ? payload.data.reference.trim() : "") ||
+      (typeof payload.data.transaction_reference === "string" ? payload.data.transaction_reference.trim() : "");
     if (!ref) {
       return NextResponse.json(
         { success: false, error: { code: "MISSING_REFERENCE", message: "Missing required transaction reference in webhook payload" } },
@@ -302,7 +305,9 @@ export async function POST(req: Request) {
       }
       // 4. Map Event & Validate Provider Status
       // Recognize only defined payment/refund events; never map unrelated events (e.g. transfer.success) to payment failure
-      let txStatus: "succeeded" | "failed" | "refunded" | "pending";
+      let txStatus: Transaction["status"];
+      let refundLifecycleState: CanonicalRefundState | undefined;
+      const isRefundEvent = payload.event.startsWith("refund.");
       const rawStatus = typeof payload.data.status === "string" ? payload.data.status.toLowerCase().trim() : "";
 
       if (payload.event === "charge.success") {
@@ -325,11 +330,20 @@ export async function POST(req: Request) {
       } else if (payload.event === "charge.failed" || payload.event === "charge.declined") {
         txStatus = "failed";
       } else if (payload.event === "refund.processed") {
+        // Authoritative refund confirmation: transitions primary transaction status to 'refunded'
         txStatus = "refunded";
+        refundLifecycleState = "refund_confirmed";
       } else if (payload.event === "refund.pending" || payload.event === "refund.processing") {
-        txStatus = "pending";
+        // Pending refund lifecycle: preserve original payment settlement (e.g. 'succeeded'), do NOT regress to 'pending'
+        txStatus = existingTx.status === "refunded" ? "refunded" : existingTx.status;
+        refundLifecycleState = "refund_pending";
       } else if (payload.event === "refund.failed") {
-        txStatus = "failed";
+        // Failed refund: original payment settlement remains intact (e.g. 'succeeded'), do NOT mark payment failed
+        txStatus = existingTx.status === "refunded" ? "refunded" : existingTx.status;
+        refundLifecycleState = "refund_failed";
+      } else if (isRefundEvent) {
+        txStatus = existingTx.status === "refunded" ? "refunded" : existingTx.status;
+        refundLifecycleState = "refund_unknown";
       } else {
         // Unrecognized or unrelated event type: acknowledge receipt safely without corrupting transaction financial status
         return respond(
@@ -739,9 +753,67 @@ export async function POST(req: Request) {
         }
       }
 
+      // Authoritative direct provider refund verification:
+      // Reconciles refund outcome with provider evidence when available
+      if (isRefundEvent) {
+        const shouldVerifyAuthoritatively =
+          (isProductionMode() && process.env.ACTIONOS_DISABLE_AUTHORITATIVE_VERIFICATION !== "true") ||
+          process.env.ACTIONOS_VERIFY_WEBHOOK_WITH_PROVIDER === "true" ||
+          process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION === "true";
+
+        if (shouldVerifyAuthoritatively) {
+          const refundRef =
+            (typeof payload.data.refund_reference === "string" ? payload.data.refund_reference.trim() : "") ||
+            (typeof payload.data.reference === "string" ? payload.data.reference.trim() : "");
+
+          if (refundRef) {
+            try {
+              const provider = getPaymentProvider();
+              if (typeof provider.verifyRefund === "function") {
+                const refundVerification = await provider.verifyRefund(refundRef);
+                if (payload.event === "refund.processed") {
+                  if (
+                    refundVerification.status !== "refund_confirmed" &&
+                    refundVerification.status !== "refunded"
+                  ) {
+                    return respond(
+                      NextResponse.json(
+                        {
+                          success: false,
+                          error: {
+                            code: "PROVIDER_REFUND_VERIFICATION_FAILED",
+                            message: `Authoritative provider refund verification returned status '${refundVerification.status}', refusing to mark transaction refunded.`,
+                          },
+                        },
+                        { status: 422 }
+                      )
+                    );
+                  }
+                }
+              }
+            } catch (refErr) {
+              if (process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION === "true") {
+                return respond(
+                  NextResponse.json(
+                    {
+                      success: false,
+                      error: {
+                        code: "PROVIDER_REFUND_VERIFICATION_ERROR",
+                        message: `Failed to verify refund with provider: ${refErr instanceof Error ? refErr.message : String(refErr)}`,
+                      },
+                    },
+                    { status: 422 }
+                  )
+                );
+              }
+            }
+          }
+        }
+      }
+
       // 6. Out-of-Order Webhook Protection: Never regress terminal or settled states
-      // Rule A: Terminal 'refunded' state must never be overwritten by stale charge.success or failed
-      if (existingTx.status === "refunded") {
+      // Rule A: Terminal 'refunded' state must never be overwritten by stale charge events
+      if (existingTx.status === "refunded" && !isRefundEvent) {
         return respond(
           NextResponse.json({
             success: true,
@@ -751,7 +823,11 @@ export async function POST(req: Request) {
       }
 
       // Rule B: Already 'succeeded' transaction must never regress to 'failed' or 'pending' due to out-of-order delivery
-      if (existingTx.status === "succeeded" && (txStatus === "failed" || txStatus === "pending")) {
+      if (
+        !isRefundEvent &&
+        existingTx.status === "succeeded" &&
+        (txStatus === "failed" || txStatus === "pending")
+      ) {
         return respond(
           NextResponse.json({
             success: true,
@@ -760,8 +836,15 @@ export async function POST(req: Request) {
         );
       }
 
-      // Rule C: Idempotent duplicate check: already in target status
-      if (existingTx.status === txStatus) {
+      // Rule C: Idempotent duplicate check: already in target status and identical refund state
+      const currentRefundState =
+        (existingTx.metadata?.refund_state as string | undefined) ||
+        (existingTx.metadata?.refundState as string | undefined);
+
+      if (
+        existingTx.status === txStatus &&
+        (!isRefundEvent || currentRefundState === refundLifecycleState)
+      ) {
         return respond(
           NextResponse.json({
             success: true,
@@ -772,6 +855,11 @@ export async function POST(req: Request) {
 
       // 7. Atomic Settlement: Persist Updated Status & Durable Event Metadata
       processedEvents.push(dedupeKey);
+
+      const originalPaymentStatus =
+        (existingTx.metadata?.original_payment_status as string | undefined) ||
+        (existingTx.metadata?.originalPaymentStatus as string | undefined) ||
+        (existingTx.status !== "refunded" ? existingTx.status : "succeeded");
 
       const updatedMetadata: Record<string, unknown> = {
         ...txMeta,
@@ -787,10 +875,35 @@ export async function POST(req: Request) {
         updatedMetadata.provider_paid_at = payload.data.paid_at;
       }
 
+      // Preserve payment settlement outcome and store refund lifecycle state separately
+      if (payload.event === "charge.success") {
+        updatedMetadata.original_payment_status = "succeeded";
+        updatedMetadata.payment_settled_at = payload.data.paid_at || new Date().toISOString();
+      }
+
+      if (isRefundEvent && refundLifecycleState) {
+        updatedMetadata.original_payment_status = originalPaymentStatus;
+        updatedMetadata.refund_state = refundLifecycleState;
+        updatedMetadata.refund_status = refundLifecycleState;
+        updatedMetadata.refund_event = payload.event;
+        updatedMetadata.refund_updated_at = new Date().toISOString();
+        if (payload.data.refund_reference || payload.data.reference) {
+          updatedMetadata.refund_reference = (payload.data.refund_reference || payload.data.reference) as string;
+        }
+        if (typeof payload.data.amount === "number") {
+          updatedMetadata.refund_amount = payload.data.amount;
+        }
+        if (payload.data.currency) {
+          updatedMetadata.refund_currency = payload.data.currency;
+        }
+      }
+
       const eventMetadata: Record<string, unknown> = {
         amount: payload.data.amount,
         currency: payload.data.currency,
         provider_event_id: providerEventId,
+        is_refund_event: isRefundEvent,
+        refund_state: refundLifecycleState,
       };
 
       try {

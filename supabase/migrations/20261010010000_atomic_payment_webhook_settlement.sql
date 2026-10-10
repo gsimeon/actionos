@@ -50,8 +50,8 @@ BEGIN
     );
   END IF;
 
-  -- 3. Out-of-order protection: terminal refunded state cannot be overwritten
-  IF v_tx.status = 'refunded' THEN
+  -- 3. Out-of-order protection: terminal refunded state cannot be overwritten by charge events
+  IF v_tx.status = 'refunded' AND NOT p_event_type LIKE 'refund.%' THEN
     RETURN jsonb_build_object(
       'success', true,
       'duplicate', true,
@@ -60,8 +60,8 @@ BEGIN
     );
   END IF;
 
-  -- Out-of-order protection: succeeded state cannot regress to failed or pending
-  IF v_tx.status = 'succeeded' AND (p_status = 'failed' OR p_status = 'pending') THEN
+  -- Out-of-order protection: succeeded state cannot regress to failed or pending on charge events
+  IF NOT p_event_type LIKE 'refund.%' AND v_tx.status = 'succeeded' AND (p_status = 'failed' OR p_status = 'pending') THEN
     RETURN jsonb_build_object(
       'success', true,
       'duplicate', true,
