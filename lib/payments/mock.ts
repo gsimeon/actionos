@@ -265,6 +265,7 @@ export class MockPaymentProvider implements IPaymentProvider {
     return {
       status: "refund_confirmed",
       refundReference,
+      transactionReference: tx?.reference,
       amount,
       currency,
     };

@@ -721,6 +721,8 @@ export class DemoActionStepRepository implements IActionStepRepository {
 }
 
 export class DemoTransactionRepository implements ITransactionRepository {
+  constructor(private webhookRepo?: IWebhookEventRepository) {}
+
   async create(data: Partial<Transaction> & { customer_id: string; amount: number; reference: string }, tenant?: TenantContext): Promise<Transaction> {
     const store = getStore();
     if (tenant?.customerId && data.customer_id !== tenant.customerId) {
@@ -804,7 +806,7 @@ export class DemoTransactionRepository implements ITransactionRepository {
     tenant?: TenantContext,
     extra?: { metadata?: Record<string, unknown> }
   ): Promise<{ transaction: Transaction; webhookEvent: WebhookEventRecord; isDuplicate?: boolean }> {
-    const webhookRepo = new DemoWebhookEventRepository();
+    const webhookRepo = this.webhookRepo || new DemoWebhookEventRepository();
     const existing = await webhookRepo.findByEventId(event.provider, event.eventId);
     if (existing) {
       const existingTx =
@@ -817,24 +819,38 @@ export class DemoTransactionRepository implements ITransactionRepository {
       };
     }
 
-    // Mutate transaction status; this invokes any mocked updateStatus (e.g. simulating DB failure)
-    const updatedTx = await this.updateStatus(id, status, tenant, extra);
+    const store = getStore();
+    const tx = store.transactions.find((t) => t.id === id || t.reference === id);
+    const prevStatus = tx?.status || "pending";
+    const prevMeta = { ...(tx?.metadata || {}) };
 
-    // Record webhook event upon successful transaction status mutation
-    const recordResult = await webhookRepo.recordEvent({
-      provider: event.provider,
-      eventId: event.eventId,
-      eventType: event.eventType,
-      reference: event.reference,
-      status,
-      metadata: event.metadata,
-    });
+    try {
+      // Mutate transaction status; this invokes any mocked updateStatus (e.g. simulating DB failure)
+      const updatedTx = await this.updateStatus(id, status, tenant, extra);
 
-    return {
-      transaction: updatedTx,
-      webhookEvent: recordResult.event,
-      isDuplicate: false,
-    };
+      // Record webhook event upon successful transaction status mutation
+      const recordResult = await webhookRepo.recordEvent({
+        provider: event.provider,
+        eventId: event.eventId,
+        eventType: event.eventType,
+        reference: event.reference,
+        status,
+        metadata: event.metadata,
+      });
+
+      return {
+        transaction: updatedTx,
+        webhookEvent: recordResult.event,
+        isDuplicate: recordResult.isDuplicate,
+      };
+    } catch (err) {
+      // Rollback on any failure to guarantee zero partial writes
+      if (tx) {
+        tx.status = prevStatus;
+        tx.metadata = prevMeta;
+      }
+      throw err;
+    }
   }
 }
 
@@ -1124,10 +1140,10 @@ export class DemoRepositoryContainer implements RepositoryContainer {
   public readonly sessions = new DemoActionSessionRepository();
   public readonly plans = new DemoActionPlanRepository();
   public readonly steps = new DemoActionStepRepository();
-  public readonly transactions = new DemoTransactionRepository();
+  public readonly webhookEvents = new DemoWebhookEventRepository();
+  public readonly transactions = new DemoTransactionRepository(this.webhookEvents);
   public readonly documents = new DemoDocumentRepository();
   public readonly notifications = new DemoNotificationRepository();
   public readonly audit = new DemoAuditRepository();
   public readonly ledger = new DemoLedgerRepository();
-  public readonly webhookEvents = new DemoWebhookEventRepository();
 }

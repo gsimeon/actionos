@@ -2901,5 +2901,346 @@ describe("Payment Provider Adapter Isolation & Production Fail-Closed Tests", ()
       const tx = await repos.transactions.findByReference(txRef);
       assert.equal(tx?.status, "succeeded");
     });
+
+    it("should reject settlement when provider verification returns empty payment reference", async () => {
+      const repos = getRepositoryContainer();
+      const txRef = "ref_wh_empty_provider_ref_024";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_wh_test",
+        organization_id: "org_wh_test",
+        amount: 87500,
+        currency: "NGN",
+        status: "pending",
+      });
+
+      const originalEnv = process.env.ACTIONOS_VERIFY_WEBHOOK_WITH_PROVIDER;
+      process.env.ACTIONOS_VERIFY_WEBHOOK_WITH_PROVIDER = "true";
+
+      const emptyRefProvider: IPaymentProvider = {
+        name: "Empty Reference Provider",
+        async requestPayment() {
+          return { status: "initiated", reference: txRef };
+        },
+        async verifyPayment(): Promise<PaymentVerificationResult> {
+          return {
+            status: "succeeded",
+            amount: 87500,
+            currency: "NGN",
+            reference: "",
+            providerReference: "",
+          };
+        },
+      };
+      setPaymentProvider(emptyRefProvider);
+
+      try {
+        const req = new Request("https://actionos.ng/api/webhooks/payment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            event: "charge.success",
+            data: {
+              id: 99881122,
+              reference: txRef,
+              amount: 8750000,
+              currency: "NGN",
+              status: "success",
+            },
+          }),
+        });
+
+        const res = await paymentWebhookHandler(req);
+        assert.equal(res.status, 422);
+        const json = (await res.json()) as { error: { code: string; message: string } };
+        assert.equal(json.error.code, "PROVIDER_REFERENCE_REQUIRED");
+
+        const tx = await repos.transactions.findByReference(txRef);
+        assert.equal(tx?.status, "pending");
+      } finally {
+        process.env.ACTIONOS_VERIFY_WEBHOOK_WITH_PROVIDER = originalEnv;
+        setPaymentProvider(null);
+      }
+    });
+
+    it("should reject settlement when provider verification returns missing or empty currency", async () => {
+      const repos = getRepositoryContainer();
+      const txRef = "ref_wh_empty_provider_currency_025";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_wh_test",
+        organization_id: "org_wh_test",
+        amount: 87500,
+        currency: "NGN",
+        status: "pending",
+      });
+
+      const originalEnv = process.env.ACTIONOS_VERIFY_WEBHOOK_WITH_PROVIDER;
+      process.env.ACTIONOS_VERIFY_WEBHOOK_WITH_PROVIDER = "true";
+
+      const emptyCurrencyProvider: IPaymentProvider = {
+        name: "Empty Currency Provider",
+        async requestPayment() {
+          return { status: "initiated", reference: txRef };
+        },
+        async verifyPayment(ref: string): Promise<PaymentVerificationResult> {
+          return {
+            status: "succeeded",
+            amount: 87500,
+            currency: "", // Omitted / empty currency
+            reference: ref,
+            providerReference: ref,
+          };
+        },
+      };
+      setPaymentProvider(emptyCurrencyProvider);
+
+      try {
+        const req = new Request("https://actionos.ng/api/webhooks/payment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            event: "charge.success",
+            data: {
+              id: 99882233,
+              reference: txRef,
+              amount: 8750000,
+              currency: "NGN",
+              status: "success",
+            },
+          }),
+        });
+
+        const res = await paymentWebhookHandler(req);
+        assert.equal(res.status, 422);
+        const json = (await res.json()) as { error: { code: string; message: string } };
+        assert.equal(json.error.code, "PROVIDER_CURRENCY_REQUIRED");
+
+        const tx = await repos.transactions.findByReference(txRef);
+        assert.equal(tx?.status, "pending");
+      } finally {
+        process.env.ACTIONOS_VERIFY_WEBHOOK_WITH_PROVIDER = originalEnv;
+        setPaymentProvider(null);
+      }
+    });
+
+    it("should reject refund.processed when provider refund verification amount mismatches expected amount", async () => {
+      process.env.ACTIONOS_RUNTIME_MODE = "production";
+      process.env.PAYSTACK_SECRET_KEY = "test_paystack_secret_key_prod_refund";
+
+      const repos = getRepositoryContainer();
+      const txRef = "ref_wh_refund_amount_mismatch_026";
+      const refundRef = "rf_provider_test_026";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_wh_test",
+        organization_id: "org_wh_test",
+        amount: 87500,
+        currency: "NGN",
+        status: "succeeded",
+        metadata: { original_payment_status: "succeeded" },
+      });
+
+      const mismatchRefundAmountProvider: IPaymentProvider = {
+        name: "Mismatch Refund Amount Provider",
+        async requestPayment() {
+          return { status: "initiated", reference: txRef };
+        },
+        async verifyPayment(): Promise<PaymentVerificationResult> {
+          return {
+            status: "succeeded",
+            amount: 87500,
+            currency: "NGN",
+            reference: txRef,
+            providerReference: txRef,
+          };
+        },
+        async verifyRefund(rRef: string): Promise<PaymentRefundResult> {
+          return {
+            status: "refund_confirmed",
+            refundReference: rRef,
+            transactionReference: txRef,
+            amount: 50000, // Under-refunded: 50,000 instead of 87,500
+            currency: "NGN",
+          };
+        },
+      };
+      setPaymentProvider(mismatchRefundAmountProvider);
+
+      try {
+        const rawPayload = JSON.stringify({
+          event: "refund.processed",
+          data: {
+            id: 99883344,
+            reference: txRef,
+            refund_reference: refundRef,
+            amount: 8750000,
+            currency: "NGN",
+            status: "processed",
+          },
+        });
+
+        const signature = crypto
+          .createHmac("sha512", "test_paystack_secret_key_prod_refund")
+          .update(rawPayload)
+          .digest("hex");
+
+        const req = new Request("https://actionos.ng/api/webhooks/payment", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-paystack-signature": signature,
+          },
+          body: rawPayload,
+        });
+
+        const res = await paymentWebhookHandler(req);
+        assert.equal(res.status, 422);
+        const json = (await res.json()) as { error: { code: string; message: string } };
+        assert.equal(json.error.code, "PROVIDER_REFUND_AMOUNT_MISMATCH");
+
+        const tx = await repos.transactions.findByReference(txRef);
+        assert.equal(tx?.status, "succeeded");
+      } finally {
+        setPaymentProvider(null);
+      }
+    });
+
+    it("should reject refund.processed when provider refund verification transaction reference contradicts original transaction", async () => {
+      process.env.ACTIONOS_RUNTIME_MODE = "production";
+      process.env.PAYSTACK_SECRET_KEY = "test_paystack_secret_key_prod_refund";
+
+      const repos = getRepositoryContainer();
+      const txRef = "ref_wh_refund_tx_mismatch_027";
+      const refundRef = "rf_provider_test_027";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_wh_test",
+        organization_id: "org_wh_test",
+        amount: 87500,
+        currency: "NGN",
+        status: "succeeded",
+        metadata: { original_payment_status: "succeeded" },
+      });
+
+      const mismatchTxRefProvider: IPaymentProvider = {
+        name: "Mismatch Tx Reference Refund Provider",
+        async requestPayment() {
+          return { status: "initiated", reference: txRef };
+        },
+        async verifyPayment(): Promise<PaymentVerificationResult> {
+          return {
+            status: "succeeded",
+            amount: 87500,
+            currency: "NGN",
+            reference: txRef,
+            providerReference: txRef,
+          };
+        },
+        async verifyRefund(rRef: string): Promise<PaymentRefundResult> {
+          return {
+            status: "refund_confirmed",
+            refundReference: rRef,
+            transactionReference: "different_tx_ref_099",
+            amount: 87500,
+            currency: "NGN",
+          };
+        },
+      };
+      setPaymentProvider(mismatchTxRefProvider);
+
+      try {
+        const rawPayload = JSON.stringify({
+          event: "refund.processed",
+          data: {
+            id: 99884455,
+            reference: txRef,
+            refund_reference: refundRef,
+            amount: 8750000,
+            currency: "NGN",
+            status: "processed",
+          },
+        });
+
+        const signature = crypto
+          .createHmac("sha512", "test_paystack_secret_key_prod_refund")
+          .update(rawPayload)
+          .digest("hex");
+
+        const req = new Request("https://actionos.ng/api/webhooks/payment", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-paystack-signature": signature,
+          },
+          body: rawPayload,
+        });
+
+        const res = await paymentWebhookHandler(req);
+        assert.equal(res.status, 422);
+        const json = (await res.json()) as { error: { code: string; message: string } };
+        assert.equal(json.error.code, "PROVIDER_REFUND_TRANSACTION_MISMATCH");
+
+        const tx = await repos.transactions.findByReference(txRef);
+        assert.equal(tx?.status, "succeeded");
+      } finally {
+        setPaymentProvider(null);
+      }
+    });
+
+    it("should prevent out-of-order refund.pending from overwriting confirmed refund status", async () => {
+      const repos = getRepositoryContainer();
+      const txRef = "ref_wh_out_of_order_refund_028";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_wh_test",
+        organization_id: "org_wh_test",
+        amount: 87500,
+        currency: "NGN",
+        status: "refunded",
+        metadata: {
+          original_payment_status: "succeeded",
+          refund_state: "refund_confirmed",
+        },
+      });
+
+      const rawPayload = JSON.stringify({
+        event: "refund.pending",
+        data: {
+          id: 99885566,
+          reference: txRef,
+          refund_reference: "rf_late_pend_028",
+          amount: 8750000,
+          currency: "NGN",
+          status: "pending",
+        },
+      });
+
+      const req = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: rawPayload,
+      });
+
+      const res = await paymentWebhookHandler(req);
+      assert.equal(res.status, 200);
+      const json = (await res.json()) as { data: { acknowledged: boolean; duplicate: boolean; ignored: string } };
+      assert.equal(json.data.acknowledged, true);
+      assert.equal(json.data.ignored, "out_of_order_refund");
+
+      const tx = await repos.transactions.findByReference(txRef);
+      assert.equal(tx?.status, "refunded", "Transaction status must remain terminal refunded");
+      assert.equal(tx?.metadata?.refund_state, "refund_confirmed", "Refund state must not regress to refund_pending");
+    });
   });
 });

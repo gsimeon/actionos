@@ -1205,6 +1205,12 @@ export class SupabaseTransactionRepository implements ITransactionRepository {
           );
         }
       } else if (data) {
+        if (data.success === false) {
+          throw new DatabaseError(
+            `Atomic webhook settlement RPC error: ${data.message || data.error}`,
+            data.error
+          );
+        }
         if (data.duplicate) {
           return {
             transaction: (data.transaction || {}) as Transaction,

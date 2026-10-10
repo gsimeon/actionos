@@ -425,10 +425,19 @@ export class PaystackPaymentProvider implements IPaymentProvider {
     const confirmedAmount = typeof data.amount === "number" ? data.amount / 100 : 0;
     const confirmedCurrency = (typeof data.currency === "string" ? data.currency : "NGN").toUpperCase();
 
+    const txObj =
+      data.transaction && typeof data.transaction === "object"
+        ? (data.transaction as Record<string, unknown>)
+        : undefined;
+    const txRef =
+      (txObj && typeof txObj.reference === "string" ? txObj.reference.trim() : undefined) ||
+      (typeof data.transaction_reference === "string" ? data.transaction_reference.trim() : undefined);
+
     if (rawStatus === "processed" || rawStatus === "success") {
       return {
         status: "refund_confirmed",
         refundReference: confirmedRef,
+        transactionReference: txRef,
         amount: confirmedAmount,
         currency: confirmedCurrency,
         rawStatus,
@@ -437,6 +446,7 @@ export class PaystackPaymentProvider implements IPaymentProvider {
       return {
         status: "refund_pending",
         refundReference: confirmedRef,
+        transactionReference: txRef,
         amount: confirmedAmount,
         currency: confirmedCurrency,
         rawStatus,
@@ -445,6 +455,7 @@ export class PaystackPaymentProvider implements IPaymentProvider {
       return {
         status: "refund_failed",
         refundReference: confirmedRef,
+        transactionReference: txRef,
         amount: confirmedAmount,
         currency: confirmedCurrency,
         error: "Paystack verified refund status as failed",

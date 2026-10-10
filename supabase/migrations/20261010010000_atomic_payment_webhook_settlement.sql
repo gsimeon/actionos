@@ -70,6 +70,16 @@ BEGIN
     );
   END IF;
 
+  -- Out-of-order refund protection: terminal refunded state cannot regress to pending or failed on refund events
+  IF v_tx.status = 'refunded' AND p_event_type LIKE 'refund.%' AND p_status != 'refunded' THEN
+    RETURN jsonb_build_object(
+      'success', true,
+      'duplicate', true,
+      'ignored', 'out_of_order',
+      'transaction', row_to_json(v_tx)
+    );
+  END IF;
+
   -- 4. Atomically insert into payment_webhook_events
   INSERT INTO payment_webhook_events (
     provider,

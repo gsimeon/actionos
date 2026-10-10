@@ -308,6 +308,8 @@ export async function POST(req: Request) {
       let txStatus: Transaction["status"];
       let refundLifecycleState: CanonicalRefundState | undefined;
       let verifiedProviderTxId: string | undefined;
+      const expectedAmount = existingTx.amount;
+      const expectedCurrency = (existingTx.currency || "NGN").toUpperCase().trim();
       const isRefundEvent = payload.event.startsWith("refund.");
       const rawStatus = typeof payload.data.status === "string" ? payload.data.status.toLowerCase().trim() : "";
 
@@ -380,9 +382,7 @@ export async function POST(req: Request) {
           );
         }
 
-        const expectedAmount = existingTx.amount;
         const webhookCurrency = (payload.data.currency || "NGN").toUpperCase().trim();
-        const expectedCurrency = (existingTx.currency || "NGN").toUpperCase().trim();
 
         // Paystack delivers amounts in minor units (kobo, e.g. 8750000 for ₦87,500.00)
         // In production, strictly enforce provider's documented minor units (kobo)
@@ -649,7 +649,22 @@ export async function POST(req: Request) {
             ).trim();
             const normTxRef = ref.trim();
 
-            if (verifiedPaymentRef && verifiedPaymentRef !== normTxRef) {
+            if (!verifiedPaymentRef) {
+              return respond(
+                NextResponse.json(
+                  {
+                    success: false,
+                    error: {
+                      code: "PROVIDER_REFERENCE_REQUIRED",
+                      message: "Authoritative provider verification must report a non-empty payment reference matching transaction reference. Refusing settlement.",
+                    },
+                  },
+                  { status: 422 }
+                )
+              );
+            }
+
+            if (verifiedPaymentRef !== normTxRef) {
               return respond(
                 NextResponse.json(
                   {
@@ -728,7 +743,26 @@ export async function POST(req: Request) {
               );
             }
 
-            const verifiedCurrency = (verification.currency || "NGN").toUpperCase().trim();
+            if (
+              !verification.currency ||
+              typeof verification.currency !== "string" ||
+              !verification.currency.trim()
+            ) {
+              return respond(
+                NextResponse.json(
+                  {
+                    success: false,
+                    error: {
+                      code: "PROVIDER_CURRENCY_REQUIRED",
+                      message: "Authoritative provider verification must report a valid, non-empty currency code. Refusing settlement.",
+                    },
+                  },
+                  { status: 422 }
+                )
+              );
+            }
+
+            const verifiedCurrency = verification.currency.toUpperCase().trim();
             if (verifiedCurrency !== expectedCurrency) {
               return respond(
                 NextResponse.json(
@@ -744,8 +778,8 @@ export async function POST(req: Request) {
               );
             }
             if (linkedQuote) {
-              const quoteCurrency = (linkedQuote.currency || "NGN").toUpperCase().trim();
-              if (verifiedCurrency !== quoteCurrency) {
+              const quoteCurrency = (linkedQuote.currency || "").toUpperCase().trim();
+              if (quoteCurrency && verifiedCurrency !== quoteCurrency) {
                 return respond(
                   NextResponse.json(
                     {
@@ -855,6 +889,81 @@ export async function POST(req: Request) {
                     )
                   );
                 }
+
+                if (
+                  refundVerification.refundReference &&
+                  refundVerification.refundReference.trim() !== refundRef.trim()
+                ) {
+                  return respond(
+                    NextResponse.json(
+                      {
+                        success: false,
+                        error: {
+                          code: "PROVIDER_REFUND_REFERENCE_MISMATCH",
+                          message: `Authoritative provider refund reference '${refundVerification.refundReference}' does not match expected refund reference '${refundRef}'. Refusing to mark transaction refunded.`,
+                        },
+                      },
+                      { status: 422 }
+                    )
+                  );
+                }
+
+                if (
+                  refundVerification.transactionReference &&
+                  refundVerification.transactionReference.trim() !== ref.trim()
+                ) {
+                  return respond(
+                    NextResponse.json(
+                      {
+                        success: false,
+                        error: {
+                          code: "PROVIDER_REFUND_TRANSACTION_MISMATCH",
+                          message: `Authoritative provider refund transaction reference '${refundVerification.transactionReference}' does not match expected transaction reference '${ref}'. Refusing to mark transaction refunded.`,
+                        },
+                      },
+                      { status: 422 }
+                    )
+                  );
+                }
+
+                if (typeof refundVerification.amount === "number" && refundVerification.amount > 0) {
+                  if (Math.abs(refundVerification.amount - expectedAmount) > 0.01) {
+                    return respond(
+                      NextResponse.json(
+                        {
+                          success: false,
+                          error: {
+                            code: "PROVIDER_REFUND_AMOUNT_MISMATCH",
+                            message: `Authoritative provider refund verification amount (${refundVerification.amount}) does not match transaction amount (${expectedAmount}). Refusing refund settlement.`,
+                          },
+                        },
+                        { status: 422 }
+                      )
+                    );
+                  }
+                }
+
+                if (
+                  refundVerification.currency &&
+                  typeof refundVerification.currency === "string" &&
+                  refundVerification.currency.trim()
+                ) {
+                  const verifiedRefundCurrency = refundVerification.currency.toUpperCase().trim();
+                  if (verifiedRefundCurrency !== expectedCurrency) {
+                    return respond(
+                      NextResponse.json(
+                        {
+                          success: false,
+                          error: {
+                            code: "PROVIDER_REFUND_CURRENCY_MISMATCH",
+                            message: `Authoritative provider refund verification currency (${verifiedRefundCurrency}) does not match expected currency (${expectedCurrency}). Refusing refund settlement.`,
+                          },
+                        },
+                        { status: 422 }
+                      )
+                    );
+                  }
+                }
               } catch (refErr) {
                 if (isProductionMode() || process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION === "true") {
                   return respond(
@@ -914,11 +1023,32 @@ export async function POST(req: Request) {
         );
       }
 
-      // Rule C: Idempotent duplicate check: already in target status and identical refund state
       const currentRefundState =
         (existingTx.metadata?.refund_state as string | undefined) ||
         (existingTx.metadata?.refundState as string | undefined);
 
+      // Rule C: Out-of-order refund protection: confirmed or terminal refund state cannot be overwritten by stale pending/failed refund events
+      if (
+        isRefundEvent &&
+        (currentRefundState === "refund_confirmed" || existingTx.status === "refunded") &&
+        refundLifecycleState !== "refund_confirmed"
+      ) {
+        return respond(
+          NextResponse.json({
+            success: true,
+            data: {
+              acknowledged: true,
+              duplicate: true,
+              ignored: "out_of_order_refund",
+              reference: ref,
+              status: existingTx.status,
+              refund_state: currentRefundState || "refund_confirmed",
+            },
+          })
+        );
+      }
+
+      // Rule D: Idempotent duplicate check: already in target status and identical refund state
       if (
         existingTx.status === txStatus &&
         (!isRefundEvent || currentRefundState === refundLifecycleState)

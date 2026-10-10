@@ -333,6 +333,140 @@ describe("Protected Supabase Security, RLS Invariants & Payment Webhook Integrat
       const txAfter2 = await repos.transactions.findByReference(txRef, orgA);
       assert.equal(txAfter2?.status, "succeeded", "Transaction status must remain clean");
     });
+
+    it("handles concurrent parallel webhook deliveries without race conditions or duplicate execution", async () => {
+      const repos = getRepositoryContainer();
+      const txRef = "ref_wh_concurrent_race_test_100";
+
+      await repos.transactions.create(
+        {
+          id: txRef,
+          reference: txRef,
+          customer_id: customerIdA,
+          organization_id: orgIdA,
+          transaction_type: "renewal_premium",
+          amount: 87500,
+          currency: "NGN",
+          status: "pending",
+          provider: "paystack",
+          renewal_id: null,
+          metadata: { session_id: "sess_concurrent_test" },
+        },
+        orgA
+      );
+
+      const payloadString = JSON.stringify({
+        event: "charge.success",
+        data: {
+          id: 887766,
+          reference: txRef,
+          amount: 8750000,
+          currency: "NGN",
+          status: "success",
+        },
+      });
+
+      // Fire 3 simultaneous concurrent deliveries
+      const responses = await Promise.all([
+        paymentWebhookHandler(
+          new Request("https://actionos.ng/api/webhooks/payment", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: payloadString,
+          })
+        ),
+        paymentWebhookHandler(
+          new Request("https://actionos.ng/api/webhooks/payment", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: payloadString,
+          })
+        ),
+        paymentWebhookHandler(
+          new Request("https://actionos.ng/api/webhooks/payment", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: payloadString,
+          })
+        ),
+      ]);
+
+      // All requests must succeed with HTTP 200
+      for (const res of responses) {
+        assert.equal(res.status, 200);
+      }
+
+      const results = await Promise.all(
+        responses.map((r) => r.json() as Promise<{ data: { acknowledged: boolean; duplicate: boolean } }>)
+      );
+
+      // Exactly one initial settlement (duplicate: false) and two deduplicated acknowledgments (duplicate: true)
+      const nonDuplicates = results.filter((r) => r.data.duplicate === false);
+      const duplicates = results.filter((r) => r.data.duplicate === true);
+
+      assert.equal(nonDuplicates.length, 1, "Exactly one delivery must perform initial settlement");
+      assert.equal(duplicates.length, 2, "Concurrent deliveries must be safely deduplicated");
+
+      // Transaction must be succeeded
+      const tx = await repos.transactions.findByReference(txRef, orgA);
+      assert.equal(tx?.status, "succeeded");
+    });
+
+    it("guarantees atomic rollback on settlement failure preventing partial state mutations", async () => {
+      const repos = getRepositoryContainer();
+      const txRef = "ref_wh_atomic_rollback_test_101";
+
+      const tx = await repos.transactions.create(
+        {
+          id: txRef,
+          reference: txRef,
+          customer_id: customerIdA,
+          organization_id: orgIdA,
+          transaction_type: "renewal_premium",
+          amount: 87500,
+          currency: "NGN",
+          status: "pending",
+          provider: "paystack",
+          renewal_id: null,
+          metadata: { session_id: "sess_rollback_test" },
+        },
+        orgA
+      );
+
+      // Simulate a failure during event recording in settleWithWebhookEvent
+      if (repos.webhookEvents) {
+        const origRecordEvent = repos.webhookEvents.recordEvent.bind(repos.webhookEvents);
+        repos.webhookEvents.recordEvent = async () => {
+          throw new Error("Simulated database constraint violation during event write");
+        };
+
+        try {
+          await assert.rejects(
+            async () => {
+              await repos.transactions.settleWithWebhookEvent(
+                tx.id,
+                "succeeded",
+                {
+                  provider: "paystack",
+                  eventId: "evt_rollback_fail_01",
+                  eventType: "charge.success",
+                  reference: txRef,
+                  status: "succeeded",
+                },
+                orgA
+              );
+            },
+            /Simulated database constraint violation/
+          );
+
+          // Atomic rollback check: transaction status must still be 'pending', not mutated to 'succeeded'
+          const txAfterFail = await repos.transactions.findByReference(txRef, orgA);
+          assert.equal(txAfterFail?.status, "pending", "Transaction status must remain pending after failed settlement write");
+        } finally {
+          repos.webhookEvents.recordEvent = origRecordEvent;
+        }
+      }
+    });
   });
 
   describe("4. End-to-End Cryptographic Chain & Quote Signature Invariant", () => {

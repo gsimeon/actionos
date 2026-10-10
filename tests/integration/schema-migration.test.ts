@@ -223,4 +223,53 @@ describe("Supabase Schema, Migration Replayability & Type Alignment Validation",
       "Trigger must fire BEFORE UPDATE OR DELETE"
     );
   });
+
+  it("should verify payment webhook events table, unique deduplication constraint, and atomic settlement RPC migration", () => {
+    const eventsMigrationFile = path.join(migrationsDir, "20261010000000_payment_webhook_events.sql");
+    assert.ok(fs.existsSync(eventsMigrationFile), "Payment webhook events migration must exist");
+    const eventsSql = fs.readFileSync(eventsMigrationFile, "utf-8");
+
+    assert.ok(
+      /CREATE TABLE IF NOT EXISTS public\.payment_webhook_events/i.test(eventsSql),
+      "Migration must create payment_webhook_events table"
+    );
+    assert.ok(
+      /CONSTRAINT uq_payment_webhook_events_provider_event UNIQUE\s*\(\s*provider\s*,\s*event_id\s*\)/i.test(eventsSql),
+      "Migration must define unique constraint on (provider, event_id) for durable cross-instance deduplication"
+    );
+    assert.ok(
+      /ALTER TABLE public\.payment_webhook_events ENABLE ROW LEVEL SECURITY/i.test(eventsSql),
+      "Migration must enable RLS on payment_webhook_events"
+    );
+
+    const atomicMigrationFile = path.join(migrationsDir, "20261010010000_atomic_payment_webhook_settlement.sql");
+    assert.ok(fs.existsSync(atomicMigrationFile), "Atomic payment settlement migration must exist");
+    const atomicSql = fs.readFileSync(atomicMigrationFile, "utf-8");
+
+    assert.ok(
+      /CREATE OR REPLACE FUNCTION public\.settle_payment_webhook/i.test(atomicSql),
+      "Migration must define settle_payment_webhook function"
+    );
+    assert.ok(
+      /SECURITY DEFINER/i.test(atomicSql),
+      "settle_payment_webhook must be declared as SECURITY DEFINER"
+    );
+    assert.ok(
+      /FOR UPDATE/i.test(atomicSql),
+      "settle_payment_webhook must use FOR UPDATE transaction row lock to serialize concurrent webhook calls"
+    );
+    assert.ok(
+      /ON CONFLICT\s*\(\s*provider\s*,\s*event_id\s*\)\s*DO NOTHING/i.test(atomicSql),
+      "settle_payment_webhook must handle unique constraint conflict via ON CONFLICT DO NOTHING"
+    );
+    assert.ok(
+      /GRANT EXECUTE ON FUNCTION public\.settle_payment_webhook.*TO authenticated, service_role/i.test(atomicSql),
+      "Function execution must be granted to authenticated and service_role"
+    );
+    assert.ok(
+      /REVOKE EXECUTE ON FUNCTION public\.settle_payment_webhook.*FROM anon, public/i.test(atomicSql),
+      "Function execution must be revoked from anon and public"
+    );
+  });
 });
+
