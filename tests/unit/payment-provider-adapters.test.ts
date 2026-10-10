@@ -3242,5 +3242,141 @@ describe("Payment Provider Adapter Isolation & Production Fail-Closed Tests", ()
       assert.equal(tx?.status, "refunded", "Transaction status must remain terminal refunded");
       assert.equal(tx?.metadata?.refund_state, "refund_confirmed", "Refund state must not regress to refund_pending");
     });
+
+    it("should ensure PaystackPaymentProvider does not silently default missing reference or currency in verifyPayment", async () => {
+      const origFetch = globalThis.fetch;
+      try {
+        globalThis.fetch = async () =>
+          new Response(
+            JSON.stringify({
+              status: true,
+              data: {
+                status: "success",
+                amount: 8750000,
+                // reference and currency omitted from response
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+
+        const provider = new PaystackPaymentProvider("sk_test_mock_key_001");
+        const res = await provider.verifyPayment("ref_test_no_default_01");
+
+        assert.equal(res.reference, "", "Must not default missing reference to queried reference");
+        assert.equal(res.currency, "", "Must not default missing currency to NGN");
+      } finally {
+        globalThis.fetch = origFetch;
+      }
+    });
+
+    it("should ensure PaystackPaymentProvider does not silently default missing currency in verifyRefund", async () => {
+      const origFetch = globalThis.fetch;
+      try {
+        globalThis.fetch = async () =>
+          new Response(
+            JSON.stringify({
+              status: true,
+              data: {
+                id: 12345,
+                status: "processed",
+                amount: 8750000,
+                // currency omitted from response
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+
+        const provider = new PaystackPaymentProvider("sk_test_mock_key_002");
+        const res = await provider.verifyRefund("rf_test_no_default_02");
+
+        assert.equal(res.currency, "", "Must not default missing refund currency to NGN");
+      } finally {
+        globalThis.fetch = origFetch;
+      }
+    });
+
+    it("should reject refund.processed when provider refund verification currency mismatches expected currency", async () => {
+      process.env.ACTIONOS_RUNTIME_MODE = "production";
+      process.env.PAYSTACK_SECRET_KEY = "test_paystack_secret_key_prod_refund";
+
+      const repos = getRepositoryContainer();
+      const txRef = "ref_wh_refund_curr_mismatch_029";
+      const refundRef = "rf_provider_test_029";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_wh_test",
+        organization_id: "org_wh_test",
+        amount: 87500,
+        currency: "NGN",
+        status: "succeeded",
+        metadata: { original_payment_status: "succeeded" },
+      });
+
+      const mismatchCurrencyProvider: IPaymentProvider = {
+        name: "Mismatch Refund Currency Provider",
+        async requestPayment() {
+          return { status: "initiated", reference: txRef };
+        },
+        async verifyPayment(): Promise<PaymentVerificationResult> {
+          return {
+            status: "succeeded",
+            amount: 87500,
+            currency: "NGN",
+            reference: txRef,
+            providerReference: txRef,
+          };
+        },
+        async verifyRefund(rRef: string): Promise<PaymentRefundResult> {
+          return {
+            status: "refund_confirmed",
+            refundReference: rRef,
+            transactionReference: txRef,
+            amount: 87500,
+            currency: "USD", // Mismatch: USD instead of NGN
+          };
+        },
+      };
+      setPaymentProvider(mismatchCurrencyProvider);
+
+      try {
+        const rawPayload = JSON.stringify({
+          event: "refund.processed",
+          data: {
+            id: 99886677,
+            reference: txRef,
+            refund_reference: refundRef,
+            amount: 8750000,
+            currency: "NGN",
+            status: "processed",
+          },
+        });
+
+        const signature = crypto
+          .createHmac("sha512", "test_paystack_secret_key_prod_refund")
+          .update(rawPayload)
+          .digest("hex");
+
+        const req = new Request("https://actionos.ng/api/webhooks/payment", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-paystack-signature": signature,
+          },
+          body: rawPayload,
+        });
+
+        const res = await paymentWebhookHandler(req);
+        assert.equal(res.status, 422);
+        const json = (await res.json()) as { error: { code: string; message: string } };
+        assert.equal(json.error.code, "PROVIDER_REFUND_CURRENCY_MISMATCH");
+
+        const tx = await repos.transactions.findByReference(txRef);
+        assert.equal(tx?.status, "succeeded");
+      } finally {
+        setPaymentProvider(null);
+      }
+    });
   });
 });

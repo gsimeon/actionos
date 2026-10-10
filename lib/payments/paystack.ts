@@ -191,13 +191,17 @@ export class PaystackPaymentProvider implements IPaymentProvider {
     // Only return paidAt when provider confirmed payment settlement with a valid paid_at timestamp
     const paidAt = status === "succeeded" && data?.paid_at ? String(data.paid_at) : undefined;
 
-    const paymentReference = data?.reference ? String(data.reference).trim() : reference.trim();
+    const paymentReference = data?.reference ? String(data.reference).trim() : "";
     const providerTransactionId = data?.id !== undefined && data?.id !== null ? String(data.id).trim() : undefined;
+    const providerCurrency =
+      typeof data?.currency === "string" && data.currency.trim()
+        ? data.currency.toUpperCase().trim()
+        : "";
 
     return {
       status,
       amount,
-      currency: (data?.currency || "NGN").toUpperCase(),
+      currency: providerCurrency,
       reference: paymentReference,
       providerReference: paymentReference,
       providerTransactionId,
@@ -421,9 +425,15 @@ export class PaystackPaymentProvider implements IPaymentProvider {
 
     const data = (json.data && typeof json.data === "object" ? json.data : {}) as Record<string, unknown>;
     const rawStatus = (typeof data.status === "string" ? data.status : "").toLowerCase().trim();
-    const confirmedRef = data.id !== undefined && data.id !== null ? String(data.id) : refundReference;
+    const confirmedRef =
+      data.id !== undefined && data.id !== null
+        ? String(data.id).trim()
+        : (typeof data.reference === "string" ? data.reference.trim() : "");
     const confirmedAmount = typeof data.amount === "number" ? data.amount / 100 : 0;
-    const confirmedCurrency = (typeof data.currency === "string" ? data.currency : "NGN").toUpperCase();
+    const confirmedCurrency =
+      typeof data.currency === "string" && data.currency.trim()
+        ? data.currency.toUpperCase().trim()
+        : "";
 
     const txObj =
       data.transaction && typeof data.transaction === "object"

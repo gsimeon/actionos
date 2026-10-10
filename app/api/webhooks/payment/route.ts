@@ -890,17 +890,35 @@ export async function POST(req: Request) {
                   );
                 }
 
-                if (
-                  refundVerification.refundReference &&
-                  refundVerification.refundReference.trim() !== refundRef.trim()
-                ) {
+                const verifiedRefundId = (
+                  refundVerification.refundReference ||
+                  refundVerification.refundId ||
+                  ""
+                ).trim();
+
+                if (!verifiedRefundId) {
+                  if (isProductionMode() || process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION === "true") {
+                    return respond(
+                      NextResponse.json(
+                        {
+                          success: false,
+                          error: {
+                            code: "PROVIDER_REFUND_REFERENCE_REQUIRED",
+                            message: "Authoritative provider refund verification must report an explicit refund identifier. Refusing refund settlement.",
+                          },
+                        },
+                        { status: 422 }
+                      )
+                    );
+                  }
+                } else if (verifiedRefundId !== refundRef.trim()) {
                   return respond(
                     NextResponse.json(
                       {
                         success: false,
                         error: {
                           code: "PROVIDER_REFUND_REFERENCE_MISMATCH",
-                          message: `Authoritative provider refund reference '${refundVerification.refundReference}' does not match expected refund reference '${refundRef}'. Refusing to mark transaction refunded.`,
+                          message: `Authoritative provider refund reference '${verifiedRefundId}' does not match expected refund reference '${refundRef}'. Refusing to mark transaction refunded.`,
                         },
                       },
                       { status: 422 }
@@ -941,6 +959,19 @@ export async function POST(req: Request) {
                       )
                     );
                   }
+                } else if (isProductionMode() || process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION === "true") {
+                  return respond(
+                    NextResponse.json(
+                      {
+                        success: false,
+                        error: {
+                          code: "PROVIDER_REFUND_AMOUNT_REQUIRED",
+                          message: "Authoritative provider refund verification did not report a valid refund amount. Refusing refund settlement.",
+                        },
+                      },
+                      { status: 422 }
+                    )
+                  );
                 }
 
                 if (
@@ -963,6 +994,19 @@ export async function POST(req: Request) {
                       )
                     );
                   }
+                } else if (isProductionMode() || process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION === "true") {
+                  return respond(
+                    NextResponse.json(
+                      {
+                        success: false,
+                        error: {
+                          code: "PROVIDER_REFUND_CURRENCY_REQUIRED",
+                          message: "Authoritative provider refund verification did not report a valid currency code. Refusing refund settlement.",
+                        },
+                      },
+                      { status: 422 }
+                    )
+                  );
                 }
               } catch (refErr) {
                 if (isProductionMode() || process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION === "true") {
