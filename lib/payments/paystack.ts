@@ -191,11 +191,16 @@ export class PaystackPaymentProvider implements IPaymentProvider {
     // Only return paidAt when provider confirmed payment settlement with a valid paid_at timestamp
     const paidAt = status === "succeeded" && data?.paid_at ? String(data.paid_at) : undefined;
 
+    const paymentReference = data?.reference ? String(data.reference).trim() : reference.trim();
+    const providerTransactionId = data?.id !== undefined && data?.id !== null ? String(data.id).trim() : undefined;
+
     return {
       status,
       amount,
       currency: (data?.currency || "NGN").toUpperCase(),
-      providerReference: data?.id ? String(data.id) : reference,
+      reference: paymentReference,
+      providerReference: paymentReference,
+      providerTransactionId,
       paidAt,
       verifiedAt,
     };

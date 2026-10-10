@@ -5,7 +5,7 @@ import { ActionOSRecoveryWorker } from "@/lib/actionos/recovery-worker";
 import { ActionOSOrchestrator } from "@/lib/actionos/orchestrator";
 import { getRepositoryContainer, setRepositoryContainer } from "@/lib/repositories";
 import { DemoRepositoryContainer } from "@/lib/repositories/demo/demo-repositories";
-import { mockPaymentProvider, setPaymentProvider } from "@/lib/payments";
+import { mockPaymentProvider, setPaymentProvider, type IPaymentProvider, type PaymentVerificationResult } from "@/lib/payments";
 import { POST as paymentWebhookHandler } from "@/app/api/webhooks/payment/route";
 import { getStore, resetStore } from "@/lib/actionos/mock-store";
 
@@ -314,7 +314,24 @@ describe("Durable Reconciliation Worker & Dead-Letter Handling", () => {
     it("should strictly reject unauthenticated or tampered webhooks in production mode", async () => {
       process.env.ACTIONOS_RUNTIME_MODE = "production";
       process.env.PAYSTACK_SECRET_KEY = "test_paystack_secret_key_888";
-      process.env.ACTIONOS_DISABLE_AUTHORITATIVE_VERIFICATION = "true";
+
+      const verifiedProvider: IPaymentProvider = {
+        name: "Mock Verified Paystack Provider",
+        async requestPayment() {
+          throw new Error("not implemented");
+        },
+        async verifyPayment(reference: string): Promise<PaymentVerificationResult> {
+          return {
+            status: "succeeded",
+            amount: 50000,
+            currency: "NGN",
+            reference,
+            providerReference: reference,
+            paidAt: new Date().toISOString(),
+          };
+        },
+      };
+      setPaymentProvider(verifiedProvider);
 
       const repos = getRepositoryContainer();
       await repos.transactions.create(

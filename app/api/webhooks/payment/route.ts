@@ -307,6 +307,7 @@ export async function POST(req: Request) {
       // Recognize only defined payment/refund events; never map unrelated events (e.g. transfer.success) to payment failure
       let txStatus: Transaction["status"];
       let refundLifecycleState: CanonicalRefundState | undefined;
+      let verifiedProviderTxId: string | undefined;
       const isRefundEvent = payload.event.startsWith("refund.");
       const rawStatus = typeof payload.data.status === "string" ? payload.data.status.toLowerCase().trim() : "";
 
@@ -609,11 +610,13 @@ export async function POST(req: Request) {
         }
 
         // Authoritative direct provider verification:
-        // Enforced for production settlement (unless explicitly bypassed), or when requested by test/policy flags
+        // In production mode, direct authoritative payment verification is unconditionally MANDATORY.
+        // Bypassing verification via environment flags is strictly prohibited in production.
         const shouldVerifyAuthoritatively =
-          (isProductionMode() && process.env.ACTIONOS_DISABLE_AUTHORITATIVE_VERIFICATION !== "true") ||
-          process.env.ACTIONOS_VERIFY_WEBHOOK_WITH_PROVIDER === "true" ||
-          process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION === "true";
+          isProductionMode() ||
+          (process.env.ACTIONOS_DISABLE_AUTHORITATIVE_VERIFICATION !== "true" &&
+            (process.env.ACTIONOS_VERIFY_WEBHOOK_WITH_PROVIDER === "true" ||
+              process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION === "true"));
 
         if (shouldVerifyAuthoritatively) {
           try {
@@ -634,29 +637,50 @@ export async function POST(req: Request) {
               );
             }
 
-            // Verify provider reference consistency
-            if (verification.providerReference) {
-              const normProvRef = verification.providerReference.trim();
-              const normTxRef = ref.trim();
-              if (normProvRef !== normTxRef && !normProvRef.includes(normTxRef) && !normTxRef.includes(normProvRef)) {
-                const storedProvRef =
-                  (existingTx.metadata?.provider_reference as string) ||
-                  (existingTx.metadata?.providerReference as string);
-                if (storedProvRef && storedProvRef !== normProvRef) {
-                  return respond(
-                    NextResponse.json(
-                      {
-                        success: false,
-                        error: {
-                          code: "PROVIDER_REFERENCE_MISMATCH",
-                          message: `Authoritative provider reference '${normProvRef}' does not match transaction reference '${ref}'. Refusing settlement.`,
-                        },
-                      },
-                      { status: 422 }
-                    )
-                  );
-                }
-              }
+            verifiedProviderTxId = verification.providerTransactionId;
+
+            // Verify provider reference consistency:
+            // Compare the provider's documented payment reference strictly with the transaction reference.
+            // Strict equality is required; loose substring containment is rejected.
+            const verifiedPaymentRef = (
+              verification.reference ||
+              verification.providerReference ||
+              ""
+            ).trim();
+            const normTxRef = ref.trim();
+
+            if (verifiedPaymentRef && verifiedPaymentRef !== normTxRef) {
+              return respond(
+                NextResponse.json(
+                  {
+                    success: false,
+                    error: {
+                      code: "PROVIDER_REFERENCE_MISMATCH",
+                      message: `Authoritative provider payment reference '${verifiedPaymentRef}' does not match transaction reference '${normTxRef}'. Strict equality required. Refusing settlement.`,
+                    },
+                  },
+                  { status: 422 }
+                )
+              );
+            }
+
+            // Verify against stored provider reference if recorded
+            const storedProvRef =
+              (existingTx.metadata?.provider_reference as string) ||
+              (existingTx.metadata?.providerReference as string);
+            if (storedProvRef && storedProvRef.trim() !== normTxRef && storedProvRef.trim() !== verifiedPaymentRef) {
+              return respond(
+                NextResponse.json(
+                  {
+                    success: false,
+                    error: {
+                      code: "PROVIDER_REFERENCE_MISMATCH",
+                      message: `Stored provider reference '${storedProvRef}' contradicts transaction reference '${normTxRef}'. Refusing settlement.`,
+                    },
+                  },
+                  { status: 422 }
+                )
+              );
             }
 
             // Authoritative verification must independently validate financial details: amount and currency
@@ -754,58 +778,112 @@ export async function POST(req: Request) {
       }
 
       // Authoritative direct provider refund verification:
-      // Reconciles refund outcome with provider evidence when available
+      // Reconciles refund outcome with provider evidence.
+      // In production mode, refund confirmation strictly requires an explicit refund identifier and authoritative provider evidence.
       if (isRefundEvent) {
         const shouldVerifyAuthoritatively =
-          (isProductionMode() && process.env.ACTIONOS_DISABLE_AUTHORITATIVE_VERIFICATION !== "true") ||
-          process.env.ACTIONOS_VERIFY_WEBHOOK_WITH_PROVIDER === "true" ||
-          process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION === "true";
+          isProductionMode() ||
+          (process.env.ACTIONOS_DISABLE_AUTHORITATIVE_VERIFICATION !== "true" &&
+            (process.env.ACTIONOS_VERIFY_WEBHOOK_WITH_PROVIDER === "true" ||
+              process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION === "true"));
 
-        if (shouldVerifyAuthoritatively) {
-          const refundRef =
-            (typeof payload.data.refund_reference === "string" ? payload.data.refund_reference.trim() : "") ||
-            (typeof payload.data.reference === "string" ? payload.data.reference.trim() : "");
+        const refundRef =
+          (typeof payload.data.refund_reference === "string" ? payload.data.refund_reference.trim() : "") ||
+          (typeof (payload.data as Record<string, unknown>).refund_id === "string" ||
+          typeof (payload.data as Record<string, unknown>).refund_id === "number"
+            ? String((payload.data as Record<string, unknown>).refund_id).trim()
+            : "") ||
+          (typeof payload.data.transaction_reference === "string" &&
+          typeof payload.data.reference === "string" &&
+          payload.data.reference.trim() !== ref
+            ? payload.data.reference.trim()
+            : "");
 
-          if (refundRef) {
-            try {
-              const provider = getPaymentProvider();
-              if (typeof provider.verifyRefund === "function") {
+        if (payload.event === "refund.processed") {
+          // Rule: In production, require refund identifier before confirming refund
+          if (isProductionMode() && !refundRef) {
+            return respond(
+              NextResponse.json(
+                {
+                  success: false,
+                  error: {
+                    code: "REFUND_IDENTIFIER_REQUIRED",
+                    message: "Production refund confirmation requires an explicit refund identifier (refund_reference or reference). Refusing unverified refund settlement.",
+                  },
+                },
+                { status: 422 }
+              )
+            );
+          }
+
+          if (shouldVerifyAuthoritatively) {
+            const provider = getPaymentProvider();
+
+            // In production, require provider to support refund verification
+            if (isProductionMode() && typeof provider.verifyRefund !== "function") {
+              return respond(
+                NextResponse.json(
+                  {
+                    success: false,
+                    error: {
+                      code: "PROVIDER_REFUND_VERIFICATION_UNAVAILABLE",
+                      message: "Authoritative provider refund verification capability is required in production runtime mode before settling a refund as confirmed.",
+                    },
+                  },
+                  { status: 500 }
+                )
+              );
+            }
+
+            if (refundRef && typeof provider.verifyRefund === "function") {
+              try {
                 const refundVerification = await provider.verifyRefund(refundRef);
-                if (payload.event === "refund.processed") {
-                  if (
-                    refundVerification.status !== "refund_confirmed" &&
-                    refundVerification.status !== "refunded"
-                  ) {
-                    return respond(
-                      NextResponse.json(
-                        {
-                          success: false,
-                          error: {
-                            code: "PROVIDER_REFUND_VERIFICATION_FAILED",
-                            message: `Authoritative provider refund verification returned status '${refundVerification.status}', refusing to mark transaction refunded.`,
-                          },
+                if (
+                  refundVerification.status !== "refund_confirmed" &&
+                  refundVerification.status !== "refunded"
+                ) {
+                  return respond(
+                    NextResponse.json(
+                      {
+                        success: false,
+                        error: {
+                          code: "PROVIDER_REFUND_VERIFICATION_FAILED",
+                          message: `Authoritative provider refund verification returned status '${refundVerification.status}', refusing to mark transaction refunded.`,
                         },
-                        { status: 422 }
-                      )
-                    );
-                  }
+                      },
+                      { status: 422 }
+                    )
+                  );
+                }
+              } catch (refErr) {
+                if (isProductionMode() || process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION === "true") {
+                  return respond(
+                    NextResponse.json(
+                      {
+                        success: false,
+                        error: {
+                          code: "PROVIDER_REFUND_VERIFICATION_ERROR",
+                          message: `Failed to verify refund with provider: ${refErr instanceof Error ? refErr.message : String(refErr)}`,
+                        },
+                      },
+                      { status: 500 }
+                    )
+                  );
                 }
               }
-            } catch (refErr) {
-              if (process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION === "true") {
-                return respond(
-                  NextResponse.json(
-                    {
-                      success: false,
-                      error: {
-                        code: "PROVIDER_REFUND_VERIFICATION_ERROR",
-                        message: `Failed to verify refund with provider: ${refErr instanceof Error ? refErr.message : String(refErr)}`,
-                      },
+            } else if (isProductionMode()) {
+              return respond(
+                NextResponse.json(
+                  {
+                    success: false,
+                    error: {
+                      code: "UNVERIFIED_REFUND_SETTLEMENT_PROHIBITED",
+                      message: "Production runtime requires authoritative evidence before marking a refund confirmed.",
                     },
-                    { status: 422 }
-                  )
-                );
-              }
+                  },
+                  { status: 422 }
+                )
+              );
             }
           }
         }
@@ -871,6 +949,9 @@ export async function POST(req: Request) {
       if (providerEventId) {
         updatedMetadata.provider_event_id = providerEventId;
       }
+      if (verifiedProviderTxId) {
+        updatedMetadata.provider_transaction_id = verifiedProviderTxId;
+      }
       if (payload.data.paid_at) {
         updatedMetadata.provider_paid_at = payload.data.paid_at;
       }
@@ -905,6 +986,9 @@ export async function POST(req: Request) {
         is_refund_event: isRefundEvent,
         refund_state: refundLifecycleState,
       };
+      if (verifiedProviderTxId) {
+        eventMetadata.provider_transaction_id = verifiedProviderTxId;
+      }
 
       try {
         if (typeof repos.transactions.settleWithWebhookEvent === "function") {
@@ -923,7 +1007,13 @@ export async function POST(req: Request) {
             { metadata: updatedMetadata }
           );
         } else {
-          // Fallback if atomic settlement method not available
+          if (isProductionMode()) {
+            throw new Error(
+              "Production invariant violation: Atomic database settlement method 'settleWithWebhookEvent' is required in production runtime mode to prevent partial writes. Failing closed."
+            );
+          }
+
+          // Fallback only allowed in demo/test mode if mock repos did not implement atomic settlement
           await repos.transactions.updateStatus(existingTx.id, txStatus, undefined, {
             metadata: updatedMetadata,
           });

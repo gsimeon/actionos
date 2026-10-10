@@ -1146,7 +1146,8 @@ describe("Payment Provider Adapter Isolation & Production Fail-Closed Tests", ()
             status: "succeeded",
             amount: 87500,
             currency: "NGN",
-            providerReference: `tx_${ref}`,
+            reference: ref,
+            providerReference: ref,
           };
         },
       };
@@ -1923,7 +1924,8 @@ describe("Payment Provider Adapter Isolation & Production Fail-Closed Tests", ()
             status: "succeeded",
             amount: 50000,
             currency: "NGN",
-            providerReference: `prov_${ref}`,
+            reference: ref,
+            providerReference: ref,
             paidAt: new Date().toISOString(),
           };
         },
@@ -1983,7 +1985,8 @@ describe("Payment Provider Adapter Isolation & Production Fail-Closed Tests", ()
             status: "succeeded",
             amount: 87500,
             currency: "USD",
-            providerReference: `prov_${ref}`,
+            reference: ref,
+            providerReference: ref,
             paidAt: new Date().toISOString(),
           };
         },
@@ -2640,6 +2643,261 @@ describe("Payment Provider Adapter Isolation & Production Fail-Closed Tests", ()
       assert.equal(json.error.code, "PROVIDER_REFUND_VERIFICATION_FAILED");
 
       // Invariant: Transaction must NOT be marked refunded
+      const tx = await repos.transactions.findByReference(txRef);
+      assert.equal(tx?.status, "succeeded");
+    });
+  });
+
+  describe("Payment Webhook Authoritative Hardening & Production Invariants", () => {
+    it("should strictly enforce authoritative verification in production even if ACTIONOS_DISABLE_AUTHORITATIVE_VERIFICATION=true is configured", async () => {
+      process.env.ACTIONOS_RUNTIME_MODE = "production";
+      process.env.PAYSTACK_SECRET_KEY = "test_paystack_secret_key_prod_auth";
+      process.env.ACTIONOS_DISABLE_AUTHORITATIVE_VERIFICATION = "true";
+
+      const repos = getRepositoryContainer();
+      const txRef = "ref_wh_prod_no_bypass_020";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_wh_test",
+        organization_id: "org_wh_test",
+        amount: 45000,
+        currency: "NGN",
+        status: "pending",
+      });
+
+      const failingProvider: IPaymentProvider = {
+        name: "Failing Provider",
+        async requestPayment() {
+          return { status: "initiated", reference: txRef };
+        },
+        async verifyPayment(): Promise<PaymentVerificationResult> {
+          return {
+            status: "failed",
+            amount: 45000,
+            currency: "NGN",
+            reference: txRef,
+            providerReference: txRef,
+          };
+        },
+      };
+      setPaymentProvider(failingProvider);
+
+      const rawPayload = JSON.stringify({
+        event: "charge.success",
+        data: {
+          id: 55443322,
+          reference: txRef,
+          amount: 4500000,
+          currency: "NGN",
+          status: "success",
+        },
+      });
+
+      const signature = crypto
+        .createHmac("sha512", "test_paystack_secret_key_prod_auth")
+        .update(rawPayload)
+        .digest("hex");
+
+      const req = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-paystack-signature": signature,
+        },
+        body: rawPayload,
+      });
+
+      const res = await paymentWebhookHandler(req);
+      assert.equal(res.status, 422);
+      const json = (await res.json()) as { error: { code: string; message: string } };
+      assert.equal(json.error.code, "PROVIDER_VERIFICATION_FAILED");
+
+      const tx = await repos.transactions.findByReference(txRef);
+      assert.equal(tx?.status, "pending");
+    });
+
+    it("should reject settlement when provider payment reference contains transaction reference as substring but is not strictly equal", async () => {
+      process.env.ACTIONOS_VERIFY_WEBHOOK_WITH_PROVIDER = "true";
+
+      const repos = getRepositoryContainer();
+      const txRef = "ref_wh_exact_match_021";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_wh_test",
+        organization_id: "org_wh_test",
+        amount: 60000,
+        currency: "NGN",
+        status: "pending",
+      });
+
+      // Provider reference contains txRef as substring, which must be strictly rejected
+      const looseProvider: IPaymentProvider = {
+        name: "Substring Loose Provider",
+        async requestPayment() {
+          return { status: "initiated", reference: txRef };
+        },
+        async verifyPayment(): Promise<PaymentVerificationResult> {
+          return {
+            status: "succeeded",
+            amount: 60000,
+            currency: "NGN",
+            reference: `${txRef}_extra_suffix_tamper`,
+            providerReference: `${txRef}_extra_suffix_tamper`,
+          };
+        },
+      };
+      setPaymentProvider(looseProvider);
+
+      const rawPayload = JSON.stringify({
+        event: "charge.success",
+        data: {
+          id: 66554433,
+          reference: txRef,
+          amount: 6000000,
+          currency: "NGN",
+          status: "success",
+        },
+      });
+
+      const req = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: rawPayload,
+      });
+
+      const res = await paymentWebhookHandler(req);
+      assert.equal(res.status, 422);
+      const json = (await res.json()) as { error: { code: string; message: string } };
+      assert.equal(json.error.code, "PROVIDER_REFERENCE_MISMATCH");
+
+      const tx = await repos.transactions.findByReference(txRef);
+      assert.equal(tx?.status, "pending");
+    });
+
+    it("should reject refund.processed in production mode when refund identifier is missing", async () => {
+      process.env.ACTIONOS_RUNTIME_MODE = "production";
+      process.env.PAYSTACK_SECRET_KEY = "test_paystack_secret_key_prod_refund";
+
+      const repos = getRepositoryContainer();
+      const txRef = "ref_wh_missing_refund_id_022";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_wh_test",
+        organization_id: "org_wh_test",
+        amount: 87500,
+        currency: "NGN",
+        status: "succeeded",
+        metadata: { original_payment_status: "succeeded" },
+      });
+
+      const rawPayload = JSON.stringify({
+        event: "refund.processed",
+        data: {
+          id: 99887766,
+          reference: txRef,
+          // Omitting refund_reference
+          amount: 8750000,
+          currency: "NGN",
+          status: "processed",
+        },
+      });
+
+      const signature = crypto
+        .createHmac("sha512", "test_paystack_secret_key_prod_refund")
+        .update(rawPayload)
+        .digest("hex");
+
+      const req = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-paystack-signature": signature,
+        },
+        body: rawPayload,
+      });
+
+      const res = await paymentWebhookHandler(req);
+      assert.equal(res.status, 422);
+      const json = (await res.json()) as { error: { code: string; message: string } };
+      assert.equal(json.error.code, "REFUND_IDENTIFIER_REQUIRED");
+
+      const tx = await repos.transactions.findByReference(txRef);
+      assert.equal(tx?.status, "succeeded");
+    });
+
+    it("should reject refund.processed in production mode when provider refund verification capability is unavailable", async () => {
+      process.env.ACTIONOS_RUNTIME_MODE = "production";
+      process.env.PAYSTACK_SECRET_KEY = "test_paystack_secret_key_prod_refund";
+
+      const repos = getRepositoryContainer();
+      const txRef = "ref_wh_no_verify_refund_023";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_wh_test",
+        organization_id: "org_wh_test",
+        amount: 87500,
+        currency: "NGN",
+        status: "succeeded",
+        metadata: { original_payment_status: "succeeded" },
+      });
+
+      // Provider without verifyRefund
+      const noVerifyRefundProvider: IPaymentProvider = {
+        name: "No Refund Verifier Provider",
+        async requestPayment() {
+          return { status: "initiated", reference: txRef };
+        },
+        async verifyPayment(): Promise<PaymentVerificationResult> {
+          return {
+            status: "succeeded",
+            amount: 87500,
+            currency: "NGN",
+            reference: txRef,
+            providerReference: txRef,
+          };
+        },
+      };
+      setPaymentProvider(noVerifyRefundProvider);
+
+      const rawPayload = JSON.stringify({
+        event: "refund.processed",
+        data: {
+          id: 99887777,
+          reference: txRef,
+          refund_reference: "rf_paystack_test_023",
+          amount: 8750000,
+          currency: "NGN",
+          status: "processed",
+        },
+      });
+
+      const signature = crypto
+        .createHmac("sha512", "test_paystack_secret_key_prod_refund")
+        .update(rawPayload)
+        .digest("hex");
+
+      const req = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-paystack-signature": signature,
+        },
+        body: rawPayload,
+      });
+
+      const res = await paymentWebhookHandler(req);
+      assert.equal(res.status, 500);
+      const json = (await res.json()) as { error: { code: string; message: string } };
+      assert.equal(json.error.code, "PROVIDER_REFUND_VERIFICATION_UNAVAILABLE");
+
       const tx = await repos.transactions.findByReference(txRef);
       assert.equal(tx?.status, "succeeded");
     });

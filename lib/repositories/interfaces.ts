@@ -119,7 +119,7 @@ export interface ITransactionRepository {
     tenant?: TenantContext,
     extra?: { metadata?: Record<string, unknown> }
   ): Promise<Transaction>;
-  settleWithWebhookEvent?(
+  settleWithWebhookEvent(
     id: string,
     status: Transaction["status"],
     event: {

@@ -1196,7 +1196,15 @@ export class SupabaseTransactionRepository implements ITransactionRepository {
         p_event_metadata: event.metadata ?? {},
       });
 
-      if (!error && data) {
+      if (error) {
+        if (isProductionMode()) {
+          throw new DatabaseError(
+            `Production atomic webhook settlement RPC failed: ${error.message}`,
+            error.code,
+            error
+          );
+        }
+      } else if (data) {
         if (data.duplicate) {
           return {
             transaction: (data.transaction || {}) as Transaction,
@@ -1210,8 +1218,22 @@ export class SupabaseTransactionRepository implements ITransactionRepository {
           isDuplicate: false,
         };
       }
-    } catch {
-      // Fall through to atomic insert + update below
+    } catch (rpcErr) {
+      if (isProductionMode()) {
+        throw rpcErr instanceof DatabaseError
+          ? rpcErr
+          : new DatabaseError(
+              `Production atomic webhook settlement RPC failed: ${rpcErr instanceof Error ? rpcErr.message : String(rpcErr)}`
+            );
+      }
+      // Fall through to fallback only in demo/test mode
+    }
+
+    if (isProductionMode()) {
+      throw new DatabaseError(
+        "Production runtime requires atomic PostgreSQL RPC 'settle_payment_webhook'. Fallback multi-step execution is disabled in production.",
+        "MANDATORY_RPC_UNAVAILABLE"
+      );
     }
 
     // 2. Coordinated atomic write: insert event record first, then update status

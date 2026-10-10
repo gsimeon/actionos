@@ -55,7 +55,9 @@ export interface PaymentVerificationResult {
   status: "confirmed" | "succeeded" | "failed" | "pending";
   amount: number;
   currency: string;
+  reference?: string;
   providerReference: string;
+  providerTransactionId?: string;
   paidAt?: string;
   verifiedAt?: string;
 }

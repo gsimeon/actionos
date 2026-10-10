@@ -145,11 +145,14 @@ export class MockPaymentProvider implements IPaymentProvider {
       };
     }
 
+    const paymentRef = record.reference || reference;
     return {
       status: record.status === "processing" ? "pending" : record.status,
       amount: record.amount,
       currency: record.currency,
-      providerReference: record.providerReference,
+      reference: paymentRef,
+      providerReference: record.providerReference || paymentRef,
+      providerTransactionId: `pstk_mock_id_${paymentRef}`,
       paidAt: record.status === "succeeded" ? record.paidAt : undefined,
       verifiedAt: new Date().toISOString(),
     };
