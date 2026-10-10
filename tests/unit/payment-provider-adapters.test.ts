@@ -954,6 +954,203 @@ describe("Payment Provider Adapter Isolation & Production Fail-Closed Tests", ()
         repos.transactions.updateStatus = originalUpdateStatus;
       }
     });
+
+    it("safely ignores unrecognized or unrelated webhook events without failing the transaction", async () => {
+      const repos = getRepositoryContainer();
+      const txRef = "ref_unrecognized_event_007";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_webhook_test",
+        organization_id: "org_webhook_test",
+        amount: 87500,
+        currency: "NGN",
+        status: "pending",
+      });
+
+      // An unrelated Paystack event (e.g., transfer.success or invoice.create)
+      const unrelatedPayload = JSON.stringify({
+        event: "transfer.success",
+        data: {
+          id: 44332211,
+          reference: txRef,
+          amount: 8750000,
+          currency: "NGN",
+          status: "success",
+        },
+      });
+
+      const req = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: unrelatedPayload,
+      });
+
+      const res = await paymentWebhookHandler(req);
+      assert.equal(res.status, 200);
+      const json = (await res.json()) as { data: { acknowledged: boolean; ignored: boolean; reason: string } };
+      assert.equal(json.data.acknowledged, true);
+      assert.equal(json.data.ignored, true);
+      assert.equal(json.data.reason, "unrecognized_event");
+
+      // Verify transaction did NOT transition to failed
+      const txAfter = await repos.transactions.findByReference(txRef);
+      assert.equal(txAfter?.status, "pending", "Unrelated event must never mark transaction as failed");
+    });
+
+    it("handles concurrent deliveries safely without race conditions or duplicate execution", async () => {
+      const repos = getRepositoryContainer();
+      const txRef = "ref_concurrent_delivery_008";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_webhook_test",
+        organization_id: "org_webhook_test",
+        amount: 87500,
+        currency: "NGN",
+        status: "pending",
+      });
+
+      const webhookPayload = JSON.stringify({
+        event: "charge.success",
+        data: {
+          id: 55667788,
+          reference: txRef,
+          amount: 8750000,
+          currency: "NGN",
+          status: "success",
+        },
+      });
+
+      const req1 = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: webhookPayload,
+      });
+
+      const req2 = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: webhookPayload,
+      });
+
+      // Fire both requests concurrently
+      const [res1, res2] = await Promise.all([
+        paymentWebhookHandler(req1),
+        paymentWebhookHandler(req2),
+      ]);
+
+      assert.equal(res1.status, 200);
+      assert.equal(res2.status, 200);
+
+      const json1 = (await res1.json()) as { data: { acknowledged: boolean; duplicate: boolean } };
+      const json2 = (await res2.json()) as { data: { acknowledged: boolean; duplicate: boolean } };
+
+      // Exactly one request should be the initial processing, the other must be recognized as duplicate
+      const duplicateCount = (json1.data.duplicate ? 1 : 0) + (json2.data.duplicate ? 1 : 0);
+      assert.equal(duplicateCount, 1, "Exactly one concurrent delivery must be flagged as duplicate");
+
+      const tx = await repos.transactions.findByReference(txRef);
+      assert.equal(tx?.status, "succeeded");
+    });
+
+    it("returns HTTP 500 when database lookup fails instead of returning a false 404", async () => {
+      const repos = getRepositoryContainer();
+      const originalFindByRef = repos.transactions.findByReference;
+
+      try {
+        repos.transactions.findByReference = async () => {
+          throw new Error("PostgreSQL connection timeout during lookup");
+        };
+
+        const req = new Request("https://actionos.ng/api/webhooks/payment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            event: "charge.success",
+            data: {
+              reference: "ref_lookup_failure_009",
+              amount: 8750000,
+              currency: "NGN",
+              status: "success",
+            },
+          }),
+        });
+
+        const res = await paymentWebhookHandler(req);
+        assert.equal(res.status, 500, "Database lookup failure must return 500 for gateway retry, not 404");
+        const json = (await res.json()) as { error?: { code: string } };
+        assert.equal(json.error?.code, "DATABASE_LOOKUP_FAILED");
+      } finally {
+        repos.transactions.findByReference = originalFindByRef;
+      }
+    });
+
+    it("verifies authoritative payment with provider when ACTIONOS_VERIFY_WEBHOOK_WITH_PROVIDER is enabled", async () => {
+      const repos = getRepositoryContainer();
+      const txRef = "ref_provider_direct_verify_010";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_webhook_test",
+        organization_id: "org_webhook_test",
+        amount: 87500,
+        currency: "NGN",
+        status: "pending",
+      });
+
+      const originalEnv = process.env.ACTIONOS_VERIFY_WEBHOOK_WITH_PROVIDER;
+      process.env.ACTIONOS_VERIFY_WEBHOOK_WITH_PROVIDER = "true";
+
+      let verifyCalled = false;
+      const fakeProvider: IPaymentProvider = {
+        name: "Direct Verification Test Provider",
+        async requestPayment() {
+          throw new Error("Not implemented");
+        },
+        async verifyPayment(ref) {
+          verifyCalled = true;
+          return {
+            status: "succeeded",
+            amount: 87500,
+            currency: "NGN",
+            providerReference: `tx_${ref}`,
+          };
+        },
+      };
+
+      setPaymentProvider(fakeProvider);
+
+      try {
+        const req = new Request("https://actionos.ng/api/webhooks/payment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            event: "charge.success",
+            data: {
+              id: 998877,
+              reference: txRef,
+              amount: 8750000,
+              currency: "NGN",
+              status: "success",
+            },
+          }),
+        });
+
+        const res = await paymentWebhookHandler(req);
+        assert.equal(res.status, 200);
+        assert.equal(verifyCalled, true, "Authoritative provider verifyPayment must be called");
+
+        const tx = await repos.transactions.findByReference(txRef);
+        assert.equal(tx?.status, "succeeded");
+      } finally {
+        process.env.ACTIONOS_VERIFY_WEBHOOK_WITH_PROVIDER = originalEnv;
+        setPaymentProvider(null);
+      }
+    });
   });
 
   describe("Uncertain Payment Recovery & Double-Charge Prevention", () => {
