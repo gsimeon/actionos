@@ -11,6 +11,8 @@ import { SendNotificationTool } from "./tools/send-notification";
 import { ScheduleReminderTool } from "./tools/schedule-reminder";
 import { VerifyNiidTool } from "./tools/verify-niid";
 import { RefundPaymentTool } from "./tools/refund-payment";
+import { QueryVehicleTool } from "./tools/query-vehicle";
+import { RegisterVehicleTool } from "./tools/register-vehicle";
 
 export class ActionOSToolRegistry {
   private static instance: ActionOSToolRegistry;
@@ -32,6 +34,8 @@ export class ActionOSToolRegistry {
     this.register(new GetPolicyTool());
     this.register(new CheckRenewalEligibilityTool());
     this.register(new VerifyNiidTool());
+    this.register(new QueryVehicleTool());
+    this.register(new RegisterVehicleTool());
     this.register(new GetQuoteTool());
     this.register(new RequestPaymentTool());
     this.register(new VerifyPaymentTool());

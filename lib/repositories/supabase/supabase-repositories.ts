@@ -1,5 +1,6 @@
 import type {
   ICustomerRepository,
+  IAssetRepository,
   IPolicyRepository,
   IRenewalRepository,
   IQuoteRepository,
@@ -18,6 +19,8 @@ import type {
 } from "../interfaces";
 import type {
   Customer,
+  Asset,
+  AssetType,
   Policy,
   Renewal,
   ActionSession,
@@ -188,6 +191,178 @@ export class SupabaseCustomerRepository implements ICustomerRepository {
       .single();
     if (error || !created) throw new DatabaseError(`Failed to create customer: ${error?.message}`, error?.code, error);
     return created as Customer;
+  }
+}
+
+export class SupabaseAssetRepository implements IAssetRepository {
+  private client = getSupabaseClient();
+
+  async findById(id: string, tenant?: TenantContext): Promise<Asset | null> {
+    let query = this.client.from("assets").select("*, customers!inner(id, organization_id)").eq("id", id);
+
+    if (tenant?.organizationId) {
+      query = query.eq("customers.organization_id", tenant.organizationId);
+    }
+    if (tenant?.customerId) {
+      query = query.eq("customer_id", tenant.customerId);
+    }
+
+    const { data, error } = await query.maybeSingle();
+    if (error) {
+      throw new DatabaseError(`Asset lookup by ID failed: ${error.message}`, error.code, error);
+    }
+    return (data || null) as Asset | null;
+  }
+
+  async findByIdentifier(identifier: string, tenant?: TenantContext): Promise<Asset | null> {
+    const raw = identifier.trim();
+    const clean = raw.replace(/[-\s]/g, "");
+
+    let query = this.client
+      .from("assets")
+      .select("*, customers!inner(id, organization_id)");
+
+    if (tenant?.organizationId) {
+      query = query.eq("customers.organization_id", tenant.organizationId);
+    }
+    if (tenant?.customerId) {
+      query = query.eq("customer_id", tenant.customerId);
+    }
+
+    query = query.or(
+      `identifier.ilike.${raw},identifier.ilike.${clean},metadata->>chassis_number.ilike.${raw},metadata->>chassis.ilike.${raw},metadata->>vin.ilike.${raw},metadata->>engine_number.ilike.${raw},metadata->>engine.ilike.${raw}`
+    );
+
+    const { data, error } = await query.maybeSingle();
+    if (error) {
+      throw new DatabaseError(`Asset lookup by identifier failed: ${error.message}`, error.code, error);
+    }
+    return (data || null) as Asset | null;
+  }
+
+  async findByCustomerId(customerId: string, tenant?: TenantContext): Promise<Asset[]> {
+    if (tenant?.customerId && tenant.customerId !== customerId) {
+      return [];
+    }
+
+    let query = this.client
+      .from("assets")
+      .select("*, customers!inner(id, organization_id)")
+      .eq("customer_id", customerId)
+      .order("created_at", { ascending: false });
+
+    if (tenant?.organizationId) {
+      query = query.eq("customers.organization_id", tenant.organizationId);
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      throw new DatabaseError(`Asset lookup by customer ID failed: ${error.message}`, error.code, error);
+    }
+    return (data || []) as Asset[];
+  }
+
+  async findByVinOrPlate(query: string, tenant?: TenantContext): Promise<Asset | null> {
+    return this.findByIdentifier(query, tenant);
+  }
+
+  async queryVehicles(options: {
+    query?: string;
+    customerId?: string;
+    plate?: string;
+    vin?: string;
+    engineNumber?: string;
+    tenant?: TenantContext;
+  }): Promise<Asset[]> {
+    let query = this.client
+      .from("assets")
+      .select("*, customers!inner(id, organization_id)")
+      .order("created_at", { ascending: false });
+
+    if (options.tenant?.organizationId) {
+      query = query.eq("customers.organization_id", options.tenant.organizationId);
+    }
+    if (options.tenant?.customerId) {
+      query = query.eq("customer_id", options.tenant.customerId);
+    }
+    if (options.customerId) {
+      query = query.eq("customer_id", options.customerId);
+    }
+    if (options.plate) {
+      query = query.ilike("identifier", options.plate.trim());
+    }
+    if (options.vin) {
+      query = query.or(`metadata->>chassis_number.ilike.${options.vin.trim()},metadata->>chassis.ilike.${options.vin.trim()},metadata->>vin.ilike.${options.vin.trim()}`);
+    }
+    if (options.engineNumber) {
+      query = query.or(`metadata->>engine_number.ilike.${options.engineNumber.trim()},metadata->>engine.ilike.${options.engineNumber.trim()}`);
+    }
+    if (options.query) {
+      const q = options.query.trim();
+      query = query.or(
+        `identifier.ilike.%${q}%,name.ilike.%${q}%,metadata->>chassis_number.ilike.%${q}%,metadata->>vin.ilike.%${q}%,metadata->>engine_number.ilike.%${q}%`
+      );
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      throw new DatabaseError(`Vehicle query failed: ${error.message}`, error.code, error);
+    }
+    return (data || []) as Asset[];
+  }
+
+  async create(
+    data: Partial<Asset> & {
+      customer_id: string;
+      name: string;
+      identifier: string;
+      asset_type?: AssetType;
+      metadata?: Record<string, unknown>;
+    },
+    tenant?: TenantContext
+  ): Promise<Asset> {
+    if (tenant?.customerId && tenant.customerId !== data.customer_id) {
+      throw new DatabaseError("Unauthorized: cannot create asset for another customer", "403");
+    }
+
+    const { data: created, error } = await this.client
+      .from("assets")
+      .insert({
+        customer_id: data.customer_id,
+        asset_type: data.asset_type || "vehicle",
+        name: data.name,
+        identifier: data.identifier,
+        metadata: data.metadata || {},
+      })
+      .select()
+      .single();
+
+    if (error) {
+      throw new DatabaseError(`Asset creation failed: ${error.message}`, error.code, error);
+    }
+    return created as Asset;
+  }
+
+  async update(id: string, updateData: Partial<Asset>, tenant?: TenantContext): Promise<Asset> {
+    const existing = await this.findById(id, tenant);
+    if (!existing) {
+      throw new DatabaseError(`Asset ${id} not found or inaccessible for tenant`, "404");
+    }
+
+    const { data: updated, error } = await this.client
+      .from("assets")
+      .update({
+        ...updateData,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", id)
+      .select()
+      .single();
+
+    if (error) {
+      throw new DatabaseError(`Asset update failed: ${error.message}`, error.code, error);
+    }
+    return updated as Asset;
   }
 }
 
@@ -1523,6 +1698,7 @@ export class SupabaseWebhookEventRepository implements IWebhookEventRepository {
 export class SupabaseRepositoryContainer implements RepositoryContainer {
   public readonly isDemo = false;
   public readonly customers = new SupabaseCustomerRepository();
+  public readonly assets = new SupabaseAssetRepository();
   public readonly policies = new SupabasePolicyRepository();
   public readonly renewals = new SupabaseRenewalRepository();
   public readonly quotes = new SupabaseQuoteRepository();

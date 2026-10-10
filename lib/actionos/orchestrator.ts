@@ -11,9 +11,14 @@ import { webhookDispatcher } from "./webhook-dispatcher";
 import type {
   ActionSession,
   Customer,
+  Asset,
   Policy,
   MemberRole,
 } from "@/types/database";
+import {
+  formatRenewalGateMessage,
+  formatLocalizedActionMessage,
+} from "@/lib/ai/nigerian-languages";
 import type {
   ActionLedgerEvent,
   AuthorizationDetails,
@@ -377,6 +382,12 @@ export class ActionOSOrchestrator {
         stepOverride.policy = activePolicy;
         stepOverride.policyId = activePolicy.id;
       }
+      if (step.tool_name === "query_vehicle" && activeCustomer) {
+        stepOverride.customerId = activeCustomer.id;
+      }
+      if (step.tool_name === "register_vehicle" && activeCustomer) {
+        stepOverride.customerId = activeCustomer.id;
+      }
 
       const { result, ledgerEvent } = await this.executor.executeStep(
         step,
@@ -417,6 +428,24 @@ export class ActionOSOrchestrator {
         };
         quoteAmount = quoteRes.quoteAmount;
         availableQuotes = quoteRes.quotes;
+      } else if (step.tool_name === "query_vehicle") {
+        const queryRes = result.data as {
+          found: boolean;
+          vehicle: Asset | null;
+          localizedMessage?: string;
+        };
+        if (queryRes?.localizedMessage) {
+          responseMessage = queryRes.localizedMessage;
+        }
+      } else if (step.tool_name === "register_vehicle") {
+        const regRes = result.data as {
+          registered: boolean;
+          vehicle: Asset;
+          localizedMessage?: string;
+        };
+        if (regRes?.localizedMessage) {
+          responseMessage = regRes.localizedMessage;
+        }
       }
     }
 
@@ -698,7 +727,16 @@ export class ActionOSOrchestrator {
         policyNumber: activePolicy.policy_number,
       });
 
-      responseMessage = `Found your policy ${activePolicy.policy_number} for ${authDetails!.assetName}. It expires on ${formatDate(activePolicy.expiry_date)}. Renewal quote is ${formatCurrency(quoteAmount, targetCurrency)}. Do you authorize payment and renewal?`;
+      responseMessage = formatRenewalGateMessage(
+        {
+          policyNumber: activePolicy.policy_number,
+          assetName: authDetails!.assetName,
+          expiryDate: activePolicy.expiry_date,
+          amount: quoteAmount,
+          currency: targetCurrency,
+        },
+        input.language
+      );
 
       return {
         sessionId,
@@ -715,6 +753,14 @@ export class ActionOSOrchestrator {
     }
 
     // Default completion if no steps required authorization
+    sm.transition("executing", "Executing validated workflow actions");
+    session.status = "executing";
+    await repos.sessions.updateStatus(sessionId, "executing");
+
+    sm.transition("verifying", "Verifying workflow execution outcomes");
+    session.status = "verifying";
+    await repos.sessions.updateStatus(sessionId, "verifying");
+
     sm.transition("completed", "Workflow completed without external confirmation");
     session.status = "completed";
     await repos.sessions.updateStatus(sessionId, "completed", new Date().toISOString());
@@ -724,7 +770,7 @@ export class ActionOSOrchestrator {
       status: "completed",
       intent: understanding.intent,
       confidence: understanding.confidence,
-      message: "Action completed successfully.",
+      message: responseMessage || formatLocalizedActionMessage("completed", undefined, input.language),
       authorizationRequired: false,
       authorizationDetails: null,
       events,

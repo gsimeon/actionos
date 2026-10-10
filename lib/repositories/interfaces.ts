@@ -1,5 +1,7 @@
 import type {
   Customer,
+  Asset,
+  AssetType,
   Policy,
   Renewal,
   ActionSession,
@@ -29,6 +31,36 @@ export interface ICustomerRepository {
   findByNumber(customerNumber: string, tenant?: TenantContext): Promise<Customer | null>;
   findByOrganization(orgId: string, tenant?: TenantContext): Promise<Customer[]>;
   create(data: Partial<Customer> & { customer_number: string; full_name: string; phone: string; email: string; organization_id: string }, tenant?: TenantContext): Promise<Customer>;
+}
+
+export interface IAssetRepository {
+  findById(id: string, tenant?: TenantContext): Promise<Asset | null>;
+  findByIdentifier(identifier: string, tenant?: TenantContext): Promise<Asset | null>;
+  findByCustomerId(customerId: string, tenant?: TenantContext): Promise<Asset[]>;
+  findByVinOrPlate(query: string, tenant?: TenantContext): Promise<Asset | null>;
+  queryVehicles(options: {
+    query?: string;
+    customerId?: string;
+    plate?: string;
+    vin?: string;
+    engineNumber?: string;
+    tenant?: TenantContext;
+  }): Promise<Asset[]>;
+  create(
+    data: Partial<Asset> & {
+      customer_id: string;
+      name: string;
+      identifier: string;
+      asset_type?: AssetType;
+      metadata?: Record<string, unknown>;
+    },
+    tenant?: TenantContext
+  ): Promise<Asset>;
+  update(
+    id: string,
+    data: Partial<Asset>,
+    tenant?: TenantContext
+  ): Promise<Asset>;
 }
 
 export interface IPolicyRepository {
@@ -170,6 +202,7 @@ export interface IWebhookEventRepository {
 export interface RepositoryContainer {
   readonly isDemo: boolean;
   customers: ICustomerRepository;
+  assets: IAssetRepository;
   policies: IPolicyRepository;
   renewals: IRenewalRepository;
   quotes: IQuoteRepository;

@@ -59,3 +59,25 @@ export const csvRowSchema = z.object({
   premium: z.coerce.number().positive("Premium must be greater than 0"),
   currency: z.string().default("NGN"),
 });
+
+export const queryVehicleSchema = z.object({
+  plate: z.string().optional(),
+  vin: z.string().optional(),
+  engine: z.string().optional(),
+  query: z.string().optional(),
+  customerId: z.string().optional(),
+  language: z.string().default("en-NG"),
+});
+
+export const createVehicleSchema = z.object({
+  customerId: z.string().optional(),
+  make: z.string().min(1, "Make is required").default("Toyota"),
+  model: z.string().min(1, "Model is required").default("Camry"),
+  year: z.coerce.number().int().min(1980).max(2030).default(new Date().getFullYear()),
+  color: z.string().default("Midnight Black"),
+  vehiclePlate: z.string().min(3, "Plate number is required"),
+  chassisNumber: z.string().optional(),
+  vin: z.string().optional(),
+  engineNumber: z.string().optional(),
+  language: z.string().default("en-NG"),
+});

@@ -167,6 +167,74 @@ export class ActionOSPlanner {
         break;
       }
 
+      case "query_vehicle": {
+        goal = "Query vehicle database and cross-verify statutory FRSC/NIID registration";
+        riskLevel = "low";
+        rawSteps.push(
+          {
+            action_type: "customer_lookup",
+            description: "Verify customer profile and tenant context",
+            tool_name: "get_customer",
+            requires_confirmation: false,
+            input: { customerId },
+          },
+          {
+            action_type: "vehicle_query",
+            description: "Query ActionOS vehicle repository by plate, VIN, or engine number",
+            tool_name: "query_vehicle",
+            requires_confirmation: false,
+            input: {
+              vehiclePlate: understanding.entities.vehiclePlate as string,
+              vin: understanding.entities.vin as string,
+              chassisNumber: understanding.entities.chassisNumber as string,
+              engineNumber: understanding.entities.engineNumber as string,
+              customerId,
+              language: understanding.entities.detectedLanguage as string,
+            },
+          }
+        );
+        break;
+      }
+
+      case "register_vehicle": {
+        goal = "Register customer vehicle in database with statutory FRSC/NIID verification";
+        riskLevel = "medium";
+        rawSteps.push(
+          {
+            action_type: "customer_lookup",
+            description: "Verify customer record",
+            tool_name: "get_customer",
+            requires_confirmation: false,
+            input: { customerId },
+          },
+          {
+            action_type: "regulatory_verification",
+            description: "Verify vehicle legitimacy against NIID and FRSC database",
+            tool_name: "verify_niid_database",
+            requires_confirmation: false,
+            input: {
+              vehiclePlate: understanding.entities.vehiclePlate as string,
+              chassisNumber: understanding.entities.chassisNumber as string,
+            },
+          },
+          {
+            action_type: "vehicle_registration",
+            description: "Persist vehicle in database and issue pre-clearance token",
+            tool_name: "register_vehicle",
+            requires_confirmation: false,
+            input: {
+              customerId,
+              vehiclePlate: understanding.entities.vehiclePlate as string,
+              chassisNumber: understanding.entities.chassisNumber as string,
+              vin: understanding.entities.vin as string,
+              engineNumber: understanding.entities.engineNumber as string,
+              language: understanding.entities.detectedLanguage as string,
+            },
+          }
+        );
+        break;
+      }
+
       default: {
         goal = "Inspect customer policy details";
         riskLevel = "low";

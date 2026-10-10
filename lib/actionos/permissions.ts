@@ -62,6 +62,8 @@ export class ActionOSPermissions {
       case "schedule_reminder":
       case "verify_niid":
       case "verify_niid_database":
+      case "query_vehicle":
+      case "register_vehicle":
         return { allowed: true, requiresApproval: false };
 
       case "refund_payment":

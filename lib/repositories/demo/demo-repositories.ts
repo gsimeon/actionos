@@ -1,5 +1,6 @@
 import type {
   ICustomerRepository,
+  IAssetRepository,
   IPolicyRepository,
   IRenewalRepository,
   IQuoteRepository,
@@ -18,6 +19,8 @@ import type {
 } from "../interfaces";
 import type {
   Customer,
+  Asset,
+  AssetType,
   Policy,
   Renewal,
   ActionSession,
@@ -94,6 +97,145 @@ export class DemoCustomerRepository implements ICustomerRepository {
     };
     store.customers.unshift(customer);
     return customer;
+  }
+}
+
+export class DemoAssetRepository implements IAssetRepository {
+  private matchesTenant(asset: Asset, tenant?: TenantContext): boolean {
+    if (!tenant) return true;
+    const store = getStore();
+    if (tenant.customerId && asset.customer_id !== tenant.customerId) {
+      return false;
+    }
+    if (tenant.organizationId) {
+      const cust = store.customers.find((c) => c.id === asset.customer_id);
+      if (!cust || cust.organization_id !== tenant.organizationId) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  async findById(id: string, tenant?: TenantContext): Promise<Asset | null> {
+    const store = getStore();
+    const asset = store.assets.find((a) => a.id === id);
+    if (!asset || !this.matchesTenant(asset, tenant)) return null;
+    return asset;
+  }
+
+  async findByIdentifier(identifier: string, tenant?: TenantContext): Promise<Asset | null> {
+    const store = getStore();
+    const norm = identifier.replace(/[-\s]/g, "").toLowerCase();
+    const asset = store.assets.find((a) => {
+      const aNorm = a.identifier.replace(/[-\s]/g, "").toLowerCase();
+      if (aNorm === norm) return true;
+      const meta = (a.metadata || {}) as Record<string, unknown>;
+      const vin = String(meta.chassis_number || meta.chassis || meta.vin || "").replace(/[-\s]/g, "").toLowerCase();
+      if (vin && vin === norm) return true;
+      const eng = String(meta.engine_number || meta.engine || "").replace(/[-\s]/g, "").toLowerCase();
+      if (eng && eng === norm) return true;
+      return false;
+    });
+    if (!asset || !this.matchesTenant(asset, tenant)) return null;
+    return asset;
+  }
+
+  async findByCustomerId(customerId: string, tenant?: TenantContext): Promise<Asset[]> {
+    const store = getStore();
+    return store.assets.filter((a) => a.customer_id === customerId && this.matchesTenant(a, tenant));
+  }
+
+  async findByVinOrPlate(query: string, tenant?: TenantContext): Promise<Asset | null> {
+    return this.findByIdentifier(query, tenant);
+  }
+
+  async queryVehicles(options: {
+    query?: string;
+    customerId?: string;
+    plate?: string;
+    vin?: string;
+    engineNumber?: string;
+    tenant?: TenantContext;
+  }): Promise<Asset[]> {
+    const store = getStore();
+    return store.assets.filter((a) => {
+      if (!this.matchesTenant(a, options.tenant)) return false;
+      if (options.customerId && a.customer_id !== options.customerId) return false;
+
+      const meta = (a.metadata || {}) as Record<string, unknown>;
+      const normQuery = (options.query || "").replace(/[-\s]/g, "").toLowerCase();
+      const normPlate = (options.plate || "").replace(/[-\s]/g, "").toLowerCase();
+      const normVin = (options.vin || "").replace(/[-\s]/g, "").toLowerCase();
+      const normEngine = (options.engineNumber || "").replace(/[-\s]/g, "").toLowerCase();
+
+      const aPlate = a.identifier.replace(/[-\s]/g, "").toLowerCase();
+      const aVin = String(meta.chassis_number || meta.chassis || meta.vin || "").replace(/[-\s]/g, "").toLowerCase();
+      const aEngine = String(meta.engine_number || meta.engine || "").replace(/[-\s]/g, "").toLowerCase();
+      const aName = a.name.toLowerCase();
+
+      if (normPlate && aPlate !== normPlate) return false;
+      if (normVin && aVin !== normVin) return false;
+      if (normEngine && aEngine !== normEngine) return false;
+
+      if (normQuery) {
+        const matchesAny =
+          aPlate.includes(normQuery) ||
+          aVin.includes(normQuery) ||
+          aEngine.includes(normQuery) ||
+          aName.includes(normQuery);
+        if (!matchesAny) return false;
+      }
+
+      return true;
+    });
+  }
+
+  async create(
+    data: Partial<Asset> & {
+      customer_id: string;
+      name: string;
+      identifier: string;
+      asset_type?: AssetType;
+      metadata?: Record<string, unknown>;
+    },
+    _tenant?: TenantContext
+  ): Promise<Asset> {
+    const store = getStore();
+    const asset: Asset = {
+      id: data.id || generateDemoId("demo_ast"),
+      customer_id: data.customer_id,
+      asset_type: data.asset_type || "vehicle",
+      name: data.name,
+      identifier: data.identifier,
+      metadata: data.metadata || {},
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    store.assets.unshift(asset);
+    return asset;
+  }
+
+  async update(id: string, data: Partial<Asset>, tenant?: TenantContext): Promise<Asset> {
+    const store = getStore();
+    const idx = store.assets.findIndex((a) => a.id === id);
+    if (idx === -1) {
+      throw new Error(`Asset with ID ${id} not found`);
+    }
+    const current = store.assets[idx];
+    if (!this.matchesTenant(current, tenant)) {
+      throw new Error(`Unauthorized asset update for tenant`);
+    }
+    const updated: Asset = {
+      ...current,
+      ...data,
+      metadata: {
+        ...(current.metadata || {}),
+        ...(data.metadata || {}),
+      },
+      updated_at: new Date().toISOString(),
+    };
+    store.assets[idx] = updated;
+    return updated;
   }
 }
 
@@ -975,6 +1117,7 @@ export class DemoWebhookEventRepository implements IWebhookEventRepository {
 export class DemoRepositoryContainer implements RepositoryContainer {
   public readonly isDemo = true;
   public readonly customers = new DemoCustomerRepository();
+  public readonly assets = new DemoAssetRepository();
   public readonly policies = new DemoPolicyRepository();
   public readonly renewals = new DemoRenewalRepository();
   public readonly quotes = new DemoQuoteRepository();

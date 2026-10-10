@@ -24,33 +24,53 @@ const PRESET_PROMPTS = [
   },
   {
     lang: "en-NG",
-    label: "Marketplace Quotes",
-    text: "Compare renewal quotes for ABC-123-XY across Leadway, AXA Mansard, and AIICO.",
-  },
-  {
-    lang: "en-NG",
-    label: "NIID & FRSC Verification",
-    text: "Verify ABC-123-XY on NIID and FRSC database before renewing.",
+    label: "Query Vehicle (English)",
+    text: "Query vehicle database for car ABC-123-XY and verify registration status.",
   },
   {
     lang: "pcm",
-    label: "Nigerian Pidgin",
-    text: "My motor insurance wan expire next week o. Help me check am and renew am sharply.",
+    label: "Query Motor (Pidgin)",
+    text: "Check my motor ABC-123-XY for inside vehicle database sharp sharp.",
+  },
+  {
+    lang: "pcm",
+    label: "Register Motor (Pidgin)",
+    text: "I wan register my motor LAG-456-ZZ for inside vehicle database.",
   },
   {
     lang: "yo",
-    label: "Yorùbá",
-    text: "Inshoranisi moto mi fe pare lose to n bo. Ba mi se atunto re.",
+    label: "Query Ọkọ (Yorùbá)",
+    text: "Ṣayẹwo ọkọ ABC-123-XY ninu data ọkọ ayọkẹlẹ ActionOS.",
+  },
+  {
+    lang: "yo",
+    label: "Register Ọkọ (Yorùbá)",
+    text: "Mo fẹ forukọsilẹ ọkọ mi tuntun fun iforukọsilẹ osise pẹlu FRSC.",
   },
   {
     lang: "ha",
-    label: "Hausa",
-    text: "Inshorar mota ta zata kare mako mai zuwa. Da fatan za a duba a sabunta min.",
+    label: "Query Mota (Hausa)",
+    text: "Duba motata ABC-123-XY a cikin ma'adanar bayanan motoci.",
+  },
+  {
+    lang: "ha",
+    label: "Register Mota (Hausa)",
+    text: "Ina so in yi rijistar sabuwar mota a cikin ma'ajiya tare da FRSC.",
   },
   {
     lang: "ig",
-    label: "Igbo",
-    text: "Inshorans ugbo ala m ga-agwụ n'izu na-abịa. Biko lelee ma mee ka ọ dị ọhụrụ.",
+    label: "Query Ụgbọ Ala (Igbo)",
+    text: "Lelee ụgbọ ala m ABC-123-XY n'ọdụ data ụgbọ ala.",
+  },
+  {
+    lang: "ig",
+    label: "Register Ụgbọ Ala (Igbo)",
+    text: "Achọrọ m idebanye aha ụgbọ ala ọhụrụ m n'ActionOS.",
+  },
+  {
+    lang: "en-NG",
+    label: "Marketplace Quotes",
+    text: "Compare renewal quotes for ABC-123-XY across Leadway, AXA Mansard, and AIICO.",
   },
 ];
 
