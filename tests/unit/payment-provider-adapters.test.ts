@@ -1829,4 +1829,309 @@ describe("Payment Provider Adapter Isolation & Production Fail-Closed Tests", ()
       assert.equal(result.error?.code, "UNDERPAID_PAYMENT");
     });
   });
+
+  describe("Payment Webhook Hardening & Invariant Regressions", () => {
+    const originalProvider = getPaymentProvider();
+
+    beforeEach(() => {
+      resetStore();
+      resetProcessedWebhookMemoryCache();
+      delete process.env.ACTIONOS_RUNTIME_MODE;
+      delete process.env.ACTIONOS_VERIFY_WEBHOOK_WITH_PROVIDER;
+      delete process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION;
+      delete process.env.PAYSTACK_SECRET_KEY;
+      setPaymentProvider(originalProvider);
+    });
+
+    afterEach(() => {
+      resetStore();
+      resetProcessedWebhookMemoryCache();
+      delete process.env.ACTIONOS_RUNTIME_MODE;
+      delete process.env.ACTIONOS_VERIFY_WEBHOOK_WITH_PROVIDER;
+      delete process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION;
+      delete process.env.PAYSTACK_SECRET_KEY;
+      setPaymentProvider(originalProvider);
+    });
+
+    it("fails closed with 422 QUOTE_NOT_FOUND when transaction is bound to a missing or deleted quote", async () => {
+      const repos = getRepositoryContainer();
+      const txRef = "ref_wh_missing_quote_001";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_wh_test",
+        organization_id: "org_wh_test",
+        amount: 65000,
+        currency: "NGN",
+        status: "pending",
+        metadata: { quoteId: "quote_nonexistent_or_deleted_999" },
+      });
+
+      const reqPayload = JSON.stringify({
+        event: "charge.success",
+        data: {
+          id: 11223344,
+          reference: txRef,
+          amount: 6500000,
+          currency: "NGN",
+          status: "success",
+        },
+      });
+
+      const req = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: reqPayload,
+      });
+
+      const res = await paymentWebhookHandler(req);
+      assert.equal(res.status, 422, "Missing quote must fail closed with 422");
+      const json = (await res.json()) as { error: { code: string; message: string } };
+      assert.equal(json.error.code, "QUOTE_NOT_FOUND");
+      assert(json.error.message.includes("quote_nonexistent_or_deleted_999"));
+
+      // Invariant: Transaction must NOT settle
+      const tx = await repos.transactions.findByReference(txRef);
+      assert.equal(tx?.status, "pending");
+    });
+
+    it("rejects settlement with 422 PROVIDER_AMOUNT_MISMATCH when authoritative provider amount differs", async () => {
+      process.env.ACTIONOS_VERIFY_WEBHOOK_WITH_PROVIDER = "true";
+
+      const repos = getRepositoryContainer();
+      const txRef = "ref_wh_provider_amt_mismatch_002";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_wh_test",
+        organization_id: "org_wh_test",
+        amount: 87500,
+        currency: "NGN",
+        status: "pending",
+      });
+
+      // Provider verification reports underpayment (e.g. 50,000 instead of 87,500)
+      const fakeProvider: IPaymentProvider = {
+        name: "Mismatched Amount Provider",
+        async requestPayment() {
+          return { status: "initiated", reference: txRef };
+        },
+        async verifyPayment(ref: string): Promise<PaymentVerificationResult> {
+          return {
+            status: "succeeded",
+            amount: 50000,
+            currency: "NGN",
+            providerReference: `prov_${ref}`,
+            paidAt: new Date().toISOString(),
+          };
+        },
+      };
+      setPaymentProvider(fakeProvider);
+
+      const reqPayload = JSON.stringify({
+        event: "charge.success",
+        data: {
+          id: 22334455,
+          reference: txRef,
+          amount: 8750000,
+          currency: "NGN",
+          status: "success",
+        },
+      });
+
+      const req = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: reqPayload,
+      });
+
+      const res = await paymentWebhookHandler(req);
+      assert.equal(res.status, 422);
+      const json = (await res.json()) as { error: { code: string; message: string } };
+      assert.equal(json.error.code, "PROVIDER_AMOUNT_MISMATCH");
+
+      const tx = await repos.transactions.findByReference(txRef);
+      assert.equal(tx?.status, "pending");
+    });
+
+    it("rejects settlement with 422 PROVIDER_CURRENCY_MISMATCH when authoritative provider currency differs", async () => {
+      process.env.ACTIONOS_VERIFY_WEBHOOK_WITH_PROVIDER = "true";
+
+      const repos = getRepositoryContainer();
+      const txRef = "ref_wh_provider_curr_mismatch_003";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_wh_test",
+        organization_id: "org_wh_test",
+        amount: 87500,
+        currency: "NGN",
+        status: "pending",
+      });
+
+      // Provider verification reports foreign currency
+      const fakeProvider: IPaymentProvider = {
+        name: "Mismatched Currency Provider",
+        async requestPayment() {
+          return { status: "initiated", reference: txRef };
+        },
+        async verifyPayment(ref: string): Promise<PaymentVerificationResult> {
+          return {
+            status: "succeeded",
+            amount: 87500,
+            currency: "USD",
+            providerReference: `prov_${ref}`,
+            paidAt: new Date().toISOString(),
+          };
+        },
+      };
+      setPaymentProvider(fakeProvider);
+
+      const reqPayload = JSON.stringify({
+        event: "charge.success",
+        data: {
+          id: 33445566,
+          reference: txRef,
+          amount: 8750000,
+          currency: "NGN",
+          status: "success",
+        },
+      });
+
+      const req = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: reqPayload,
+      });
+
+      const res = await paymentWebhookHandler(req);
+      assert.equal(res.status, 422);
+      const json = (await res.json()) as { error: { code: string; message: string } };
+      assert.equal(json.error.code, "PROVIDER_CURRENCY_MISMATCH");
+
+      const tx = await repos.transactions.findByReference(txRef);
+      assert.equal(tx?.status, "pending");
+    });
+
+    it("strictly enforces provider minor units (kobo) in production mode and rejects direct Naira amounts", async () => {
+      process.env.ACTIONOS_RUNTIME_MODE = "production";
+      process.env.PAYSTACK_SECRET_KEY = "test_key_strict_prod_004";
+
+      const repos = getRepositoryContainer();
+      const txRef = "ref_wh_strict_units_prod_004";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_wh_test",
+        organization_id: "org_wh_test",
+        amount: 50000,
+        currency: "NGN",
+        status: "pending",
+      });
+
+      // Payload sends direct Naira (50000) instead of minor unit (5000000 kobo)
+      const rawPayload = JSON.stringify({
+        event: "charge.success",
+        data: {
+          id: 44556677,
+          reference: txRef,
+          amount: 50000,
+          currency: "NGN",
+          status: "success",
+        },
+      });
+
+      const signature = crypto
+        .createHmac("sha512", "test_key_strict_prod_004")
+        .update(rawPayload)
+        .digest("hex");
+
+      const req = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-paystack-signature": signature,
+        },
+        body: rawPayload,
+      });
+
+      const res = await paymentWebhookHandler(req);
+      assert.equal(res.status, 422);
+      const json = (await res.json()) as { error: { code: string; message: string } };
+      assert.equal(json.error.code, "AMOUNT_MISMATCH");
+      assert(json.error.message.includes("strict provider minor units"));
+
+      const tx = await repos.transactions.findByReference(txRef);
+      assert.equal(tx?.status, "pending");
+    });
+
+    it("coordinates concurrent in-flight deliveries and does not falsely acknowledge duplicate when the primary delivery fails", async () => {
+      const repos = getRepositoryContainer();
+      const txRef = "ref_wh_concurrent_failure_005";
+
+      await repos.transactions.create({
+        id: txRef,
+        reference: txRef,
+        customer_id: "cust_wh_test",
+        organization_id: "org_wh_test",
+        amount: 87500,
+        currency: "NGN",
+        status: "pending",
+      });
+
+      const rawPayload = JSON.stringify({
+        event: "charge.success",
+        data: {
+          id: 99112233,
+          reference: txRef,
+          amount: 8750000,
+          currency: "NGN",
+          status: "success",
+        },
+      });
+
+      // Simulate database failure during transaction status mutation
+      const originalUpdateStatus = repos.transactions.updateStatus;
+      repos.transactions.updateStatus = async () => {
+        throw new Error("PostgreSQL connection timeout during settlement");
+      };
+
+      try {
+        const req1 = new Request("https://actionos.ng/api/webhooks/payment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: rawPayload,
+        });
+
+        const req2 = new Request("https://actionos.ng/api/webhooks/payment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: rawPayload,
+        });
+
+        // Fire both concurrently
+        const [res1, res2] = await Promise.all([
+          paymentWebhookHandler(req1),
+          paymentWebhookHandler(req2),
+        ]);
+
+        // CRITICAL INVARIANT: Neither response must return 200 acknowledged duplicate.
+        // Both must return 500 so the payment gateway knows delivery failed and retries.
+        assert.equal(res1.status, 500, "Primary request must return 500 on database failure");
+        assert.equal(res2.status, 500, "Concurrent request must NOT acknowledge duplicate on failure");
+
+        const json1 = (await res1.json()) as { success: boolean; error: { code: string } };
+        const json2 = (await res2.json()) as { success: boolean; error: { code: string } };
+
+        assert.equal(json1.success, false);
+        assert.equal(json2.success, false);
+      } finally {
+        repos.transactions.updateStatus = originalUpdateStatus;
+      }
+    });
+  });
 });

@@ -4,20 +4,20 @@ import { getRepositoryContainer } from "@/lib/repositories";
 import { isProductionMode } from "@/lib/runtime/mode";
 import { getPaymentProvider } from "@/lib/payments";
 import type { PaymentWebhookPayload } from "@/types/api";
-import type { Transaction } from "@/types/database";
+import type { Transaction, Quote } from "@/types/database";
 
 // In-memory deduplication cache for settled webhook events
 const processedWebhookMemoryCache = new Set<string>();
 
-// Concurrency guard: track currently in-flight webhook processing keys
-const inFlightWebhookRequests = new Set<string>();
+// Concurrency coordinator: track currently in-flight webhook processing promises
+const inFlightWebhookPromises = new Map<string, Promise<NextResponse>>();
 
 /**
  * Resets the in-memory processed webhook cache and concurrency locks (useful for test isolation).
  */
 export function resetProcessedWebhookMemoryCache(): void {
   processedWebhookMemoryCache.clear();
-  inFlightWebhookRequests.clear();
+  inFlightWebhookPromises.clear();
 }
 
 /**
@@ -177,71 +177,37 @@ export async function POST(req: Request) {
       ? `${payload.event}:${providerEventId}`
       : `${payload.event}:${ref}:${payload.data.amount ?? ""}:${payload.data.status ?? ""}:${payload.data.paid_at ?? ""}`;
 
-    // Concurrency guard: check if the exact same event is currently being processed
-    if (inFlightWebhookRequests.has(dedupeKey)) {
-      return NextResponse.json({
-        success: true,
-        data: {
-          acknowledged: true,
-          duplicate: true,
-          concurrency_in_flight: true,
-          reference: ref,
-          eventId: providerEventId,
-          status: existingTx.status,
-        },
-      });
-    }
-
-    const txMeta = (existingTx.metadata && typeof existingTx.metadata === "object"
-      ? { ...existingTx.metadata }
-      : {}) as Record<string, unknown>;
-
-    const processedEvents: string[] = Array.isArray(txMeta.processed_webhook_events)
-      ? [...(txMeta.processed_webhook_events as string[])]
-      : [];
-
-    const isDuplicateEvent =
-      processedEvents.includes(dedupeKey) ||
-      (providerEventId !== undefined && processedEvents.some((k) => k.endsWith(`:${providerEventId}`))) ||
-      processedWebhookMemoryCache.has(dedupeKey);
-
-    if (isDuplicateEvent) {
-      return NextResponse.json({
-        success: true,
-        data: {
-          acknowledged: true,
-          duplicate: true,
-          reference: ref,
-          eventId: providerEventId,
-          status: existingTx.status,
-        },
-      });
-    }
-
-    // Database uniqueness constraint deduplication check
-    const eventRecordId = providerEventId || dedupeKey;
-    if (repos.webhookEvents) {
+    // Concurrency guard: if an identical event delivery is currently in-flight, await its completion.
+    // Do NOT return premature 'acknowledged' status before the initial delivery has durably persisted.
+    const inFlightPromise = inFlightWebhookPromises.get(dedupeKey);
+    if (inFlightPromise) {
       try {
-        const existingRecorded = await repos.webhookEvents.findByEventId("paystack", eventRecordId);
-        if (existingRecorded) {
+        const firstRes = await inFlightPromise;
+        if (firstRes.ok) {
+          const firstJson = (await firstRes.clone().json().catch(() => ({}))) as {
+            data?: { status?: string };
+          };
           return NextResponse.json({
             success: true,
             data: {
               acknowledged: true,
               duplicate: true,
+              concurrency_in_flight: true,
               reference: ref,
               eventId: providerEventId,
-              status: existingTx.status,
+              status: firstJson?.data?.status || existingTx.status,
             },
           });
         }
+        // First delivery failed to persist: do NOT acknowledge duplicate. Return failure so gateway retries.
+        return firstRes.clone();
       } catch (err) {
         return NextResponse.json(
           {
             success: false,
             error: {
-              code: "DATABASE_LOOKUP_FAILED",
-              message: "Database error during webhook deduplication lookup. Gateway retry requested.",
+              code: "CONCURRENT_PROCESSING_FAILED",
+              message: "Concurrent webhook delivery processing failed. Gateway retry requested.",
               details: err instanceof Error ? err.message : String(err),
             },
           },
@@ -250,10 +216,86 @@ export async function POST(req: Request) {
       }
     }
 
-    // Acquire concurrency lock
-    inFlightWebhookRequests.add(dedupeKey);
+    // Concurrency coordination: acquire in-flight lock immediately to coordinate any concurrent deliveries
+    let resolveProcessing!: (res: NextResponse) => void;
+    let resolved = false;
+    const processingPromise = new Promise<NextResponse>((resolve) => {
+      resolveProcessing = resolve;
+    });
+    inFlightWebhookPromises.set(dedupeKey, processingPromise);
+
+    const respond = (res: NextResponse): NextResponse => {
+      if (!resolved) {
+        resolved = true;
+        resolveProcessing(res);
+      }
+      return res;
+    };
 
     try {
+      const txMeta = (existingTx.metadata && typeof existingTx.metadata === "object"
+        ? { ...existingTx.metadata }
+        : {}) as Record<string, unknown>;
+
+      const processedEvents: string[] = Array.isArray(txMeta.processed_webhook_events)
+        ? [...(txMeta.processed_webhook_events as string[])]
+        : [];
+
+      const isDuplicateEvent =
+        processedEvents.includes(dedupeKey) ||
+        (providerEventId !== undefined && processedEvents.some((k) => k.endsWith(`:${providerEventId}`))) ||
+        processedWebhookMemoryCache.has(dedupeKey);
+
+      if (isDuplicateEvent) {
+        return respond(
+          NextResponse.json({
+            success: true,
+            data: {
+              acknowledged: true,
+              duplicate: true,
+              reference: ref,
+              eventId: providerEventId,
+              status: existingTx.status,
+            },
+          })
+        );
+      }
+
+      // Database uniqueness constraint deduplication check
+      const eventRecordId = providerEventId || dedupeKey;
+      if (repos.webhookEvents) {
+        try {
+          const existingRecorded = await repos.webhookEvents.findByEventId("paystack", eventRecordId);
+          if (existingRecorded) {
+            return respond(
+              NextResponse.json({
+                success: true,
+                data: {
+                  acknowledged: true,
+                  duplicate: true,
+                  reference: ref,
+                  eventId: providerEventId,
+                  status: existingTx.status,
+                },
+              })
+            );
+          }
+        } catch (err) {
+          return respond(
+            NextResponse.json(
+              {
+                success: false,
+                error: {
+                  code: "DATABASE_LOOKUP_FAILED",
+                  message: "Database error during webhook deduplication lookup. Gateway retry requested.",
+                  details: err instanceof Error ? err.message : String(err),
+                },
+              },
+              { status: 500 }
+            )
+          );
+        }
+      }
       // 4. Map Event & Validate Provider Status
       // Recognize only defined payment/refund events; never map unrelated events (e.g. transfer.success) to payment failure
       let txStatus: "succeeded" | "failed" | "refunded" | "pending";
@@ -262,15 +304,17 @@ export async function POST(req: Request) {
       if (payload.event === "charge.success") {
         // Validate that provider status does NOT contradict success event
         if (rawStatus && rawStatus !== "success" && rawStatus !== "succeeded") {
-          return NextResponse.json(
-            {
-              success: false,
-              error: {
-                code: "PROVIDER_STATUS_MISMATCH",
-                message: `Webhook event 'charge.success' contradicts provider status '${payload.data.status}'. Refusing to confirm payment settlement.`,
+          return respond(
+            NextResponse.json(
+              {
+                success: false,
+                error: {
+                  code: "PROVIDER_STATUS_MISMATCH",
+                  message: `Webhook event 'charge.success' contradicts provider status '${payload.data.status}'. Refusing to confirm payment settlement.`,
+                },
               },
-            },
-            { status: 422 }
+              { status: 422 }
+            )
           );
         }
         txStatus = "succeeded";
@@ -284,32 +328,36 @@ export async function POST(req: Request) {
         txStatus = "failed";
       } else {
         // Unrecognized or unrelated event type: acknowledge receipt safely without corrupting transaction financial status
-        return NextResponse.json({
-          success: true,
-          data: {
-            acknowledged: true,
-            ignored: true,
-            reason: "unrecognized_event",
-            event: payload.event,
-            reference: ref,
-            status: existingTx.status,
-          },
-        });
+        return respond(
+          NextResponse.json({
+            success: true,
+            data: {
+              acknowledged: true,
+              ignored: true,
+              reason: "unrecognized_event",
+              event: payload.event,
+              reference: ref,
+              status: existingTx.status,
+            },
+          })
+        );
       }
 
       // 5. Amount and Currency Integrity Verification on charge.success
       if (payload.event === "charge.success") {
         const rawAmount = typeof payload.data.amount === "number" ? payload.data.amount : undefined;
         if (rawAmount === undefined || isNaN(rawAmount)) {
-          return NextResponse.json(
-            {
-              success: false,
-              error: {
-                code: "AMOUNT_REQUIRED",
-                message: "Missing or invalid amount in charge.success payload",
+          return respond(
+            NextResponse.json(
+              {
+                success: false,
+                error: {
+                  code: "AMOUNT_REQUIRED",
+                  message: "Missing or invalid amount in charge.success payload",
+                },
               },
-            },
-            { status: 422 }
+              { status: 422 }
+            )
           );
         }
 
@@ -317,33 +365,55 @@ export async function POST(req: Request) {
         const webhookCurrency = (payload.data.currency || "NGN").toUpperCase().trim();
         const expectedCurrency = (existingTx.currency || "NGN").toUpperCase().trim();
 
-        // Paystack delivers amounts in minor units (kobo, e.g. 8750000 for ₦87,500.00); tests may send direct Naira
+        // Paystack delivers amounts in minor units (kobo, e.g. 8750000 for ₦87,500.00)
+        // In production, strictly enforce provider's documented minor units (kobo)
         const isKoboMatch = Math.abs(rawAmount / 100 - expectedAmount) <= 0.01;
         const isNairaMatch = Math.abs(rawAmount - expectedAmount) <= 0.01;
 
-        if (!isKoboMatch && !isNairaMatch) {
-          return NextResponse.json(
-            {
-              success: false,
-              error: {
-                code: "AMOUNT_MISMATCH",
-                message: `Webhook amount (${rawAmount}) does not match transaction record (${expectedAmount})`,
-              },
-            },
-            { status: 422 }
-          );
+        if (isProductionMode()) {
+          if (!isKoboMatch) {
+            return respond(
+              NextResponse.json(
+                {
+                  success: false,
+                  error: {
+                    code: "AMOUNT_MISMATCH",
+                    message: `Production webhook requires strict provider minor units (kobo). Received raw amount ${rawAmount} does not match expected transaction ${expectedAmount} NGN (${expectedAmount * 100} kobo).`,
+                  },
+                },
+                { status: 422 }
+              )
+            );
+          }
+        } else {
+          if (!isKoboMatch && !isNairaMatch) {
+            return respond(
+              NextResponse.json(
+                {
+                  success: false,
+                  error: {
+                    code: "AMOUNT_MISMATCH",
+                    message: `Webhook amount (${rawAmount}) does not match transaction record (${expectedAmount})`,
+                  },
+                },
+                { status: 422 }
+              )
+            );
+          }
         }
 
         if (payload.data.currency && webhookCurrency !== expectedCurrency) {
-          return NextResponse.json(
-            {
-              success: false,
-              error: {
-                code: "CURRENCY_MISMATCH",
-                message: `Webhook currency (${webhookCurrency}) does not match expected (${expectedCurrency})`,
+          return respond(
+            NextResponse.json(
+              {
+                success: false,
+                error: {
+                  code: "CURRENCY_MISMATCH",
+                  message: `Webhook currency (${webhookCurrency}) does not match expected (${expectedCurrency})`,
+                },
               },
-            },
-            { status: 422 }
+              { status: 422 }
+            )
           );
         }
 
@@ -351,27 +421,45 @@ export async function POST(req: Request) {
         const quoteId =
           (existingTx.metadata?.quote_id as string | undefined) ||
           (existingTx.metadata?.quoteId as string | undefined);
+        let linkedQuote: Quote | null = null;
         if (quoteId) {
-          let linkedQuote = null;
           try {
             linkedQuote = await repos.quotes.findById(quoteId);
           } catch (dbErr) {
-            return NextResponse.json(
-              {
-                success: false,
-                error: {
-                  code: "DATABASE_LOOKUP_FAILED",
-                  message: `Database error querying quote '${quoteId}'. Gateway retry requested.`,
-                  details: dbErr instanceof Error ? dbErr.message : String(dbErr),
+            return respond(
+              NextResponse.json(
+                {
+                  success: false,
+                  error: {
+                    code: "DATABASE_LOOKUP_FAILED",
+                    message: `Database error querying quote '${quoteId}'. Gateway retry requested.`,
+                    details: dbErr instanceof Error ? dbErr.message : String(dbErr),
+                  },
                 },
-              },
-              { status: 500 }
+                { status: 500 }
+              )
             );
           }
 
-          if (linkedQuote) {
-            if (linkedQuote.expires_at && new Date(linkedQuote.expires_at).getTime() < Date.now()) {
-              return NextResponse.json(
+          // FAIL CLOSED: If transaction is bound to a quoteId, the quote MUST exist and be accessible
+          if (!linkedQuote) {
+            return respond(
+              NextResponse.json(
+                {
+                  success: false,
+                  error: {
+                    code: "QUOTE_NOT_FOUND",
+                    message: `Transaction is bound to quoteId '${quoteId}', but the quote was not found or has been deleted. Settlement rejected.`,
+                  },
+                },
+                { status: 422 }
+              )
+            );
+          }
+
+          if (linkedQuote.expires_at && new Date(linkedQuote.expires_at).getTime() < Date.now()) {
+            return respond(
+              NextResponse.json(
                 {
                   success: false,
                   error: {
@@ -380,25 +468,47 @@ export async function POST(req: Request) {
                   },
                 },
                 { status: 422 }
-              );
-            }
+              )
+            );
+          }
 
-            const isQuoteKoboMatch = Math.abs(rawAmount / 100 - linkedQuote.amount) <= 0.01;
-            const isQuoteNairaMatch = Math.abs(rawAmount - linkedQuote.amount) <= 0.01;
-            if (!isQuoteKoboMatch && !isQuoteNairaMatch) {
-              return NextResponse.json(
-                {
-                  success: false,
-                  error: {
-                    code: "AMOUNT_MISMATCH",
-                    message: `Webhook amount (${rawAmount}) does not match persisted quote amount (${linkedQuote.amount})`,
+          const isQuoteKoboMatch = Math.abs(rawAmount / 100 - linkedQuote.amount) <= 0.01;
+          const isQuoteNairaMatch = Math.abs(rawAmount - linkedQuote.amount) <= 0.01;
+          if (isProductionMode()) {
+            if (!isQuoteKoboMatch) {
+              return respond(
+                NextResponse.json(
+                  {
+                    success: false,
+                    error: {
+                      code: "AMOUNT_MISMATCH",
+                      message: `Production webhook requires strict provider minor units (kobo). Received raw amount ${rawAmount} does not match persisted quote amount ${linkedQuote.amount} NGN (${linkedQuote.amount * 100} kobo).`,
+                    },
                   },
-                },
-                { status: 422 }
+                  { status: 422 }
+                )
               );
             }
-            if ((linkedQuote.currency || "NGN").toUpperCase() !== webhookCurrency) {
-              return NextResponse.json(
+          } else {
+            if (!isQuoteKoboMatch && !isQuoteNairaMatch) {
+              return respond(
+                NextResponse.json(
+                  {
+                    success: false,
+                    error: {
+                      code: "AMOUNT_MISMATCH",
+                      message: `Webhook amount (${rawAmount}) does not match persisted quote amount (${linkedQuote.amount})`,
+                    },
+                  },
+                  { status: 422 }
+                )
+              );
+            }
+          }
+
+          if ((linkedQuote.currency || "NGN").toUpperCase().trim() !== webhookCurrency) {
+            return respond(
+              NextResponse.json(
                 {
                   success: false,
                   error: {
@@ -407,8 +517,8 @@ export async function POST(req: Request) {
                   },
                 },
                 { status: 422 }
-              );
-            }
+              )
+            );
           }
         }
 
@@ -421,27 +531,96 @@ export async function POST(req: Request) {
             const provider = getPaymentProvider();
             const verification = await provider.verifyPayment(ref);
             if (verification.status !== "succeeded" && verification.status !== "confirmed") {
-              return NextResponse.json(
+              return respond(
+                NextResponse.json(
+                  {
+                    success: false,
+                    error: {
+                      code: "PROVIDER_VERIFICATION_FAILED",
+                      message: `Authoritative provider verification returned status '${verification.status}', refusing to settle transaction.`,
+                    },
+                  },
+                  { status: 422 }
+                )
+              );
+            }
+
+            // Authoritative verification must independently validate financial details: amount and currency
+            if (typeof verification.amount === "number") {
+              if (Math.abs(verification.amount - expectedAmount) > 0.01) {
+                return respond(
+                  NextResponse.json(
+                    {
+                      success: false,
+                      error: {
+                        code: "PROVIDER_AMOUNT_MISMATCH",
+                        message: `Authoritative provider verification amount (${verification.amount}) does not match expected transaction amount (${expectedAmount}). Refusing settlement.`,
+                      },
+                    },
+                    { status: 422 }
+                  )
+                );
+              }
+              if (linkedQuote && Math.abs(verification.amount - linkedQuote.amount) > 0.01) {
+                return respond(
+                  NextResponse.json(
+                    {
+                      success: false,
+                      error: {
+                        code: "PROVIDER_AMOUNT_MISMATCH",
+                        message: `Authoritative provider verification amount (${verification.amount}) does not match quote amount (${linkedQuote.amount}). Refusing settlement.`,
+                      },
+                    },
+                    { status: 422 }
+                  )
+                );
+              }
+            }
+
+            const verifiedCurrency = (verification.currency || "NGN").toUpperCase().trim();
+            if (verifiedCurrency !== expectedCurrency) {
+              return respond(
+                NextResponse.json(
+                  {
+                    success: false,
+                    error: {
+                      code: "PROVIDER_CURRENCY_MISMATCH",
+                      message: `Authoritative provider verification currency (${verifiedCurrency}) does not match expected currency (${expectedCurrency}). Refusing settlement.`,
+                    },
+                  },
+                  { status: 422 }
+                )
+              );
+            }
+            if (linkedQuote) {
+              const quoteCurrency = (linkedQuote.currency || "NGN").toUpperCase().trim();
+              if (verifiedCurrency !== quoteCurrency) {
+                return respond(
+                  NextResponse.json(
+                    {
+                      success: false,
+                      error: {
+                        code: "PROVIDER_CURRENCY_MISMATCH",
+                        message: `Authoritative provider verification currency (${verifiedCurrency}) does not match quote currency (${quoteCurrency}). Refusing settlement.`,
+                      },
+                    },
+                    { status: 422 }
+                  )
+                );
+              }
+            }
+          } catch (provErr) {
+            return respond(
+              NextResponse.json(
                 {
                   success: false,
                   error: {
-                    code: "PROVIDER_VERIFICATION_FAILED",
-                    message: `Authoritative provider verification returned status '${verification.status}', refusing to settle transaction.`,
+                    code: "PROVIDER_VERIFICATION_ERROR",
+                    message: `Failed to verify payment with provider: ${provErr instanceof Error ? provErr.message : String(provErr)}`,
                   },
                 },
-                { status: 422 }
-              );
-            }
-          } catch (provErr) {
-            return NextResponse.json(
-              {
-                success: false,
-                error: {
-                  code: "PROVIDER_VERIFICATION_ERROR",
-                  message: `Failed to verify payment with provider: ${provErr instanceof Error ? provErr.message : String(provErr)}`,
-                },
-              },
-              { status: 500 }
+                { status: 500 }
+              )
             );
           }
         }
@@ -450,29 +629,35 @@ export async function POST(req: Request) {
       // 6. Out-of-Order Webhook Protection: Never regress terminal or settled states
       // Rule A: Terminal 'refunded' state must never be overwritten by stale charge.success or failed
       if (existingTx.status === "refunded") {
-        return NextResponse.json({
-          success: true,
-          data: { acknowledged: true, duplicate: true, ignored: "out_of_order", reference: ref },
-        });
+        return respond(
+          NextResponse.json({
+            success: true,
+            data: { acknowledged: true, duplicate: true, ignored: "out_of_order", reference: ref },
+          })
+        );
       }
 
       // Rule B: Already 'succeeded' transaction must never regress to 'failed' or 'pending' due to out-of-order delivery
       if (existingTx.status === "succeeded" && (txStatus === "failed" || txStatus === "pending")) {
-        return NextResponse.json({
-          success: true,
-          data: { acknowledged: true, duplicate: true, ignored: "out_of_order", reference: ref },
-        });
+        return respond(
+          NextResponse.json({
+            success: true,
+            data: { acknowledged: true, duplicate: true, ignored: "out_of_order", reference: ref },
+          })
+        );
       }
 
       // Rule C: Idempotent duplicate check: already in target status
       if (existingTx.status === txStatus) {
-        return NextResponse.json({
-          success: true,
-          data: { acknowledged: true, duplicate: true, reference: ref, status: txStatus },
-        });
+        return respond(
+          NextResponse.json({
+            success: true,
+            data: { acknowledged: true, duplicate: true, reference: ref, status: txStatus },
+          })
+        );
       }
 
-      // 7. Persist Updated Status & Durable Event Metadata (Do NOT swallow database errors)
+      // 7. Atomic Settlement: Persist Updated Status & Durable Event Metadata
       processedEvents.push(dedupeKey);
 
       const updatedMetadata: Record<string, unknown> = {
@@ -489,56 +674,92 @@ export async function POST(req: Request) {
         updatedMetadata.provider_paid_at = payload.data.paid_at;
       }
 
-      try {
-        await repos.transactions.updateStatus(existingTx.id, txStatus, undefined, {
-          metadata: updatedMetadata,
-        });
+      const eventMetadata: Record<string, unknown> = {
+        amount: payload.data.amount,
+        currency: payload.data.currency,
+        provider_event_id: providerEventId,
+      };
 
-        if (repos.webhookEvents) {
-          await repos.webhookEvents.recordEvent({
-            provider: "paystack",
-            eventId: eventRecordId,
-            eventType: payload.event,
-            reference: ref,
-            status: txStatus,
-            metadata: {
-              amount: payload.data.amount,
-              currency: payload.data.currency,
-              provider_event_id: providerEventId,
+      try {
+        if (typeof repos.transactions.settleWithWebhookEvent === "function") {
+          await repos.transactions.settleWithWebhookEvent(
+            existingTx.id,
+            txStatus,
+            {
+              provider: "paystack",
+              eventId: eventRecordId,
+              eventType: payload.event,
+              reference: ref,
+              status: txStatus,
+              metadata: eventMetadata,
             },
+            undefined,
+            { metadata: updatedMetadata }
+          );
+        } else {
+          // Fallback if atomic settlement method not available
+          await repos.transactions.updateStatus(existingTx.id, txStatus, undefined, {
+            metadata: updatedMetadata,
           });
+          if (repos.webhookEvents) {
+            await repos.webhookEvents.recordEvent({
+              provider: "paystack",
+              eventId: eventRecordId,
+              eventType: payload.event,
+              reference: ref,
+              status: txStatus,
+              metadata: eventMetadata,
+            });
+          }
         }
 
         // In-memory cache is committed ONLY after successful database persistence
         processedWebhookMemoryCache.add(dedupeKey);
       } catch (dbError) {
         // Return HTTP 500 so gateway recognizes persistence failure and retries delivery
-        return NextResponse.json(
-          {
-            success: false,
-            error: {
-              code: "DATABASE_UPDATE_FAILED",
-              message: `Failed to persist transaction update for reference '${ref}'. Provider retry requested.`,
-              details: dbError instanceof Error ? dbError.message : String(dbError),
+        return respond(
+          NextResponse.json(
+            {
+              success: false,
+              error: {
+                code: "DATABASE_UPDATE_FAILED",
+                message: `Failed to persist transaction update for reference '${ref}'. Provider retry requested.`,
+                details: dbError instanceof Error ? dbError.message : String(dbError),
+              },
             },
-          },
-          { status: 500 }
+            { status: 500 }
+          )
         );
       }
 
-      return NextResponse.json({
-        success: true,
-        data: {
-          acknowledged: true,
-          duplicate: false,
-          reference: ref,
-          status: txStatus,
-          eventId: providerEventId,
+      return respond(
+        NextResponse.json({
+          success: true,
+          data: {
+            acknowledged: true,
+            duplicate: false,
+            reference: ref,
+            status: txStatus,
+            eventId: providerEventId,
+          },
+        })
+      );
+    } catch (innerErr) {
+      const errRes = NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: "WEBHOOK_PROCESSING_FAILED",
+            message: "Webhook event processing failed. Gateway retry requested.",
+            details: innerErr instanceof Error ? innerErr.message : String(innerErr),
+          },
         },
-      });
+        { status: 500 }
+      );
+      return respond(errRes);
     } finally {
-      // Release concurrency lock
-      inFlightWebhookRequests.delete(dedupeKey);
+      // Release concurrency locks
+      inFlightWebhookPromises.delete(dedupeKey);
     }
   } catch (err: unknown) {
     const isProd = isProductionMode();

@@ -329,7 +329,7 @@ describe("Durable Reconciliation Worker & Dead-Letter Handling", () => {
 
       const webhookBody = JSON.stringify({
         event: "charge.success",
-        data: { reference: "ref_wh_tamper_001", amount: 50000 },
+        data: { reference: "ref_wh_tamper_001", amount: 5000000 },
       });
 
       // 1. Missing signature header in production -> 401

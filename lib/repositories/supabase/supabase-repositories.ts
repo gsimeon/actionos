@@ -993,6 +993,85 @@ export class SupabaseTransactionRepository implements ITransactionRepository {
     if (error || !data) throw new DatabaseError(`Failed to update transaction status: ${error?.message}`, error?.code, error);
     return data as Transaction;
   }
+
+  async settleWithWebhookEvent(
+    id: string,
+    status: Transaction["status"],
+    event: {
+      provider: string;
+      eventId: string;
+      eventType: string;
+      reference: string;
+      status: string;
+      metadata?: Record<string, unknown>;
+    },
+    tenant?: TenantContext,
+    extra?: { metadata?: Record<string, unknown> }
+  ): Promise<{ transaction: Transaction; webhookEvent: WebhookEventRecord; isDuplicate?: boolean }> {
+    // 1. Attempt atomic settlement via Postgres RPC
+    try {
+      const { data, error } = await this.client.rpc("settle_payment_webhook", {
+        p_transaction_id: id,
+        p_status: status,
+        p_metadata: extra?.metadata ?? {},
+        p_provider: event.provider,
+        p_event_id: event.eventId,
+        p_event_type: event.eventType,
+        p_reference: event.reference,
+        p_event_metadata: event.metadata ?? {},
+      });
+
+      if (!error && data) {
+        if (data.duplicate) {
+          return {
+            transaction: (data.transaction || {}) as Transaction,
+            webhookEvent: (data.webhook_event || {}) as WebhookEventRecord,
+            isDuplicate: true,
+          };
+        }
+        return {
+          transaction: data.transaction as Transaction,
+          webhookEvent: data.webhook_event as WebhookEventRecord,
+          isDuplicate: false,
+        };
+      }
+    } catch {
+      // Fall through to atomic insert + update below
+    }
+
+    // 2. Coordinated atomic write: insert event record first, then update status
+    const { data: eventData, error: eventErr } = await this.client
+      .from("payment_webhook_events")
+      .insert({
+        provider: event.provider,
+        event_id: event.eventId,
+        event_type: event.eventType,
+        reference: event.reference,
+        status: event.status,
+        metadata: event.metadata ?? {},
+      })
+      .select("*")
+      .single();
+
+    if (eventErr) {
+      if (eventErr.code === "23505" || eventErr.message?.includes("duplicate key")) {
+        const existingTx = await this.findByReference(event.reference, tenant);
+        return {
+          transaction: existingTx || ({} as Transaction),
+          webhookEvent: {} as WebhookEventRecord,
+          isDuplicate: true,
+        };
+      }
+      throw new DatabaseError(`Failed to record webhook event: ${eventErr.message}`, eventErr.code, eventErr);
+    }
+
+    const updated = await this.updateStatus(id, status, tenant, extra);
+    return {
+      transaction: updated,
+      webhookEvent: eventData as WebhookEventRecord,
+      isDuplicate: false,
+    };
+  }
 }
 
 export class SupabaseDocumentRepository implements IDocumentRepository {

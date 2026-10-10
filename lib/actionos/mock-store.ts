@@ -28,6 +28,7 @@ export interface ActionOSDataStore {
   notifications: NotificationRecord[];
   auditLogs: AuditLog[];
   ledgerEvents: Record<string, ActionLedgerEvent[]>; // keyed by sessionId
+  webhookEvents?: Record<string, unknown>;
 }
 
 function initializeDefaultData(): ActionOSDataStore {
@@ -300,6 +301,7 @@ function initializeDefaultData(): ActionOSDataStore {
     notifications: [],
     auditLogs: [],
     ledgerEvents: {},
+    webhookEvents: {},
   };
 }
 

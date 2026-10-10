@@ -647,6 +647,53 @@ export class DemoTransactionRepository implements ITransactionRepository {
     tx.updated_at = new Date().toISOString();
     return tx;
   }
+
+  async settleWithWebhookEvent(
+    id: string,
+    status: Transaction["status"],
+    event: {
+      provider: string;
+      eventId: string;
+      eventType: string;
+      reference: string;
+      status: string;
+      metadata?: Record<string, unknown>;
+    },
+    tenant?: TenantContext,
+    extra?: { metadata?: Record<string, unknown> }
+  ): Promise<{ transaction: Transaction; webhookEvent: WebhookEventRecord; isDuplicate?: boolean }> {
+    const webhookRepo = new DemoWebhookEventRepository();
+    const existing = await webhookRepo.findByEventId(event.provider, event.eventId);
+    if (existing) {
+      const existingTx =
+        (await this.findByReference(event.reference, tenant)) ||
+        (await this.updateStatus(id, status, tenant, extra));
+      return {
+        transaction: existingTx,
+        webhookEvent: existing,
+        isDuplicate: true,
+      };
+    }
+
+    // Mutate transaction status; this invokes any mocked updateStatus (e.g. simulating DB failure)
+    const updatedTx = await this.updateStatus(id, status, tenant, extra);
+
+    // Record webhook event upon successful transaction status mutation
+    const recordResult = await webhookRepo.recordEvent({
+      provider: event.provider,
+      eventId: event.eventId,
+      eventType: event.eventType,
+      reference: event.reference,
+      status,
+      metadata: event.metadata,
+    });
+
+    return {
+      transaction: updatedTx,
+      webhookEvent: recordResult.event,
+      isDuplicate: false,
+    };
+  }
 }
 
 export class DemoDocumentRepository implements IDocumentRepository {
@@ -886,8 +933,6 @@ export class DemoQuoteRepository implements IQuoteRepository {
 }
 
 export class DemoWebhookEventRepository implements IWebhookEventRepository {
-  private events: Map<string, WebhookEventRecord> = new Map();
-
   async recordEvent(event: {
     provider: string;
     eventId: string;
@@ -896,8 +941,12 @@ export class DemoWebhookEventRepository implements IWebhookEventRepository {
     status: string;
     metadata?: Record<string, unknown>;
   }): Promise<{ isDuplicate: boolean; event: WebhookEventRecord }> {
+    const store = getStore();
+    if (!store.webhookEvents) {
+      store.webhookEvents = {};
+    }
     const key = `${event.provider}:${event.eventId}`;
-    const existing = this.events.get(key);
+    const existing = store.webhookEvents[key] as WebhookEventRecord | undefined;
     if (existing) {
       return { isDuplicate: true, event: existing };
     }
@@ -912,13 +961,14 @@ export class DemoWebhookEventRepository implements IWebhookEventRepository {
       created_at: new Date().toISOString(),
       metadata: event.metadata,
     };
-    this.events.set(key, record);
+    store.webhookEvents[key] = record;
     return { isDuplicate: false, event: record };
   }
 
   async findByEventId(provider: string, eventId: string): Promise<WebhookEventRecord | null> {
+    const store = getStore();
     const key = `${provider}:${eventId}`;
-    return this.events.get(key) || null;
+    return (store.webhookEvents?.[key] as WebhookEventRecord) || null;
   }
 }
 

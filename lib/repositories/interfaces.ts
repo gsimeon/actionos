@@ -87,6 +87,20 @@ export interface ITransactionRepository {
     tenant?: TenantContext,
     extra?: { metadata?: Record<string, unknown> }
   ): Promise<Transaction>;
+  settleWithWebhookEvent?(
+    id: string,
+    status: Transaction["status"],
+    event: {
+      provider: string;
+      eventId: string;
+      eventType: string;
+      reference: string;
+      status: string;
+      metadata?: Record<string, unknown>;
+    },
+    tenant?: TenantContext,
+    extra?: { metadata?: Record<string, unknown> }
+  ): Promise<{ transaction: Transaction; webhookEvent: WebhookEventRecord; isDuplicate?: boolean }>;
 }
 
 export interface IDocumentRepository {
