@@ -81,16 +81,19 @@ export function AuthorizationCard({
             <ShieldCheck className="h-6 w-6" />
           </div>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <h3 className="text-base font-extrabold text-slate-900 tracking-wide">
                 Explicit Renewal Authorization Gate
               </h3>
               <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-black text-amber-800 border border-amber-200">
                 ACTION CONFIRMATION REQUIRED
               </span>
+              <span className="rounded-full bg-amber-200/80 px-2 py-0.5 text-[10px] font-black text-amber-950 border border-amber-300">
+                SIMULATED SETTLEMENT
+              </span>
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
-              ActionOS Guardrail: Requires active cryptographic customer consent before financial settlement.
+              ActionOS Guardrail: Requires active customer consent before financial settlement. Sandbox mode: simulated Paystack gateway & test certificate.
             </p>
           </div>
         </div>
@@ -259,8 +262,11 @@ export function AuthorizationCard({
       <div className="mb-5 flex items-start gap-2.5 rounded-2xl bg-amber-50 p-3.5 border border-amber-200 text-xs text-amber-900 shadow-xs">
         <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 mt-0.5" />
         <div>
-          By confirming, you authorize ActionOS to initiate settlement of{" "}
-          <strong className="text-slate-950 font-bold">{formatNaira(activeAmount)}</strong> via the secure payment rail and generate your electronic renewal certificate.
+          <span className="font-bold uppercase tracking-wider text-[10px] bg-amber-200 px-1.5 py-0.5 rounded text-amber-950 mr-1.5">
+            SANDBOX SIMULATION
+          </span>
+          By confirming, you authorize ActionOS to initiate simulated settlement of{" "}
+          <strong className="text-slate-950 font-bold">{formatNaira(activeAmount)}</strong> via the simulated Paystack rail and generate a test electronic renewal certificate (non-statutory fixture). No real money is debited.
         </div>
       </div>
 

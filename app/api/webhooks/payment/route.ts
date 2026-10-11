@@ -127,9 +127,18 @@ export async function POST(req: Request) {
       });
     }
 
-    const ref =
-      (typeof payload.data.reference === "string" ? payload.data.reference.trim() : "") ||
-      (typeof payload.data.transaction_reference === "string" ? payload.data.transaction_reference.trim() : "");
+    const isRefundWebhook = typeof payload.event === "string" && payload.event.startsWith("refund.");
+    const payloadTxObj =
+      payload.data.transaction && typeof payload.data.transaction === "object"
+        ? (payload.data.transaction as Record<string, unknown>)
+        : undefined;
+    const payloadTxRef =
+      (typeof payload.data.transaction_reference === "string" ? payload.data.transaction_reference.trim() : "") ||
+      (payloadTxObj && typeof payloadTxObj.reference === "string" ? payloadTxObj.reference.trim() : "");
+    const payloadRef =
+      typeof payload.data.reference === "string" ? payload.data.reference.trim() : "";
+
+    const ref = (isRefundWebhook && payloadTxRef) ? payloadTxRef : (payloadRef || payloadTxRef);
     if (!ref) {
       return NextResponse.json(
         { success: false, error: { code: "MISSING_REFERENCE", message: "Missing required transaction reference in webhook payload" } },
@@ -240,6 +249,19 @@ export async function POST(req: Request) {
         );
       }
 
+      // If transaction reference resolved to a reversing refund record, link to the parent payment transaction
+      if (isRefundWebhook && existingTx && existingTx.transaction_type === "refund") {
+        const origRef =
+          (existingTx.metadata?.originalReference as string | undefined) ||
+          (existingTx.metadata?.original_reference as string | undefined);
+        if (origRef) {
+          const parentTx = await repos.transactions.findByReference(origRef);
+          if (parentTx) {
+            existingTx = parentTx;
+          }
+        }
+      }
+
       const txMeta = (existingTx.metadata && typeof existingTx.metadata === "object"
         ? { ...existingTx.metadata }
         : {}) as Record<string, unknown>;
@@ -310,10 +332,103 @@ export async function POST(req: Request) {
       let verifiedProviderTxId: string | undefined;
       let verifiedRefundId: string | undefined;
       let verifiedRefundReference: string | undefined;
+      let verifiedRefundAmount: number | undefined;
       const expectedAmount = existingTx.amount;
       const expectedCurrency = (existingTx.currency || "NGN").toUpperCase().trim();
       const isRefundEvent = payload.event.startsWith("refund.");
       const rawStatus = typeof payload.data.status === "string" ? payload.data.status.toLowerCase().trim() : "";
+
+      // Extract refund identifiers from payload early so they are accessible throughout refund resolution
+      const webhookRefundReference =
+        (typeof payload.data.refund_reference === "string" ? payload.data.refund_reference.trim() : "") ||
+        (typeof payload.data.reference === "string" && payload.data.reference.trim() !== ref
+          ? payload.data.reference.trim()
+          : "");
+
+      const webhookRefundId =
+        typeof (payload.data as Record<string, unknown>).refund_id === "string" ||
+        typeof (payload.data as Record<string, unknown>).refund_id === "number"
+          ? String((payload.data as Record<string, unknown>).refund_id).trim()
+          : "";
+
+      const refundRef = webhookRefundReference || webhookRefundId;
+
+      // Resolve expected refund amount:
+      // Legitimate partial refunds can be smaller than original payment.
+      // 1. Check if transaction metadata has explicitly persisted expected refund amount (e.g. from Saga compensation or refund initiation tool)
+      const persistedExpectedRefund =
+        typeof existingTx.metadata?.expected_refund_amount === "number"
+          ? (existingTx.metadata.expected_refund_amount as number)
+          : undefined;
+
+      // 2. Extract webhook payload reported refund amount (converted from minor units / kobo to Naira)
+      let webhookRefundAmount: number | undefined;
+      if (typeof payload.data.amount === "number" && !isNaN(payload.data.amount) && payload.data.amount > 0) {
+        if (isProductionMode()) {
+          webhookRefundAmount = payload.data.amount / 100;
+        } else {
+          webhookRefundAmount =
+            payload.data.amount >= 100 && (payload.data.amount > existingTx.amount || payload.data.amount % 100 === 0)
+              ? payload.data.amount / 100
+              : payload.data.amount;
+        }
+      }
+
+      // If both persisted expected refund amount and webhook reported amount exist, verify they match
+      if (
+        isRefundEvent &&
+        persistedExpectedRefund !== undefined &&
+        webhookRefundAmount !== undefined &&
+        Math.abs(persistedExpectedRefund - webhookRefundAmount) > 0.01
+      ) {
+        return respond(
+          NextResponse.json(
+            {
+              success: false,
+              error: {
+                code: "PROVIDER_REFUND_AMOUNT_MISMATCH",
+                message: `Webhook reported refund amount (${webhookRefundAmount}) does not match expected persisted refund amount (${persistedExpectedRefund}). Refusing refund settlement.`,
+              },
+            },
+            { status: 422 }
+          )
+        );
+      }
+
+      // 3. Expected refund amount for this specific refund event (falls back to webhook amount or full transaction amount)
+      const expectedRefundAmount =
+        persistedExpectedRefund !== undefined
+          ? persistedExpectedRefund
+          : webhookRefundAmount !== undefined
+          ? webhookRefundAmount
+          : expectedAmount;
+
+      // Existing cumulative refunded amount from prior settled partial/full refunds
+      const existingRefundHistory: Array<{
+        refund_reference?: string;
+        refund_id?: string;
+        amount: number;
+        currency?: string;
+        settled_at: string;
+      }> = Array.isArray(existingTx.metadata?.refund_history)
+        ? (existingTx.metadata.refund_history as Array<{
+            refund_reference?: string;
+            refund_id?: string;
+            amount: number;
+            currency?: string;
+            settled_at: string;
+          }>)
+        : [];
+
+      const previousCumulativeRefunded: number =
+        typeof existingTx.metadata?.cumulative_refund_amount === "number"
+          ? (existingTx.metadata.cumulative_refund_amount as number)
+          : existingTx.status === "refunded"
+          ? existingTx.amount
+          : existingRefundHistory.reduce(
+              (sum, item) => sum + (typeof item.amount === "number" ? item.amount : 0),
+              0
+            );
 
       if (payload.event === "charge.success") {
         // Validate that provider status does NOT contradict success event
@@ -335,7 +450,7 @@ export async function POST(req: Request) {
       } else if (payload.event === "charge.failed" || payload.event === "charge.declined") {
         txStatus = "failed";
       } else if (payload.event === "refund.processed") {
-        // Authoritative refund confirmation: transitions primary transaction status to 'refunded'
+        // Initially set to 'refunded', will be adjusted if partial refund below
         txStatus = "refunded";
         refundLifecycleState = "refund_confirmed";
       } else if (payload.event === "refund.pending" || payload.event === "refund.processing") {
@@ -825,20 +940,6 @@ export async function POST(req: Request) {
             (process.env.ACTIONOS_VERIFY_WEBHOOK_WITH_PROVIDER === "true" ||
               process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION === "true"));
 
-        const webhookRefundReference =
-          (typeof payload.data.refund_reference === "string" ? payload.data.refund_reference.trim() : "") ||
-          (typeof payload.data.reference === "string" && payload.data.reference.trim() !== ref
-            ? payload.data.reference.trim()
-            : "");
-
-        const webhookRefundId =
-          typeof (payload.data as Record<string, unknown>).refund_id === "string" ||
-          typeof (payload.data as Record<string, unknown>).refund_id === "number"
-            ? String((payload.data as Record<string, unknown>).refund_id).trim()
-            : "";
-
-        const refundRef = webhookRefundReference || webhookRefundId;
-
         if (payload.event === "refund.processed") {
           // Rule: In production, require refund identifier before confirming refund
           if (isProductionMode() && !refundRef) {
@@ -941,7 +1042,22 @@ export async function POST(req: Request) {
                 }
 
                 if (
-                  refundVerification.transactionReference &&
+                  !refundVerification.transactionReference ||
+                  !refundVerification.transactionReference.trim()
+                ) {
+                  return respond(
+                    NextResponse.json(
+                      {
+                        success: false,
+                        error: {
+                          code: "PROVIDER_REFUND_TRANSACTION_REFERENCE_REQUIRED",
+                          message: "Authoritative provider refund verification must identify the original payment transaction reference. Missing evidence leaves refund unconfirmed until reconciliation.",
+                        },
+                      },
+                      { status: 422 }
+                    )
+                  );
+                } else if (
                   refundVerification.transactionReference.trim() !== ref.trim()
                 ) {
                   return respond(
@@ -959,20 +1075,21 @@ export async function POST(req: Request) {
                 }
 
                 if (typeof refundVerification.amount === "number" && refundVerification.amount > 0) {
-                  if (Math.abs(refundVerification.amount - expectedAmount) > 0.01) {
+                  if (Math.abs(refundVerification.amount - expectedRefundAmount) > 0.01) {
                     return respond(
                       NextResponse.json(
                         {
                           success: false,
                           error: {
                             code: "PROVIDER_REFUND_AMOUNT_MISMATCH",
-                            message: `Authoritative provider refund verification amount (${refundVerification.amount}) does not match transaction amount (${expectedAmount}). Refusing refund settlement.`,
+                            message: `Authoritative provider refund verification amount (${refundVerification.amount}) does not match expected refund amount (${expectedRefundAmount}). Refusing refund settlement.`,
                           },
                         },
                         { status: 422 }
                       )
                     );
                   }
+                  verifiedRefundAmount = refundVerification.amount;
                 } else if (isProductionMode() || process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION === "true") {
                   return respond(
                     NextResponse.json(
@@ -1060,8 +1177,11 @@ export async function POST(req: Request) {
       }
 
       // 6. Out-of-Order Webhook Protection: Never regress terminal or settled states
-      // Rule A: Terminal 'refunded' state must never be overwritten by stale charge events
-      if (existingTx.status === "refunded" && !isRefundEvent) {
+      // Rule A: Terminal 'refunded' or 'partially_refunded' states must never be overwritten by stale charge events
+      if (
+        (existingTx.status === "refunded" || existingTx.status === "partially_refunded") &&
+        !isRefundEvent
+      ) {
         return respond(
           NextResponse.json({
             success: true,
@@ -1070,10 +1190,10 @@ export async function POST(req: Request) {
         );
       }
 
-      // Rule B: Already 'succeeded' transaction must never regress to 'failed' or 'pending' due to out-of-order delivery
+      // Rule B: Already 'succeeded' or 'partially_refunded' transaction must never regress to 'failed' or 'pending' due to out-of-order delivery
       if (
         !isRefundEvent &&
-        existingTx.status === "succeeded" &&
+        (existingTx.status === "succeeded" || existingTx.status === "partially_refunded") &&
         (txStatus === "failed" || txStatus === "pending")
       ) {
         return respond(
@@ -1091,7 +1211,7 @@ export async function POST(req: Request) {
       // Rule C: Out-of-order refund protection: confirmed or terminal refund state cannot be overwritten by stale pending/failed refund events
       if (
         isRefundEvent &&
-        (currentRefundState === "refund_confirmed" || existingTx.status === "refunded") &&
+        (currentRefundState === "refund_confirmed" || existingTx.status === "refunded" || existingTx.status === "partially_refunded") &&
         refundLifecycleState !== "refund_confirmed"
       ) {
         return respond(
@@ -1110,9 +1230,24 @@ export async function POST(req: Request) {
       }
 
       // Rule D: Idempotent duplicate check: already in target status and identical refund state
+      const currentRefundIdentifier =
+        verifiedRefundReference || webhookRefundReference || webhookRefundId || refundRef || providerEventId;
+      const isAlreadyCountedInHistory =
+        isRefundEvent &&
+        existingRefundHistory.some(
+          (entry) =>
+            (entry.refund_reference && entry.refund_reference === currentRefundIdentifier) ||
+            (entry.refund_id && entry.refund_id === currentRefundIdentifier)
+        );
+
+      const isDuplicateRefund =
+        isRefundEvent &&
+        isAlreadyCountedInHistory &&
+        (currentRefundState === refundLifecycleState || existingTx.status === "refunded" || existingTx.status === "partially_refunded");
+
       if (
-        existingTx.status === txStatus &&
-        (!isRefundEvent || currentRefundState === refundLifecycleState)
+        (existingTx.status === txStatus && !isRefundEvent) ||
+        isDuplicateRefund
       ) {
         return respond(
           NextResponse.json({
@@ -1122,7 +1257,39 @@ export async function POST(req: Request) {
         );
       }
 
-      // 7. Atomic Settlement: Persist Updated Status & Durable Event Metadata
+      // 7. Cumulative refund limit enforcement and partial vs full refund status determination
+      const effectiveRefundAmount =
+        verifiedRefundAmount !== undefined ? verifiedRefundAmount : expectedRefundAmount;
+
+      const newCumulativeRefunded = isAlreadyCountedInHistory
+        ? previousCumulativeRefunded
+        : previousCumulativeRefunded + effectiveRefundAmount;
+
+      if (isRefundEvent && refundLifecycleState === "refund_confirmed") {
+        if (newCumulativeRefunded > existingTx.amount + 0.01) {
+          return respond(
+            NextResponse.json(
+              {
+                success: false,
+                error: {
+                  code: "CUMULATIVE_REFUND_LIMIT_EXCEEDED",
+                  message: `Cumulative refund amount (${newCumulativeRefunded}) exceeds original payment transaction amount (${existingTx.amount}). Refusing refund settlement.`,
+                },
+              },
+              { status: 422 }
+            )
+          );
+        }
+
+        if (newCumulativeRefunded >= existingTx.amount - 0.01) {
+          txStatus = "refunded";
+        } else {
+          // Partial refund: distinguish partially_refunded from refunded
+          txStatus = "partially_refunded";
+        }
+      }
+
+      // 8. Atomic Settlement: Persist Updated Status & Durable Event Metadata
       processedEvents.push(dedupeKey);
 
       const originalPaymentStatus =
@@ -1165,11 +1332,26 @@ export async function POST(req: Request) {
         if (verifiedRefundId || (payload.data as Record<string, unknown>).refund_id) {
           updatedMetadata.refund_id = (verifiedRefundId || (payload.data as Record<string, unknown>).refund_id) as string;
         }
-        if (typeof payload.data.amount === "number") {
-          updatedMetadata.refund_amount = payload.data.amount;
-        }
+        updatedMetadata.refund_amount = effectiveRefundAmount;
         if (payload.data.currency) {
           updatedMetadata.refund_currency = payload.data.currency;
+        }
+
+        if (refundLifecycleState === "refund_confirmed") {
+          updatedMetadata.cumulative_refund_amount = newCumulativeRefunded;
+          updatedMetadata.remaining_balance = Math.max(0, existingTx.amount - newCumulativeRefunded);
+          updatedMetadata.is_partial_refund = newCumulativeRefunded < existingTx.amount - 0.01;
+
+          if (!isAlreadyCountedInHistory) {
+            const newHistoryEntry = {
+              refund_reference: (verifiedRefundReference || webhookRefundReference || payload.data.reference || "") as string,
+              refund_id: (verifiedRefundId || webhookRefundId || "") as string,
+              amount: effectiveRefundAmount,
+              currency: (payload.data.currency || existingTx.currency || "NGN") as string,
+              settled_at: new Date().toISOString(),
+            };
+            updatedMetadata.refund_history = [...existingRefundHistory, newHistoryEntry];
+          }
         }
       }
 
@@ -1185,8 +1367,11 @@ export async function POST(req: Request) {
       }
 
       try {
+        let isSettlementDuplicate = false;
+        let settledTxStatus = txStatus;
+
         if (typeof repos.transactions.settleWithWebhookEvent === "function") {
-          await repos.transactions.settleWithWebhookEvent(
+          const settlementRes = await repos.transactions.settleWithWebhookEvent(
             existingTx.id,
             txStatus,
             {
@@ -1200,6 +1385,10 @@ export async function POST(req: Request) {
             undefined,
             { metadata: updatedMetadata }
           );
+          if (settlementRes?.isDuplicate) {
+            isSettlementDuplicate = true;
+            settledTxStatus = settlementRes.transaction?.status || txStatus;
+          }
         } else {
           if (isProductionMode()) {
             throw new Error(
@@ -1212,7 +1401,7 @@ export async function POST(req: Request) {
             metadata: updatedMetadata,
           });
           if (repos.webhookEvents) {
-            await repos.webhookEvents.recordEvent({
+            const recordRes = await repos.webhookEvents.recordEvent({
               provider: "paystack",
               eventId: eventRecordId,
               eventType: payload.event,
@@ -1220,11 +1409,67 @@ export async function POST(req: Request) {
               status: txStatus,
               metadata: eventMetadata,
             });
+            if (recordRes?.isDuplicate) {
+              isSettlementDuplicate = true;
+            }
+          }
+        }
+
+        // Create or update dedicated refund-specific transaction record for partial or full refund
+        if (isRefundEvent && currentRefundIdentifier && !isSettlementDuplicate) {
+          const refundTxRef = currentRefundIdentifier;
+          try {
+            const existingRefundTx = await repos.transactions.findByReference(refundTxRef);
+            if (!existingRefundTx) {
+              await repos.transactions.create({
+                customer_id: existingTx.customer_id,
+                organization_id: existingTx.organization_id,
+                renewal_id: existingTx.renewal_id,
+                amount: -Math.abs(effectiveRefundAmount),
+                currency: (payload.data.currency || existingTx.currency || "NGN").toUpperCase().trim(),
+                provider: existingTx.provider || "paystack",
+                reference: refundTxRef,
+                status: refundLifecycleState === "refund_confirmed" ? "succeeded" : "pending",
+                transaction_type: "refund",
+                metadata: {
+                  original_transaction_id: existingTx.id,
+                  originalReference: ref,
+                  refund_reference: currentRefundIdentifier,
+                  refund_id: verifiedRefundId || webhookRefundId || null,
+                  refund_amount: effectiveRefundAmount,
+                  refund_state: refundLifecycleState,
+                  settled_at: new Date().toISOString(),
+                },
+              });
+            } else if (refundLifecycleState === "refund_confirmed" && existingRefundTx.status !== "succeeded") {
+              await repos.transactions.updateStatus(existingRefundTx.id, "succeeded", undefined, {
+                metadata: {
+                  ...existingRefundTx.metadata,
+                  refund_state: "refund_confirmed",
+                  settled_at: new Date().toISOString(),
+                },
+              });
+            }
+          } catch {
+            // Non-fatal if refund record already exists or concurrent insertion handled
           }
         }
 
         // In-memory cache is committed ONLY after successful database persistence
         processedWebhookMemoryCache.add(dedupeKey);
+
+        return respond(
+          NextResponse.json({
+            success: true,
+            data: {
+              acknowledged: true,
+              duplicate: isSettlementDuplicate,
+              reference: ref,
+              status: settledTxStatus,
+              eventId: providerEventId,
+            },
+          })
+        );
       } catch (dbError) {
         // Return HTTP 500 so gateway recognizes persistence failure and retries delivery
         return respond(
@@ -1241,19 +1486,6 @@ export async function POST(req: Request) {
           )
         );
       }
-
-      return respond(
-        NextResponse.json({
-          success: true,
-          data: {
-            acknowledged: true,
-            duplicate: false,
-            reference: ref,
-            status: txStatus,
-            eventId: providerEventId,
-          },
-        })
-      );
     } catch (innerErr) {
       const errRes = NextResponse.json(
         {

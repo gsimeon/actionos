@@ -78,7 +78,8 @@ export type TransactionStatus =
   | "processing"
   | "succeeded"
   | "failed"
-  | "refunded";
+  | "refunded"
+  | "partially_refunded";
 
 export interface Organization {
   id: string;

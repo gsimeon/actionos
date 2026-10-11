@@ -174,6 +174,15 @@ export class MockPaymentProvider implements IPaymentProvider {
       );
     }
 
+    if (amount !== undefined) {
+      if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
+        throw new Error("Invalid refund amount: amount must be a finite positive number strictly greater than zero");
+      }
+      if (Math.abs(amount * 100 - Math.round(amount * 100)) > 1e-6) {
+        throw new Error("Invalid refund amount precision: amount cannot have more than 2 decimal places");
+      }
+    }
+
     if (options?.simulateRefundFailure || this.simulateRefundFailure) {
       return {
         status: "refund_failed",

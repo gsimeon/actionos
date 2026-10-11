@@ -3,6 +3,7 @@ import { getRepositoryContainer } from "@/lib/repositories";
 import { isDemoMode } from "@/lib/runtime/mode";
 import { DEMO_CONTEXT } from "@/lib/security/auth-context";
 import { getPaymentProvider } from "@/lib/payments";
+import type { Transaction } from "@/types/database";
 
 export interface RefundPaymentInput {
   reference: string;
@@ -38,8 +39,17 @@ export class RefundPaymentTool implements IActionOSTool<RefundPaymentInput, Refu
       return { valid: false, error: "Input must be an object" };
     }
     const data = input as RefundPaymentInput;
-    if (!data.reference) {
+    if (!data.reference || typeof data.reference !== "string" || !data.reference.trim()) {
       return { valid: false, error: "Missing required reference" };
+    }
+    if (data.amount === undefined || data.amount === null) {
+      return { valid: false, error: "Missing required amount for refund" };
+    }
+    if (typeof data.amount !== "number" || !Number.isFinite(data.amount) || data.amount <= 0) {
+      return { valid: false, error: "Refund amount must be a finite positive number strictly greater than zero." };
+    }
+    if (Math.abs(data.amount * 100 - Math.round(data.amount * 100)) > 1e-6) {
+      return { valid: false, error: "Refund amount cannot have more than 2 decimal places." };
     }
     return { valid: true, data };
   }
@@ -58,11 +68,73 @@ export class RefundPaymentTool implements IActionOSTool<RefundPaymentInput, Refu
       };
     }
 
+    if (typeof input.amount !== "number" || !Number.isFinite(input.amount) || input.amount <= 0) {
+      return {
+        success: false,
+        error: {
+          code: "INVALID_REFUND_AMOUNT",
+          message: "Refund amount must be a finite positive number strictly greater than zero.",
+        },
+      };
+    }
+
+    if (Math.abs(input.amount * 100 - Math.round(input.amount * 100)) > 1e-6) {
+      return {
+        success: false,
+        error: {
+          code: "INVALID_REFUND_PRECISION",
+          message: "Refund amount cannot have more than 2 decimal places.",
+        },
+      };
+    }
+
     const tenantContext = {
       organizationId: context.auth.organizationId,
       customerId: context.auth.customerId,
       role: context.auth.role,
     };
+
+    // Lookup original transaction if present to validate refund limits and persist expected refund amount
+    let originalTx: Transaction | null = null;
+    try {
+      originalTx = await repos.transactions.findByReference(input.reference, tenantContext);
+    } catch {
+      // Non-fatal if original transaction not found
+    }
+
+    if (originalTx) {
+      const prevCumulative: number =
+        typeof originalTx.metadata?.cumulative_refund_amount === "number"
+          ? (originalTx.metadata.cumulative_refund_amount as number)
+          : originalTx.status === "refunded"
+          ? originalTx.amount
+          : 0;
+
+      const remainingBalance = Math.max(0, originalTx.amount - prevCumulative);
+
+      if (input.amount > remainingBalance + 0.01) {
+        return {
+          success: false,
+          error: {
+            code: "CUMULATIVE_REFUND_LIMIT_EXCEEDED",
+            message: `Requested refund amount (${input.amount}) exceeds remaining refundable balance (${remainingBalance}) of original payment transaction (${originalTx.amount}). Previous cumulative refunds: ${prevCumulative}.`,
+          },
+        };
+      }
+
+      // Persist expected refund amount on original transaction metadata separately
+      try {
+        await repos.transactions.updateStatus(originalTx.id, originalTx.status, tenantContext, {
+          metadata: {
+            ...originalTx.metadata,
+            expected_refund_amount: input.amount,
+            last_refund_initiated_at: new Date().toISOString(),
+          },
+        });
+      } catch {
+        // Non-fatal update
+      }
+    }
 
     // 1. Process refund directly through payment rail provider
     const paymentProvider = getPaymentProvider();
@@ -104,6 +176,7 @@ export class RefundPaymentTool implements IActionOSTool<RefundPaymentInput, Refu
           metadata: {
             originalReference: input.reference,
             gatewayRefundReference: refundRef || null,
+            expected_refund_amount: input.amount,
             reason: input.reason,
             isSagaCompensating: true,
             gatewayVerified: true,
@@ -112,6 +185,33 @@ export class RefundPaymentTool implements IActionOSTool<RefundPaymentInput, Refu
         },
         tenantContext
       );
+
+      if (originalTx) {
+        const prevCumulative: number =
+          typeof originalTx.metadata?.cumulative_refund_amount === "number"
+            ? (originalTx.metadata.cumulative_refund_amount as number)
+            : 0;
+        const newCumulative = prevCumulative + input.amount;
+        const isFullRefund = newCumulative >= originalTx.amount - 0.01;
+        try {
+          await repos.transactions.updateStatus(
+            originalTx.id,
+            isFullRefund ? "refunded" : "partially_refunded",
+            tenantContext,
+            {
+              metadata: {
+                ...originalTx.metadata,
+                refund_state: "refund_confirmed",
+                cumulative_refund_amount: newCumulative,
+                remaining_balance: Math.max(0, originalTx.amount - newCumulative),
+                is_partial_refund: !isFullRefund,
+              },
+            }
+          );
+        } catch {
+          // Non-fatal metadata sync
+        }
+      }
 
       return {
         success: true,
@@ -143,6 +243,7 @@ export class RefundPaymentTool implements IActionOSTool<RefundPaymentInput, Refu
           metadata: {
             originalReference: input.reference,
             gatewayRefundReference: refundRef || null,
+            expected_refund_amount: input.amount,
             reason: input.reason,
             isSagaCompensating: true,
             gatewayVerified: false,

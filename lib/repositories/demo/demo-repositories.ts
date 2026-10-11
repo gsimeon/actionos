@@ -807,14 +807,23 @@ export class DemoTransactionRepository implements ITransactionRepository {
     extra?: { metadata?: Record<string, unknown> }
   ): Promise<{ transaction: Transaction; webhookEvent: WebhookEventRecord; isDuplicate?: boolean }> {
     const webhookRepo = this.webhookRepo || new DemoWebhookEventRepository();
-    const existing = await webhookRepo.findByEventId(event.provider, event.eventId);
-    if (existing) {
+    // 1. Check or reserve webhook event record first (durable cross-instance uniqueness check)
+    const recordResult = await webhookRepo.recordEvent({
+      provider: event.provider,
+      eventId: event.eventId,
+      eventType: event.eventType,
+      reference: event.reference,
+      status,
+      metadata: event.metadata,
+    });
+
+    if (recordResult.isDuplicate) {
       const existingTx =
         (await this.findByReference(event.reference, tenant)) ||
-        (await this.updateStatus(id, status, tenant, extra));
+        (await this.findByReference(id, tenant));
       return {
-        transaction: existingTx,
-        webhookEvent: existing,
+        transaction: existingTx || ({} as Transaction),
+        webhookEvent: recordResult.event,
         isDuplicate: true,
       };
     }
@@ -828,23 +837,17 @@ export class DemoTransactionRepository implements ITransactionRepository {
       // Mutate transaction status; this invokes any mocked updateStatus (e.g. simulating DB failure)
       const updatedTx = await this.updateStatus(id, status, tenant, extra);
 
-      // Record webhook event upon successful transaction status mutation
-      const recordResult = await webhookRepo.recordEvent({
-        provider: event.provider,
-        eventId: event.eventId,
-        eventType: event.eventType,
-        reference: event.reference,
-        status,
-        metadata: event.metadata,
-      });
-
       return {
         transaction: updatedTx,
         webhookEvent: recordResult.event,
-        isDuplicate: recordResult.isDuplicate,
+        isDuplicate: false,
       };
     } catch (err) {
       // Rollback on any failure to guarantee zero partial writes
+      const key = `${event.provider}:${event.eventId}`;
+      if (store.webhookEvents) {
+        delete store.webhookEvents[key];
+      }
       if (tx) {
         tx.status = prevStatus;
         tx.metadata = prevMeta;

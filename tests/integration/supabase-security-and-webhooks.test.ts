@@ -4,7 +4,11 @@ import crypto from "node:crypto";
 import { getRepositoryContainer, setRepositoryContainer } from "@/lib/repositories";
 import { DemoRepositoryContainer } from "@/lib/repositories/demo/demo-repositories";
 import { SupabaseQuoteRepository } from "@/lib/repositories/supabase/supabase-repositories";
-import { verifyPaystackWebhookSignature, POST as paymentWebhookHandler } from "@/app/api/webhooks/payment/route";
+import {
+  verifyPaystackWebhookSignature,
+  POST as paymentWebhookHandler,
+  resetProcessedWebhookMemoryCache,
+} from "@/app/api/webhooks/payment/route";
 import { verifyLedgerIntegrity, computeEventHash, signEventHash, GENESIS_LEDGER_HASH } from "@/lib/actionos/crypto-ledger";
 import { computeQuoteSignature, verifyQuoteSignature } from "@/lib/actionos/quote-signature";
 import { orchestrator } from "@/lib/actionos/orchestrator";
@@ -466,6 +470,77 @@ describe("Protected Supabase Security, RLS Invariants & Payment Webhook Integrat
           repos.webhookEvents.recordEvent = origRecordEvent;
         }
       }
+    });
+
+    it("guarantees cross-instance concurrency protection and deduplication when memory caches are isolated between instances", async () => {
+      const repos = getRepositoryContainer();
+      const txRef = "ref_wh_cross_instance_dup_102";
+
+      await repos.transactions.create(
+        {
+          id: txRef,
+          reference: txRef,
+          customer_id: customerIdA,
+          organization_id: orgIdA,
+          transaction_type: "renewal_premium",
+          amount: 87500,
+          currency: "NGN",
+          status: "pending",
+          provider: "paystack",
+          renewal_id: null,
+          metadata: { session_id: "sess_cross_instance_test" },
+        },
+        orgA
+      );
+
+      const payloadString = JSON.stringify({
+        event: "charge.success",
+        data: {
+          id: 99118822,
+          reference: txRef,
+          amount: 8750000,
+          currency: "NGN",
+          status: "success",
+        },
+      });
+
+      // Instance 1 processes the webhook initial delivery
+      const req1 = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: payloadString,
+      });
+
+      const res1 = await paymentWebhookHandler(req1);
+      assert.equal(res1.status, 200);
+      const json1 = (await res1.json()) as { data: { acknowledged: boolean; duplicate: boolean } };
+      assert.equal(json1.data.acknowledged, true);
+      assert.equal(json1.data.duplicate, false, "First instance must settle transaction");
+
+      // Simulate a completely separate application instance (Instance 2):
+      // Instance 2 does NOT share in-memory cache or promise locks with Instance 1.
+      resetProcessedWebhookMemoryCache();
+
+      // Instance 2 receives identical duplicate webhook delivery from gateway
+      const req2 = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: payloadString,
+      });
+
+      const res2 = await paymentWebhookHandler(req2);
+      assert.equal(res2.status, 200);
+      const json2 = (await res2.json()) as { data: { acknowledged: boolean; duplicate: boolean } };
+      assert.equal(json2.data.acknowledged, true);
+      assert.equal(
+        json2.data.duplicate,
+        true,
+        "Second instance with cold memory cache must detect duplicate via database uniqueness constraint"
+      );
+
+      // Verify transaction was settled exactly once and is succeeded
+      const tx = await repos.transactions.findByReference(txRef, orgA);
+      assert.equal(tx?.status, "succeeded");
     });
   });
 

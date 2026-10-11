@@ -15,6 +15,7 @@ import {
   Hash,
   RotateCcw,
   ShieldCheck,
+  Zap,
 } from "lucide-react";
 import type { ActionLedgerEvent } from "@/types/actionos";
 import { formatDateTime } from "@/lib/utils";
@@ -25,6 +26,7 @@ interface ActionLedgerProps {
   sessionId?: string;
   workflowTitle?: string;
   className?: string;
+  onRunSampleAction?: () => void;
 }
 
 export function ActionLedger({
@@ -32,6 +34,7 @@ export function ActionLedger({
   sessionId,
   workflowTitle = "Vehicle Insurance Renewal Orchestration",
   className,
+  onRunSampleAction,
 }: ActionLedgerProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [tamperedEvents, setTamperedEvents] = useState<ActionLedgerEvent[] | null>(null);
@@ -220,8 +223,103 @@ export function ActionLedger({
 
       {/* Events Timeline */}
       {activeEvents.length === 0 ? (
-        <div className="text-center py-10 text-slate-400 text-xs font-medium">
-          No ledger events recorded yet. Initiate an action to view the atomic execution stream.
+        <div className="py-6 px-4 sm:px-6 rounded-2xl bg-slate-50/80 border border-slate-200/90 space-y-6">
+          <div className="text-center max-w-xl mx-auto">
+            <span className="text-[10px] font-black uppercase tracking-wider text-emerald-800 bg-emerald-100 px-2.5 py-0.5 rounded-full border border-emerald-300">
+              FIRST-RUN DEMO ROADMAP
+            </span>
+            <h3 className="text-sm sm:text-base font-black text-slate-900 mt-2">
+              Ready to Inspect the Atomic Execution Stream
+            </h3>
+            <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+              ActionOS executes real business workflows with deterministic guardrails. Follow this 5-step journey to see the cryptographically verified Action Ledger in action:
+            </p>
+          </div>
+
+          {/* 5-step interactive sequence */}
+          <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
+            <div className="p-3 rounded-xl bg-white border border-slate-200 shadow-2xs text-left">
+              <div className="flex items-center gap-1.5 text-[10px] font-black text-emerald-800 uppercase mb-1">
+                <span className="w-4 h-4 rounded-full bg-emerald-100 flex items-center justify-center text-[9px] font-bold">1</span>
+                <span>Request</span>
+              </div>
+              <p className="text-[11px] text-slate-900 font-bold">Camry Renewal Preset</p>
+              <p className="text-[10px] text-slate-500 mt-0.5 leading-snug">
+                Click a multilingual preset or speak an instruction in English, Pidgin, Yorùbá, Hausa, or Igbo.
+              </p>
+            </div>
+
+            <div className="p-3 rounded-xl bg-white border border-slate-200 shadow-2xs text-left">
+              <div className="flex items-center gap-1.5 text-[10px] font-black text-teal-800 uppercase mb-1">
+                <span className="w-4 h-4 rounded-full bg-teal-100 flex items-center justify-center text-[9px] font-bold">2</span>
+                <span>Plan</span>
+              </div>
+              <p className="text-[11px] text-slate-900 font-bold">Deterministic Plan</p>
+              <p className="text-[10px] text-slate-500 mt-0.5 leading-snug">
+                Vehicle check (ABC-123-XY), eligibility rules, and multi-underwriter quote comparison.
+              </p>
+            </div>
+
+            <div className="p-3 rounded-xl bg-white border border-amber-300 shadow-2xs text-left bg-amber-50/20">
+              <div className="flex items-center gap-1.5 text-[10px] font-black text-amber-800 uppercase mb-1">
+                <span className="w-4 h-4 rounded-full bg-amber-100 flex items-center justify-center text-[9px] font-bold">3</span>
+                <span>Authorize</span>
+              </div>
+              <p className="text-[11px] text-slate-900 font-bold">Authorization Gate</p>
+              <p className="text-[10px] text-slate-500 mt-0.5 leading-snug">
+                Review exact ₦87,500 quote & confirm via one-click consent or WebAuthn biometric passkey.
+              </p>
+            </div>
+
+            <div className="p-3 rounded-xl bg-white border border-slate-200 shadow-2xs text-left">
+              <div className="flex items-center gap-1.5 text-[10px] font-black text-blue-800 uppercase mb-1">
+                <span className="w-4 h-4 rounded-full bg-blue-100 flex items-center justify-center text-[9px] font-bold">4</span>
+                <span>Execute</span>
+              </div>
+              <p className="text-[11px] text-slate-900 font-bold">Sandbox Execution</p>
+              <p className="text-[10px] text-slate-500 mt-0.5 leading-snug">
+                Simulated Paystack payment settlement and non-statutory NAICOM e-certificate record.
+              </p>
+            </div>
+
+            <div className="p-3 rounded-xl bg-white border border-slate-200 shadow-2xs text-left">
+              <div className="flex items-center gap-1.5 text-[10px] font-black text-purple-800 uppercase mb-1">
+                <span className="w-4 h-4 rounded-full bg-purple-100 flex items-center justify-center text-[9px] font-bold">5</span>
+                <span>Audit</span>
+              </div>
+              <p className="text-[11px] text-slate-900 font-bold">Cryptographic Ledger</p>
+              <p className="text-[10px] text-slate-500 mt-0.5 leading-snug">
+                SHA-256 linked blocks with Merkle hash integrity and live tamper detection test.
+              </p>
+            </div>
+          </div>
+
+          {/* Execution State Guarantees Callout */}
+          <div className="p-3.5 rounded-xl bg-white border border-slate-200 text-[11px] text-slate-600 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="font-bold text-slate-800">Visual State Guarantees:</span>
+              <span className="inline-flex items-center gap-1 text-emerald-700 font-medium">
+                <span className="w-2 h-2 rounded-full bg-emerald-500" /> Verified Action
+              </span>
+              <span className="inline-flex items-center gap-1 text-amber-700 font-medium">
+                <span className="w-2 h-2 rounded-full bg-amber-500" /> Awaiting Auth Gate
+              </span>
+              <span className="inline-flex items-center gap-1 text-rose-700 font-medium">
+                <span className="w-2 h-2 rounded-full bg-rose-500" /> Saga Rollback / Refund
+              </span>
+            </div>
+
+            {onRunSampleAction && (
+              <button
+                type="button"
+                onClick={onRunSampleAction}
+                className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-700 hover:to-teal-700 text-white font-bold text-xs shadow-md shadow-emerald-600/20 transition-all flex items-center justify-center gap-1.5 cursor-pointer active:scale-95"
+              >
+                <Zap className="w-3.5 h-3.5" />
+                <span>Run Benchmark Camry Flow</span>
+              </button>
+            )}
+          </div>
         </div>
       ) : (
         <div className="relative pl-6 space-y-4 before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-gradient-to-b before:from-emerald-500 before:via-teal-400 before:to-slate-200">

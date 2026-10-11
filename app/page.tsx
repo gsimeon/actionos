@@ -95,7 +95,7 @@ export default function HomePage() {
           </p>
 
           <p className="mt-2 text-xs sm:text-sm text-slate-600 max-w-xl mx-auto">
-            ActionOS turns natural language and voice into secure, auditable business actions — from vehicle insurance renewals to NAICOM verification and Paystack settlement.
+            ActionOS turns natural language and voice into secure, auditable business actions — governed by deterministic guardrails, human authorization gates, and cryptographic ledger verification.
           </p>
 
           {/* Action CTAs */}
@@ -129,7 +129,7 @@ export default function HomePage() {
             Why ActionOS is NOT Merely a Chatbot
           </h2>
           <p className="text-xs sm:text-sm text-slate-600 mt-2 max-w-xl mx-auto">
-            Traditional assistants stop at generating text. ActionOS provides the deterministic action planning, authorization gates, and audit trails required for real enterprise operations.
+            Traditional assistants stop at generating text. ActionOS provides deterministic action planning, authorization gates, and audit trails required for real enterprise operations.
           </p>
         </div>
 
@@ -175,23 +175,23 @@ export default function HomePage() {
             <div className="space-y-2.5 text-xs text-slate-800">
               <div className="p-2.5 rounded-xl bg-white border border-slate-200 shadow-xs flex items-center gap-2.5">
                 <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold">1</span>
-                <span><strong>AI Understanding:</strong> Multilingual N-ATLAS entity parsing</span>
+                <span><strong>AI Understanding:</strong> Multilingual N-ATLAS entity parsing with schema bounds</span>
               </div>
               <div className="p-2.5 rounded-xl bg-white border border-slate-200 shadow-xs flex items-center gap-2.5">
                 <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold">2</span>
-                <span><strong>Action Plan:</strong> Ordered 10-step deterministic workflow</span>
+                <span><strong>Action Plan:</strong> Ordered deterministic workflow with eligibility checks</span>
               </div>
               <div className="p-2.5 rounded-xl bg-white border border-slate-200 shadow-xs flex items-center gap-2.5">
                 <span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-100 text-amber-800 text-[10px] font-bold">3</span>
-                <span><strong>Authorization Gate:</strong> Cryptographic user confirmation</span>
+                <span><strong>Authorization Gate:</strong> Explicit customer confirmation before money moves</span>
               </div>
               <div className="p-2.5 rounded-xl bg-white border border-slate-200 shadow-xs flex items-center gap-2.5">
                 <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold">4</span>
-                <span><strong>Controlled Execution:</strong> Paystack settlement & renewal</span>
+                <span><strong>Controlled Execution:</strong> Sandboxed Paystack settlement & policy roll-forward</span>
               </div>
               <div className="p-2.5 rounded-xl bg-white border border-slate-200 shadow-xs flex items-center gap-2.5">
                 <span className="flex h-5 w-5 items-center justify-center rounded-full bg-teal-100 text-teal-800 text-[10px] font-bold">5</span>
-                <span><strong>Immutable Audit:</strong> Action Ledger + NAICOM certificate</span>
+                <span><strong>Cryptographic Audit:</strong> Action Ledger™ with SHA-256 Merkle hash chain</span>
               </div>
             </div>
           </div>
@@ -201,14 +201,15 @@ export default function HomePage() {
       {/* Interactive Renewal Demo Sandbox Section */}
       <section id="demo" className="py-16 px-4 sm:px-8 max-w-5xl mx-auto border-t border-slate-200">
         <div className="text-center mb-8">
-          <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-700">
-            LIVE SANDBOX ENVIRONMENT
-          </span>
+          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-50 border border-amber-300 text-amber-900 text-xs font-bold uppercase tracking-wider mb-3 shadow-xs">
+            <span className="flex h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+            <span>Interactive Demo Sandbox &bull; Simulated Settlement & Test Certificates</span>
+          </div>
           <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight mt-1">
             Experience ActionOS in Action
           </h2>
           <p className="text-xs sm:text-sm text-slate-600 mt-2 max-w-xl mx-auto">
-            Try the benchmark Toyota Camry (ABC-123-XY) renewal workflow below. Speak in Nigerian English, Pidgin, Yoruba, Hausa, or Igbo.
+            Try the benchmark Toyota Camry (ABC-123-XY) renewal workflow below. Speak or type in Nigerian English, Pidgin, Yorùbá, Hausa, or Igbo.
           </p>
         </div>
 
@@ -233,7 +234,7 @@ export default function HomePage() {
             </div>
             <h3 className="text-base font-bold text-slate-900">1. Understand</h3>
             <p className="text-xs text-slate-600 mt-2 leading-relaxed">
-              Native N-ATLAS voice adapter understanding English, Pidgin, Yoruba, Hausa, and Igbo with zero hallucinations.
+              Native N-ATLAS multilingual voice adapter parsing English, Pidgin, Yorùbá, Hausa, and Igbo with deterministic schema validation to constrain AI outputs.
             </p>
           </div>
 
@@ -283,7 +284,7 @@ export default function HomePage() {
             </div>
             <h3 className="text-base font-bold text-slate-900">6. Audit</h3>
             <p className="text-xs text-slate-600 mt-2 leading-relaxed">
-              Signature Action Ledger™ recording every millisecond, actor, tool, and cryptographic token for complete compliance.
+              Signature Action Ledger™ recording every actor, tool execution, and SHA-256 Merkle hash chain for independent, tamper-evident verification.
             </p>
           </div>
         </div>

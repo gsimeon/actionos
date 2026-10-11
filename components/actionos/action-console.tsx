@@ -8,13 +8,19 @@ import {
   Globe,
   Radio,
   CheckCircle,
+  CheckCircle2,
   Clock,
+  FileCheck,
+  AlertTriangle,
+  X,
+  Printer,
 } from "lucide-react";
 import { VoiceActionButton } from "@/components/voice/voice-action-button";
 import { AuthorizationCard, type AuthorizationOptions } from "./authorization-dialog";
 import { ActionLedger } from "./action-ledger";
 import type { ActionLedgerEvent, AuthorizationDetails } from "@/types/actionos";
 import type { ActionSessionStatus } from "@/types/database";
+import { formatNaira, formatDate } from "@/lib/utils";
 
 const PRESET_PROMPTS = [
   {
@@ -79,10 +85,22 @@ const WORKFLOW_STEPS: Array<{ key: ActionSessionStatus; label: string }> = [
   { key: "planning", label: "Planning" },
   { key: "validating", label: "Validating" },
   { key: "awaiting_authorization", label: "Authorization Gate" },
-  { key: "executing", label: "Execution" },
+  { key: "executing", label: "Execution (Sandbox)" },
   { key: "verifying", label: "Verification" },
   { key: "completed", label: "Completed" },
 ];
+
+interface CompletedOutcome {
+  vehicle: string;
+  plateNumber: string;
+  underwriter: string;
+  amount: number;
+  currentExpiry?: string;
+  newExpiry: string;
+  policyNumber: string;
+  certificateNumber: string;
+  paymentReference: string;
+}
 
 export function ActionConsole() {
   const [inputText, setInputText] = useState("My car insurance expires next week. Check it and renew it for me.");
@@ -93,6 +111,8 @@ export function ActionConsole() {
   const [responseMessage, setResponseMessage] = useState<string | null>(null);
   const [authDetails, setAuthDetails] = useState<AuthorizationDetails | null>(null);
   const [ledgerEvents, setLedgerEvents] = useState<ActionLedgerEvent[]>([]);
+  const [completedOutcome, setCompletedOutcome] = useState<CompletedOutcome | null>(null);
+  const [showCertModal, setShowCertModal] = useState(false);
 
   const handleStartWorkflow = async (textToUse?: string) => {
     const text = textToUse || inputText;
@@ -101,6 +121,8 @@ export function ActionConsole() {
     setIsLoading(true);
     setResponseMessage(null);
     setAuthDetails(null);
+    setCompletedOutcome(null);
+    setShowCertModal(false);
 
     try {
       const res = await fetch("/api/actions", {
@@ -156,6 +178,29 @@ export function ActionConsole() {
         setSessionStatus(json.data.status);
         setResponseMessage(json.data.message);
         setLedgerEvents(json.data.events || []);
+
+        if (json.data.status === "completed") {
+          const events: ActionLedgerEvent[] = json.data.events || [];
+          const certEvent = events.find(
+            (e) => e.tool === "generate_certificate" || e.action === "issue_certificate"
+          );
+          const payEvent = events.find(
+            (e) => e.tool === "execute_payment" || e.action === "execute_payment"
+          );
+
+          setCompletedOutcome({
+            vehicle: authDetails?.assetName || "Toyota Camry",
+            plateNumber: authDetails?.assetIdentifier || "ABC-123-XY",
+            underwriter: authDetails?.providerName || options?.selectedUnderwriter || "Leadway Assurance",
+            amount: options?.customAmount || authDetails?.amount || 87500,
+            currentExpiry: authDetails?.currentExpiry || new Date().toISOString(),
+            newExpiry: authDetails?.newExpiry || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+            policyNumber: authDetails?.policyNumber || "AUTO-2026-00182",
+            certificateNumber: certEvent?.referenceId || `NAICOM-2026-CERT-${Math.floor(100000 + Math.random() * 900000)}`,
+            paymentReference: payEvent?.referenceId || `PAY-2026-${Math.floor(100000 + Math.random() * 900000)}`,
+          });
+        }
+
         if (
           json.data.status === "completed" ||
           json.data.status === "cancelled" ||
@@ -230,7 +275,31 @@ export function ActionConsole() {
               <Radio className="w-3.5 h-3.5 text-emerald-600 animate-pulse" />
               <span>N-ATLAS Adapter</span>
             </div>
+
+            {/* Sandbox Mode badge */}
+            <div
+              className="flex items-center gap-1.5 bg-amber-50 text-amber-950 border border-amber-300 px-3 py-1.5 rounded-xl text-xs font-bold shadow-xs"
+              title="Demo Sandbox: Payment settlement is simulated and certificates are non-statutory test fixtures."
+            >
+              <span className="flex h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+              <span>DEMO / SANDBOX</span>
+            </div>
           </div>
+        </div>
+
+        {/* Sandbox Notice Banner */}
+        <div className="mb-5 px-3.5 py-2.5 rounded-2xl bg-amber-50/70 border border-amber-200 text-xs text-amber-900 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-2xs">
+          <div className="flex items-center gap-2">
+            <span className="font-black bg-amber-200 text-amber-950 px-2 py-0.5 rounded-md text-[10px] tracking-wide">
+              SANDBOX NOTICE
+            </span>
+            <span className="text-[11px] font-medium text-amber-900">
+              Simulated Paystack gateway rails and non-statutory test certificate fixtures. No real funds are debited.
+            </span>
+          </div>
+          <span className="font-mono text-[10px] text-amber-700 font-bold self-end sm:self-auto">
+            FIXTURE: NON_STATUTORY
+          </span>
         </div>
 
         {/* Input bar */}
@@ -368,10 +437,224 @@ export function ActionConsole() {
         />
       )}
 
+      {/* 05: Verify and Audit — Verified Execution Outcome & Certificate Preview */}
+      {sessionStatus === "completed" && completedOutcome && (
+        <div className="rounded-3xl border-2 border-emerald-400/80 bg-gradient-to-b from-white via-emerald-50/20 to-emerald-50/40 p-6 sm:p-8 shadow-xl shadow-emerald-500/10 space-y-6 animate-in fade-in duration-300">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-emerald-100 pb-4">
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-800 border border-emerald-300 shadow-xs">
+                <CheckCircle2 className="h-6 w-6 text-emerald-700" />
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-base font-extrabold text-slate-900 tracking-tight">
+                    Workflow Completed: Verified Renewal & Test Certificate
+                  </h3>
+                  <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-black text-emerald-900 border border-emerald-300">
+                    EXECUTION VERIFIED
+                  </span>
+                  <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-[10px] font-black text-amber-900 border border-amber-300">
+                    SANDBOX RECORD
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600 mt-0.5 font-medium">
+                  Autonomous lifecycle finished: eligibility validated, customer authorized, simulated payment settled, and policy rolled forward.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 self-start sm:self-auto">
+              <button
+                type="button"
+                onClick={() => setShowCertModal(true)}
+                className="px-3.5 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 text-xs font-bold shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+              >
+                <FileCheck className="w-3.5 h-3.5 text-emerald-600" />
+                <span>View Certificate Preview</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Details 4-box grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+            <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-2xs">
+              <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block mb-1">
+                POLICY STATE
+              </span>
+              <div className="text-xs font-bold text-slate-900">
+                {completedOutcome.vehicle}
+              </div>
+              <div className="text-[11px] font-mono text-emerald-700 font-bold mt-0.5">
+                {completedOutcome.plateNumber} &bull; {completedOutcome.policyNumber}
+              </div>
+              <div className="mt-2 text-[10px] text-slate-500">
+                New Expiry: <strong className="text-slate-800">{formatDate(completedOutcome.newExpiry)}</strong>
+              </div>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-2xs">
+              <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block mb-1">
+                SIMULATED SETTLEMENT
+              </span>
+              <div className="text-sm font-black font-mono text-emerald-700">
+                {formatNaira(completedOutcome.amount)}
+              </div>
+              <div className="text-[10px] text-slate-600 font-medium mt-0.5">
+                Rail: <strong className="text-slate-800">Paystack (Simulated)</strong>
+              </div>
+              <div className="mt-1 text-[10px] font-mono text-slate-400 truncate">
+                Ref: {completedOutcome.paymentReference}
+              </div>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-2xs">
+              <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block mb-1">
+                STATUTORY RECORD
+              </span>
+              <div className="text-xs font-bold text-slate-900">
+                {completedOutcome.underwriter}
+              </div>
+              <div className="text-[10px] font-mono text-emerald-700 font-bold mt-0.5 truncate">
+                {completedOutcome.certificateNumber}
+              </div>
+              <div className="mt-2 inline-block px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-amber-100 text-amber-900 border border-amber-200">
+                NON-STATUTORY FIXTURE
+              </div>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-2xs">
+              <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block mb-1">
+                CRYPTOGRAPHIC AUDIT
+              </span>
+              <div className="text-xs font-bold text-slate-900">
+                Action Ledger™
+              </div>
+              <div className="text-[10px] text-emerald-700 font-medium mt-0.5">
+                {ledgerEvents.length} Atomic Events Chained
+              </div>
+              <div className="mt-2 text-[10px] text-slate-500 font-mono">
+                SHA-256 Merkle verified
+              </div>
+            </div>
+          </div>
+
+          {/* Sandbox Disclosure Callout */}
+          <div className="p-3.5 rounded-2xl bg-amber-50/80 border border-amber-200 text-xs text-amber-950 flex items-start gap-2.5">
+            <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+            <div className="leading-relaxed">
+              <strong>Sandbox Disclosure:</strong> This transaction and generated certificate (#{completedOutcome.certificateNumber}) are simulated demo fixtures for the NITDA 2026 AI Innovation Challenge. In production deployment, ActionOS verifies policies against the live NAICOM NIID database and processes real settlement via production Paystack keys.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Test Certificate Preview Modal */}
+      {showCertModal && completedOutcome && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="relative w-full max-w-xl rounded-3xl bg-white p-6 sm:p-8 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto">
+            {/* Modal close */}
+            <button
+              type="button"
+              onClick={() => setShowCertModal(false)}
+              className="absolute top-5 right-5 p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            {/* Certificate Header */}
+            <div className="text-center pb-4 border-b border-slate-100 relative">
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-100 text-amber-950 border border-amber-300 text-[10px] font-black uppercase tracking-wider mb-2">
+                DEMO / SANDBOX FIXTURE &bull; NON-STATUTORY
+              </div>
+              <h2 className="text-lg font-black text-slate-900 tracking-tight">
+                FEDERAL REPUBLIC OF NIGERIA
+              </h2>
+              <div className="text-xs font-bold text-slate-600 uppercase tracking-wider">
+                National Insurance Commission (NAICOM) &bull; NIID Electronic Certificate
+              </div>
+              <div className="text-[11px] text-slate-400 font-mono mt-0.5">
+                Motor Vehicles (Third Party Insurance) Act 1950 / Insurance Act 2003
+              </div>
+            </div>
+
+            {/* Simulated Watermark Background */}
+            <div className="my-5 p-5 rounded-2xl bg-slate-50 border border-slate-200 relative overflow-hidden space-y-3 font-mono text-xs">
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-5 rotate-[-20deg] select-none text-4xl font-black text-slate-900">
+                SIMULATED TEST FIXTURE
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 text-slate-700">
+                <div>
+                  <span className="text-[10px] text-slate-400 font-bold block">CERTIFICATE NUMBER</span>
+                  <span className="font-bold text-slate-900">{completedOutcome.certificateNumber}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-400 font-bold block">POLICY NUMBER</span>
+                  <span className="font-bold text-slate-900">{completedOutcome.policyNumber}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-400 font-bold block">REGISTRATION NO. (PLATE)</span>
+                  <span className="font-bold text-emerald-800">{completedOutcome.plateNumber}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-400 font-bold block">VEHICLE DESCRIPTION</span>
+                  <span className="font-bold text-slate-900">{completedOutcome.vehicle}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-400 font-bold block">UNDERWRITER</span>
+                  <span className="font-bold text-slate-900">{completedOutcome.underwriter}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-400 font-bold block">PREMIUM SETTLED</span>
+                  <span className="font-bold text-emerald-800">{formatNaira(completedOutcome.amount)} (Simulated)</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-400 font-bold block">EFFECTIVE FROM</span>
+                  <span>{formatDate(completedOutcome.currentExpiry || new Date().toISOString())}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-400 font-bold block">EXPIRING AT</span>
+                  <span className="font-bold text-emerald-800">{formatDate(completedOutcome.newExpiry)}</span>
+                </div>
+              </div>
+
+              <div className="pt-3 border-t border-slate-200/80 text-[10px] text-slate-500 font-sans leading-relaxed">
+                This certificate certifies that an insurance policy covering the liabilities described in the Insurance Act has been issued for the designated vehicle.
+                <strong className="block text-amber-900 mt-1">
+                  NOTICE: Generated in sandbox mode by ActionOS for evaluation purposes. Not a statutory document for law enforcement or roadworthiness inspection.
+                </strong>
+              </div>
+            </div>
+
+            {/* Modal actions */}
+            <div className="flex items-center justify-between pt-2">
+              <span className="text-[11px] text-slate-400 font-mono">
+                SESSION: {sessionId || "N/A"}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  window.print();
+                }}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs transition-all flex items-center gap-1.5 cursor-pointer"
+              >
+                <Printer className="w-3.5 h-3.5 text-slate-600" />
+                <span>Print / Save PDF</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Signature Action Ledger Timeline */}
       <ActionLedger
         events={ledgerEvents}
         sessionId={sessionId || undefined}
+        onRunSampleAction={() => {
+          setInputText(PRESET_PROMPTS[0].text);
+          setSelectedLanguage(PRESET_PROMPTS[0].lang);
+          handleStartWorkflow(PRESET_PROMPTS[0].text);
+        }}
       />
     </div>
   );

@@ -219,6 +219,18 @@ export class PaystackPaymentProvider implements IPaymentProvider {
       throw new Error("Transaction reference is required for refund processing");
     }
 
+    // Validate refund amount if provided: reject zero, negative, non-finite, or invalid-precision amounts
+    let amountKobo: number | undefined;
+    if (amount !== undefined) {
+      if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
+        throw new Error("Invalid refund amount: amount must be a finite positive number strictly greater than zero");
+      }
+      if (Math.abs(amount * 100 - Math.round(amount * 100)) > 1e-6) {
+        throw new Error("Invalid refund amount precision: amount cannot have more than 2 decimal places");
+      }
+      amountKobo = Math.round(amount * 100);
+    }
+
     let response: Response;
     try {
       response = await fetch("https://api.paystack.co/refund", {
@@ -229,7 +241,7 @@ export class PaystackPaymentProvider implements IPaymentProvider {
         },
         body: JSON.stringify({
           transaction: reference.trim(),
-          amount: amount ? Math.round(amount * 100) : undefined,
+          amount: amountKobo,
         }),
       });
     } catch (err: unknown) {

@@ -174,6 +174,99 @@ describe("Paystack Payment & Renewal Orchestration Hardening Regression Suite", 
       assert.ok(refundRes.error?.code === "REFUND_REJECTED" || refundRes.error?.code === "REFUND_FAILED");
       assert.equal(refundRes.data?.refundState, "refund_failed");
     });
+
+    it("should reject refund requests with zero or negative amount", async () => {
+      const refundTool = new RefundPaymentTool();
+      const execCtx = createWorkflowExecutionContext(DEMO_CONTEXT, {
+        sessionId: "sess_refund_invalid_amt",
+        planId: "plan_inv_1",
+        channel: "web",
+      });
+
+      // Zero amount via validateInput
+      const valZero = refundTool.validateInput({ reference: "ref_test_0", amount: 0 });
+      assert.equal(valZero.valid, false);
+      assert.ok(valZero.error?.includes("strictly greater than zero"));
+
+      // Negative amount via validateInput
+      const valNeg = refundTool.validateInput({ reference: "ref_test_neg", amount: -1500 });
+      assert.equal(valNeg.valid, false);
+      assert.ok(valNeg.error?.includes("strictly greater than zero"));
+
+      // Zero amount via execute
+      const resZero = await refundTool.execute({ reference: "ref_test_0", amount: 0, reason: "Zero amount test" }, execCtx);
+      assert.equal(resZero.success, false);
+      assert.equal(resZero.error?.code, "INVALID_REFUND_AMOUNT");
+
+      // Negative amount via execute
+      const resNeg = await refundTool.execute({ reference: "ref_test_neg", amount: -500, reason: "Negative amount test" }, execCtx);
+      assert.equal(resNeg.success, false);
+      assert.equal(resNeg.error?.code, "INVALID_REFUND_AMOUNT");
+    });
+
+    it("should reject refund requests with invalid precision exceeding 2 decimal places", async () => {
+      const refundTool = new RefundPaymentTool();
+      const execCtx = createWorkflowExecutionContext(DEMO_CONTEXT, {
+        sessionId: "sess_refund_invalid_prec",
+        planId: "plan_inv_2",
+        channel: "web",
+      });
+
+      // Fractional kobo via validateInput
+      const valPrec = refundTool.validateInput({ reference: "ref_test_prec", amount: 1250.555 });
+      assert.equal(valPrec.valid, false);
+      assert.ok(valPrec.error?.includes("2 decimal places"));
+
+      // Fractional kobo via execute
+      const resPrec = await refundTool.execute({ reference: "ref_test_prec", amount: 1250.555, reason: "Precision test" }, execCtx);
+      assert.equal(resPrec.success, false);
+      assert.equal(resPrec.error?.code, "INVALID_REFUND_PRECISION");
+    });
+
+    it("should reject refund requests exceeding remaining refundable balance before calling payment provider", async () => {
+      resetStore();
+      const repos = getRepositoryContainer();
+      const ref = "ref_balance_check_001";
+      const quoteAmount = 87500;
+
+      await repos.transactions.create(
+        {
+          customer_id: DEMO_CONTEXT.customerId!,
+          amount: quoteAmount,
+          currency: "NGN",
+          reference: ref,
+          status: "succeeded",
+          transaction_type: "renewal_premium",
+          metadata: {
+            cumulative_refund_amount: 50000,
+            remaining_balance: 37500,
+          },
+        },
+        DEMO_CONTEXT
+      );
+
+      const refundTool = new RefundPaymentTool();
+      const execCtx = createWorkflowExecutionContext(DEMO_CONTEXT, {
+        sessionId: "sess_refund_exceed_bal",
+        planId: "plan_exceed_bal",
+        channel: "web",
+      });
+
+      // Request ₦40,000 refund when remaining balance is only ₦37,500
+      const refundRes = await refundTool.execute(
+        {
+          reference: ref,
+          amount: 40000,
+          currency: "NGN",
+          reason: "Excessive refund attempt",
+        },
+        execCtx
+      );
+
+      assert.equal(refundRes.success, false);
+      assert.equal(refundRes.error?.code, "CUMULATIVE_REFUND_LIMIT_EXCEEDED");
+      assert.ok(refundRes.error?.message.includes("exceeds remaining refundable balance"));
+    });
   });
 
   // Scenario 3: Incorrect amount, currency, or transaction reference
@@ -1029,6 +1122,229 @@ describe("Paystack Payment & Renewal Orchestration Hardening Regression Suite", 
       const updatedSession = await repos.sessions.findById(session.id, DEMO_CONTEXT);
       assert.equal(updatedSession?.metadata?.refundState, "refund_confirmed");
       assert.equal(updatedSession?.metadata?.reconciliation_required, false);
+    });
+  });
+
+  // Scenario 7: Refund Verification Reference Requirement & Partial-Refund Invariants
+  describe("7. Refund Verification Reference Requirement & Partial-Refund Invariants", () => {
+    it("Paystack adapter rejects non-positive, zero, non-finite, and multi-decimal amounts before outbound request", async () => {
+      const provider = new PaystackPaymentProvider("sk_test_mock_key_001");
+
+      // Test 0 amount
+      await assert.rejects(
+        async () => provider.refundPayment("ref_test_01", 0),
+        /Invalid refund amount: amount must be a finite positive number strictly greater than zero/
+      );
+
+      // Test negative amount
+      await assert.rejects(
+        async () => provider.refundPayment("ref_test_01", -5000),
+        /Invalid refund amount: amount must be a finite positive number strictly greater than zero/
+      );
+
+      // Test NaN
+      await assert.rejects(
+        async () => provider.refundPayment("ref_test_01", NaN),
+        /Invalid refund amount: amount must be a finite positive number strictly greater than zero/
+      );
+
+      // Test Infinity
+      await assert.rejects(
+        async () => provider.refundPayment("ref_test_01", Infinity),
+        /Invalid refund amount: amount must be a finite positive number strictly greater than zero/
+      );
+
+      // Test more than 2 decimal places
+      await assert.rejects(
+        async () => provider.refundPayment("ref_test_01", 1234.567),
+        /Invalid refund amount precision: amount cannot have more than 2 decimal places/
+      );
+    });
+
+    it("RefundPaymentTool rejects refund exceeding remaining refundable balance before calling gateway", async () => {
+      resetStore();
+      const repos = getRepositoryContainer();
+      const ref = "ref_balance_check_001";
+      const originalAmount = 50000;
+
+      await repos.transactions.create(
+        {
+          customer_id: DEMO_CONTEXT.customerId!,
+          organization_id: DEMO_CONTEXT.organizationId,
+          amount: originalAmount,
+          currency: "NGN",
+          reference: ref,
+          status: "partially_refunded",
+          transaction_type: "renewal_premium",
+          metadata: {
+            cumulative_refund_amount: 30000,
+            remaining_balance: 20000,
+          },
+        },
+        DEMO_CONTEXT
+      );
+
+      const refundTool = new RefundPaymentTool();
+      const execCtx = createWorkflowExecutionContext(DEMO_CONTEXT, {
+        sessionId: "sess_balance_check_01",
+        planId: "plan_01",
+        channel: "web",
+      });
+
+      // Attempt to refund 25,000 when only 20,000 remains refundable
+      const res = await refundTool.execute(
+        {
+          reference: ref,
+          amount: 25000,
+          currency: "NGN",
+          reason: "Customer partial cancellation",
+        },
+        execCtx
+      );
+
+      assert.equal(res.success, false);
+      assert.equal(res.error?.code, "CUMULATIVE_REFUND_LIMIT_EXCEEDED");
+      assert.ok(res.error?.message.includes("exceeds remaining refundable balance (20000)"));
+    });
+
+    it("webhook rejects refund when authoritative provider verification omits transactionReference", async () => {
+      resetStore();
+      const repos = getRepositoryContainer();
+      const txRef = "ref_orig_pay_missing_001";
+      const refundRef = "ref_refund_missing_001";
+
+      await repos.transactions.create(
+        {
+          customer_id: DEMO_CONTEXT.customerId!,
+          organization_id: DEMO_CONTEXT.organizationId,
+          amount: 87500,
+          currency: "NGN",
+          reference: txRef,
+          status: "succeeded",
+          transaction_type: "renewal_premium",
+        },
+        DEMO_CONTEXT
+      );
+
+      // Provider confirms refund but omits original transactionReference
+      const mockProvider = {
+        name: "Mock Provider Missing Ref",
+        async requestPayment() { return { status: "succeeded" as const, reference: txRef }; },
+        async verifyPayment() { return { status: "succeeded" as const, amount: 87500, currency: "NGN", providerReference: txRef }; },
+        async refundPayment() { return { status: "refund_confirmed" as const, refundReference: refundRef, amount: 87500, currency: "NGN" }; },
+        async verifyRefund(rRef: string) {
+          return {
+            status: "refund_confirmed" as const,
+            refundReference: rRef,
+            // transactionReference is intentionally omitted!
+            amount: 87500,
+            currency: "NGN",
+          };
+        },
+      };
+
+      const origStrict = process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION;
+      process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION = "true";
+      setPaymentProvider(mockProvider);
+      try {
+        const webhookPayload = JSON.stringify({
+          event: "refund.processed",
+          data: {
+            id: 998877,
+            reference: refundRef,
+            refund_reference: refundRef,
+            transaction_reference: txRef,
+            amount: 8750000,
+            currency: "NGN",
+            status: "processed",
+          },
+        });
+
+        const req = new Request("https://actionos.ng/api/webhooks/payment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: webhookPayload,
+        });
+
+        const res = await paymentWebhookHandler(req);
+        assert.equal(res.status, 422);
+
+        const json = (await res.json()) as { error: { code: string; message: string } };
+        assert.equal(json.error.code, "PROVIDER_REFUND_TRANSACTION_REFERENCE_REQUIRED");
+      } finally {
+        setPaymentProvider(null);
+        process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION = origStrict;
+      }
+    });
+
+    it("webhook rejects refund when authoritative provider verification reports mismatched transactionReference", async () => {
+      resetStore();
+      const repos = getRepositoryContainer();
+      const txRef = "ref_orig_pay_correct_001";
+      const refundRef = "ref_refund_mismatch_001";
+
+      await repos.transactions.create(
+        {
+          customer_id: DEMO_CONTEXT.customerId!,
+          organization_id: DEMO_CONTEXT.organizationId,
+          amount: 87500,
+          currency: "NGN",
+          reference: txRef,
+          status: "succeeded",
+          transaction_type: "renewal_premium",
+        },
+        DEMO_CONTEXT
+      );
+
+      // Provider confirms refund but attributes it to a different original transaction
+      const mockProvider = {
+        name: "Mock Provider Mismatch Ref",
+        async requestPayment() { return { status: "succeeded" as const, reference: txRef }; },
+        async verifyPayment() { return { status: "succeeded" as const, amount: 87500, currency: "NGN", providerReference: txRef }; },
+        async refundPayment() { return { status: "refund_confirmed" as const, refundReference: refundRef, amount: 87500, currency: "NGN" }; },
+        async verifyRefund(rRef: string) {
+          return {
+            status: "refund_confirmed" as const,
+            refundReference: rRef,
+            transactionReference: "ref_other_transaction_unrelated",
+            amount: 87500,
+            currency: "NGN",
+          };
+        },
+      };
+
+      const origStrict = process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION;
+      process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION = "true";
+      setPaymentProvider(mockProvider);
+      try {
+        const webhookPayload = JSON.stringify({
+          event: "refund.processed",
+          data: {
+            id: 998878,
+            reference: refundRef,
+            refund_reference: refundRef,
+            transaction_reference: txRef,
+            amount: 8750000,
+            currency: "NGN",
+            status: "processed",
+          },
+        });
+
+        const req = new Request("https://actionos.ng/api/webhooks/payment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: webhookPayload,
+        });
+
+        const res = await paymentWebhookHandler(req);
+        assert.equal(res.status, 422);
+
+        const json = (await res.json()) as { error: { code: string; message: string } };
+        assert.equal(json.error.code, "PROVIDER_REFUND_TRANSACTION_MISMATCH");
+      } finally {
+        setPaymentProvider(null);
+        process.env.ACTIONOS_STRICT_PROVIDER_VERIFICATION = origStrict;
+      }
     });
   });
 });
