@@ -111,6 +111,8 @@ export interface IActionStepRepository {
 }
 
 export interface ITransactionRepository {
+  findAll(options?: { status?: string; customerId?: string; limit?: number; tenant?: TenantContext }): Promise<Transaction[]>;
+  findById(id: string, tenant?: TenantContext): Promise<Transaction | null>;
   create(data: Partial<Transaction> & { customer_id: string; amount: number; reference: string }, tenant?: TenantContext): Promise<Transaction>;
   findByReference(reference: string, tenant?: TenantContext): Promise<Transaction | null>;
   updateStatus(
@@ -185,12 +187,16 @@ export interface FinalizeRefundSettlementResult {
 }
 
 export interface IDocumentRepository {
+  findAll(options?: { customerId?: string; documentType?: string; renewalId?: string; limit?: number; tenant?: TenantContext }): Promise<Document[]>;
+  findById(id: string, tenant?: TenantContext): Promise<Document | null>;
   create(data: Partial<Document> & { customer_id: string; document_type: Document["document_type"]; file_path: string; file_name: string }, tenant?: TenantContext): Promise<Document>;
   findByCustomerId(customerId: string, tenant?: TenantContext): Promise<Document[]>;
   findByRenewalId(renewalId: string, tenant?: TenantContext): Promise<Document[]>;
 }
 
 export interface INotificationRepository {
+  findAll(options?: { customerId?: string; channel?: string; limit?: number; tenant?: TenantContext }): Promise<NotificationRecord[]>;
+  findById(id: string, tenant?: TenantContext): Promise<NotificationRecord | null>;
   create(data: Partial<NotificationRecord> & { customer_id: string; type: NotificationRecord["type"]; channel: NotificationRecord["channel"]; title: string; message: string; scheduled_for: string }, tenant?: TenantContext): Promise<NotificationRecord>;
   findByCustomerId(customerId: string, tenant?: TenantContext): Promise<NotificationRecord[]>;
 }

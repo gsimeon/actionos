@@ -726,6 +726,36 @@ export class DemoActionStepRepository implements IActionStepRepository {
 export class DemoTransactionRepository implements ITransactionRepository {
   constructor(private webhookRepo?: IWebhookEventRepository) {}
 
+  async findAll(options?: { status?: string; customerId?: string; limit?: number; tenant?: TenantContext }): Promise<Transaction[]> {
+    const store = getStore();
+    let txs = store.transactions.filter((t) => {
+      if (options?.status && options.status !== "all" && t.status !== options.status) return false;
+      if (options?.customerId && t.customer_id !== options.customerId) return false;
+      if (options?.tenant?.customerId && t.customer_id !== options.tenant.customerId) return false;
+      if (options?.tenant?.organizationId) {
+        const cust = store.customers.find((c) => c.id === t.customer_id);
+        if (!cust || cust.organization_id !== options.tenant.organizationId) return false;
+      }
+      return true;
+    });
+    if (options?.limit && options.limit > 0) {
+      txs = txs.slice(0, options.limit);
+    }
+    return txs;
+  }
+
+  async findById(id: string, tenant?: TenantContext): Promise<Transaction | null> {
+    const store = getStore();
+    const tx = store.transactions.find((t) => t.id === id);
+    if (!tx) return null;
+    if (tenant?.customerId && tx.customer_id !== tenant.customerId) return null;
+    if (tenant?.organizationId) {
+      const cust = store.customers.find((c) => c.id === tx.customer_id);
+      if (!cust || cust.organization_id !== tenant.organizationId) return null;
+    }
+    return tx;
+  }
+
   async create(data: Partial<Transaction> & { customer_id: string; amount: number; reference: string }, tenant?: TenantContext): Promise<Transaction> {
     const store = getStore();
     if (tenant?.customerId && data.customer_id !== tenant.customerId) {
@@ -1301,6 +1331,37 @@ export class DemoTransactionRepository implements ITransactionRepository {
 }
 
 export class DemoDocumentRepository implements IDocumentRepository {
+  async findAll(options?: { customerId?: string; documentType?: string; renewalId?: string; limit?: number; tenant?: TenantContext }): Promise<Document[]> {
+    const store = getStore();
+    let docs = store.documents.filter((d) => {
+      if (options?.customerId && d.customer_id !== options.customerId) return false;
+      if (options?.documentType && options.documentType !== "all" && d.document_type !== options.documentType) return false;
+      if (options?.renewalId && d.renewal_id !== options.renewalId) return false;
+      if (options?.tenant?.customerId && d.customer_id !== options.tenant.customerId) return false;
+      if (options?.tenant?.organizationId) {
+        const cust = store.customers.find((c) => c.id === d.customer_id);
+        if (!cust || cust.organization_id !== options.tenant.organizationId) return false;
+      }
+      return true;
+    });
+    if (options?.limit && options.limit > 0) {
+      docs = docs.slice(0, options.limit);
+    }
+    return docs;
+  }
+
+  async findById(id: string, tenant?: TenantContext): Promise<Document | null> {
+    const store = getStore();
+    const doc = store.documents.find((d) => d.id === id);
+    if (!doc) return null;
+    if (tenant?.customerId && doc.customer_id !== tenant.customerId) return null;
+    if (tenant?.organizationId) {
+      const cust = store.customers.find((c) => c.id === doc.customer_id);
+      if (!cust || cust.organization_id !== tenant.organizationId) return null;
+    }
+    return doc;
+  }
+
   async create(data: Partial<Document> & { customer_id: string; document_type: Document["document_type"]; file_path: string; file_name: string }, tenant?: TenantContext): Promise<Document> {
     const store = getStore();
     if (tenant?.customerId && data.customer_id !== tenant.customerId) {
@@ -1352,6 +1413,36 @@ export class DemoDocumentRepository implements IDocumentRepository {
 }
 
 export class DemoNotificationRepository implements INotificationRepository {
+  async findAll(options?: { customerId?: string; channel?: string; limit?: number; tenant?: TenantContext }): Promise<NotificationRecord[]> {
+    const store = getStore();
+    let notifs = store.notifications.filter((n) => {
+      if (options?.customerId && n.customer_id !== options.customerId) return false;
+      if (options?.channel && options.channel !== "all" && n.channel !== options.channel) return false;
+      if (options?.tenant?.customerId && n.customer_id !== options.tenant.customerId) return false;
+      if (options?.tenant?.organizationId) {
+        const cust = store.customers.find((c) => c.id === n.customer_id);
+        if (!cust || cust.organization_id !== options.tenant.organizationId) return false;
+      }
+      return true;
+    });
+    if (options?.limit && options.limit > 0) {
+      notifs = notifs.slice(0, options.limit);
+    }
+    return notifs;
+  }
+
+  async findById(id: string, tenant?: TenantContext): Promise<NotificationRecord | null> {
+    const store = getStore();
+    const notif = store.notifications.find((n) => n.id === id);
+    if (!notif) return null;
+    if (tenant?.customerId && notif.customer_id !== tenant.customerId) return null;
+    if (tenant?.organizationId) {
+      const cust = store.customers.find((c) => c.id === notif.customer_id);
+      if (!cust || cust.organization_id !== tenant.organizationId) return null;
+    }
+    return notif;
+  }
+
   async create(data: Partial<NotificationRecord> & { customer_id: string; type: NotificationRecord["type"]; channel: NotificationRecord["channel"]; title: string; message: string; scheduled_for: string }, tenant?: TenantContext): Promise<NotificationRecord> {
     const store = getStore();
     if (tenant?.customerId && data.customer_id !== tenant.customerId) {

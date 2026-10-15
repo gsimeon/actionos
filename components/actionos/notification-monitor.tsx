@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Bell,
   MessageSquare,
@@ -11,7 +11,10 @@ import {
   ShieldCheck,
   Download,
   ExternalLink,
+  RotateCcw,
 } from "lucide-react";
+import type { NotificationRecord } from "@/types/database";
+import { formatDateTime } from "@/lib/utils";
 
 export interface NotificationPreview {
   channel: "in_app" | "sms" | "whatsapp" | "email";
@@ -62,41 +65,115 @@ export function NotificationMonitor() {
   const [notifications, setNotifications] = useState<NotificationPreview[]>(BENCHMARK_NOTIFICATIONS);
   const [isDispatching, setIsDispatching] = useState(false);
   const [dispatchSuccess, setDispatchSuccess] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  const handleDispatchTest = (channel: "whatsapp" | "sms" | "email" | "in_app") => {
+  const fetchLiveNotifications = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/notifications");
+      const json = await res.json();
+      if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+        // Map live records into previews
+        const liveMapped: NotificationPreview[] = json.data.map((r: NotificationRecord) => ({
+          channel: (r.channel as "whatsapp" | "sms" | "email" | "in_app") || "in_app",
+          recipient:
+            r.channel === "sms"
+              ? "+234 801 111 1111"
+              : r.channel === "email"
+              ? "customer@actionos.ng"
+              : r.channel === "whatsapp"
+              ? "+234 801 111 1111 (Demo Customer)"
+              : "In-App Notification Feed",
+          title: r.title,
+          body: r.message,
+          timestamp: formatDateTime(r.sent_at || r.scheduled_for),
+          status: "delivered",
+        }));
+
+        setNotifications([...liveMapped, ...BENCHMARK_NOTIFICATIONS]);
+      }
+    } catch (err) {
+      console.error("Failed to fetch notifications", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      try {
+        const res = await fetch("/api/notifications");
+        const json = await res.json();
+        if (active && json.success && Array.isArray(json.data) && json.data.length > 0) {
+          const liveMapped: NotificationPreview[] = json.data.map((r: NotificationRecord) => ({
+            channel: (r.channel as "whatsapp" | "sms" | "email" | "in_app") || "in_app",
+            recipient:
+              r.channel === "sms"
+                ? "+234 801 111 1111"
+                : r.channel === "email"
+                ? "customer@actionos.ng"
+                : r.channel === "whatsapp"
+                ? "+234 801 111 1111 (Demo Customer)"
+                : "In-App Notification Feed",
+            title: r.title,
+            body: r.message,
+            timestamp: formatDateTime(r.sent_at || r.scheduled_for),
+            status: "delivered",
+          }));
+          setNotifications([...liveMapped, ...BENCHMARK_NOTIFICATIONS]);
+        }
+      } catch (err) {
+        console.error("Failed to fetch notifications", err);
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+    load();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const handleDispatchTest = async (channel: "whatsapp" | "sms" | "email" | "in_app") => {
     setIsDispatching(true);
     setDispatchSuccess(false);
 
-    setTimeout(() => {
-      const newNotif: NotificationPreview = {
-        channel,
-        recipient:
-          channel === "whatsapp"
-            ? "+234 801 111 1111 (Demo Customer)"
-            : channel === "sms"
-            ? "+234 801 111 1111"
-            : channel === "email"
-            ? "customer@actionos.ng"
-            : "In-App Notification Feed",
-        title:
-          channel === "whatsapp"
-            ? "ActionOS Renew — Live Dispatch"
-            : channel === "sms"
-            ? "ActionOS Statutory SMS Alert"
-            : channel === "email"
-            ? "Instant Policy Renewal Certificate"
-            : "Policy Renewal Action Completed",
-        body: `Test multi-channel broadcast across ${channel.toUpperCase()} rail. Policy AUTO-2026-00182 confirmed with cryptographic seal.`,
-        timestamp: "Just now",
-        status: "delivered",
-      };
+    try {
+      const title =
+        channel === "whatsapp"
+          ? "ActionOS Renew — Live Dispatch"
+          : channel === "sms"
+          ? "ActionOS Statutory SMS Alert"
+          : channel === "email"
+          ? "Instant Policy Renewal Certificate"
+          : "Policy Renewal Action Completed";
 
-      setNotifications((prev) => [newNotif, ...prev]);
-      setActiveChannel(channel);
+      const message = `Test multi-channel broadcast across ${channel.toUpperCase()} rail. Policy AUTO-2026-00182 confirmed with cryptographic seal.`;
+
+      const res = await fetch("/api/notifications", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          channel,
+          type: "system_alert",
+          title,
+          message,
+        }),
+      });
+
+      const json = await res.json();
+      if (json.success) {
+        setDispatchSuccess(true);
+        setTimeout(() => setDispatchSuccess(false), 3000);
+        await fetchLiveNotifications();
+      }
+    } catch (err) {
+      console.error("Dispatch failed", err);
+    } finally {
       setIsDispatching(false);
-      setDispatchSuccess(true);
-      setTimeout(() => setDispatchSuccess(false), 3000);
-    }, 600);
+      setActiveChannel(channel);
+    }
   };
 
   const currentNotification = notifications.find((n) => n.channel === activeChannel) || notifications[0];
@@ -113,6 +190,8 @@ export function NotificationMonitor() {
         ].map((item) => {
           const Icon = item.icon;
           const isSelected = activeChannel === item.key;
+          const channelCount = notifications.filter((n) => n.channel === item.key).length;
+
           return (
             <button
               key={item.key}
@@ -129,7 +208,7 @@ export function NotificationMonitor() {
               </div>
               <div className="text-xs font-bold text-slate-900">{item.label}</div>
               <div className="text-[11px] text-slate-500 mt-0.5 font-medium">
-                {notifications.filter((n) => n.channel === item.key).length} Dispatched
+                {channelCount} Recorded
               </div>
             </button>
           );
@@ -140,16 +219,26 @@ export function NotificationMonitor() {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column: Dispatch Controls & Triggers (5 cols) */}
         <div className="lg:col-span-5 rounded-3xl border border-slate-200/90 bg-white p-6 shadow-xl shadow-slate-200/30 space-y-6">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse" />
-              <h2 className="text-base font-extrabold text-slate-900">
-                Multi-Channel Dispatcher
-              </h2>
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                <h2 className="text-base font-extrabold text-slate-900">
+                  Multi-Channel Dispatcher
+                </h2>
+              </div>
+              <p className="text-xs text-slate-500 mt-1">
+                Trigger real-time notifications across individual communication rails to test statutory and customer delivery formats.
+              </p>
             </div>
-            <p className="text-xs text-slate-500 mt-1">
-              Trigger real-time notifications across individual communication rails to test statutory and customer delivery formats.
-            </p>
+            <button
+              type="button"
+              onClick={fetchLiveNotifications}
+              className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 transition-colors cursor-pointer"
+              title="Refresh live notifications"
+            >
+              <RotateCcw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
+            </button>
           </div>
 
           <div className="space-y-2.5">

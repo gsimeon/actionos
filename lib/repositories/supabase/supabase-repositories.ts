@@ -1078,6 +1078,52 @@ export class SupabaseActionStepRepository implements IActionStepRepository {
 export class SupabaseTransactionRepository implements ITransactionRepository {
   private client = getSupabaseClient();
 
+  async findAll(options?: { status?: string; customerId?: string; limit?: number; tenant?: TenantContext }): Promise<Transaction[]> {
+    let query = this.client
+      .from("transactions")
+      .select("*, customer:customers!inner(*)");
+
+    if (options?.status && options.status !== "all") {
+      query = query.eq("status", options.status);
+    }
+    if (options?.customerId) {
+      query = query.eq("customer_id", options.customerId);
+    }
+    if (options?.tenant?.organizationId) {
+      query = query.eq("customer.organization_id", options.tenant.organizationId);
+    }
+    if (options?.tenant?.customerId) {
+      query = query.eq("customer_id", options.tenant.customerId);
+    }
+
+    query = query.order("created_at", { ascending: false });
+    if (options?.limit && options.limit > 0) {
+      query = query.limit(options.limit);
+    }
+
+    const { data, error } = await query;
+    if (error) throw new DatabaseError(`Transactions query failed: ${error.message}`, error.code, error);
+    return (data || []) as Transaction[];
+  }
+
+  async findById(id: string, tenant?: TenantContext): Promise<Transaction | null> {
+    let query = this.client
+      .from("transactions")
+      .select("*, customer:customers!inner(*)")
+      .eq("id", id);
+
+    if (tenant?.organizationId) {
+      query = query.eq("customer.organization_id", tenant.organizationId);
+    }
+    if (tenant?.customerId) {
+      query = query.eq("customer_id", tenant.customerId);
+    }
+
+    const { data, error } = await query.maybeSingle();
+    if (error) throw new DatabaseError(`Transaction lookup by ID failed: ${error.message}`, error.code, error);
+    return (data || null) as Transaction | null;
+  }
+
   async create(data: Partial<Transaction> & { customer_id: string; amount: number; reference: string }, tenant?: TenantContext): Promise<Transaction> {
     if (tenant?.customerId && data.customer_id !== tenant.customerId) {
       throw new DatabaseError(`Tenant authorization violation: customer mismatch on transaction create`, "UNAUTHORIZED");
@@ -1425,6 +1471,55 @@ export class SupabaseTransactionRepository implements ITransactionRepository {
 export class SupabaseDocumentRepository implements IDocumentRepository {
   private client = getSupabaseClient();
 
+  async findAll(options?: { customerId?: string; documentType?: string; renewalId?: string; limit?: number; tenant?: TenantContext }): Promise<Document[]> {
+    let query = this.client
+      .from("documents")
+      .select("*, customer:customers!inner(*)");
+
+    if (options?.customerId) {
+      query = query.eq("customer_id", options.customerId);
+    }
+    if (options?.documentType && options.documentType !== "all") {
+      query = query.eq("document_type", options.documentType);
+    }
+    if (options?.renewalId) {
+      query = query.eq("renewal_id", options.renewalId);
+    }
+    if (options?.tenant?.organizationId) {
+      query = query.eq("customer.organization_id", options.tenant.organizationId);
+    }
+    if (options?.tenant?.customerId) {
+      query = query.eq("customer_id", options.tenant.customerId);
+    }
+
+    query = query.order("created_at", { ascending: false });
+    if (options?.limit && options.limit > 0) {
+      query = query.limit(options.limit);
+    }
+
+    const { data, error } = await query;
+    if (error) throw new DatabaseError(`Documents query failed: ${error.message}`, error.code, error);
+    return (data || []) as Document[];
+  }
+
+  async findById(id: string, tenant?: TenantContext): Promise<Document | null> {
+    let query = this.client
+      .from("documents")
+      .select("*, customer:customers!inner(*)")
+      .eq("id", id);
+
+    if (tenant?.organizationId) {
+      query = query.eq("customer.organization_id", tenant.organizationId);
+    }
+    if (tenant?.customerId) {
+      query = query.eq("customer_id", tenant.customerId);
+    }
+
+    const { data, error } = await query.maybeSingle();
+    if (error) throw new DatabaseError(`Document lookup by ID failed: ${error.message}`, error.code, error);
+    return (data || null) as Document | null;
+  }
+
   async create(data: Partial<Document> & { customer_id: string; document_type: Document["document_type"]; file_path: string; file_name: string }, tenant?: TenantContext): Promise<Document> {
     if (tenant?.customerId && data.customer_id !== tenant.customerId) {
       throw new DatabaseError(`Tenant authorization violation: customer mismatch on document create`, "UNAUTHORIZED");
@@ -1495,6 +1590,52 @@ export class SupabaseDocumentRepository implements IDocumentRepository {
 
 export class SupabaseNotificationRepository implements INotificationRepository {
   private client = getSupabaseClient();
+
+  async findAll(options?: { customerId?: string; channel?: string; limit?: number; tenant?: TenantContext }): Promise<NotificationRecord[]> {
+    let query = this.client
+      .from("notifications")
+      .select("*, customer:customers!inner(*)");
+
+    if (options?.customerId) {
+      query = query.eq("customer_id", options.customerId);
+    }
+    if (options?.channel && options.channel !== "all") {
+      query = query.eq("channel", options.channel);
+    }
+    if (options?.tenant?.organizationId) {
+      query = query.eq("customer.organization_id", options.tenant.organizationId);
+    }
+    if (options?.tenant?.customerId) {
+      query = query.eq("customer_id", options.tenant.customerId);
+    }
+
+    query = query.order("created_at", { ascending: false });
+    if (options?.limit && options.limit > 0) {
+      query = query.limit(options.limit);
+    }
+
+    const { data, error } = await query;
+    if (error) throw new DatabaseError(`Notifications query failed: ${error.message}`, error.code, error);
+    return (data || []) as NotificationRecord[];
+  }
+
+  async findById(id: string, tenant?: TenantContext): Promise<NotificationRecord | null> {
+    let query = this.client
+      .from("notifications")
+      .select("*, customer:customers!inner(*)")
+      .eq("id", id);
+
+    if (tenant?.organizationId) {
+      query = query.eq("customer.organization_id", tenant.organizationId);
+    }
+    if (tenant?.customerId) {
+      query = query.eq("customer_id", tenant.customerId);
+    }
+
+    const { data, error } = await query.maybeSingle();
+    if (error) throw new DatabaseError(`Notification lookup by ID failed: ${error.message}`, error.code, error);
+    return (data || null) as NotificationRecord | null;
+  }
 
   async create(data: Partial<NotificationRecord> & { customer_id: string; type: NotificationRecord["type"]; channel: NotificationRecord["channel"]; title: string; message: string; scheduled_for: string }, tenant?: TenantContext): Promise<NotificationRecord> {
     if (tenant?.customerId && data.customer_id !== tenant.customerId) {
