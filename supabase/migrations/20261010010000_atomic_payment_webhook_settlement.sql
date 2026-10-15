@@ -23,17 +23,56 @@ DECLARE
   v_tx_updated RECORD;
 BEGIN
   -- 1. Lock transaction row to serialize all concurrent operations across instances
-  SELECT * INTO v_tx
-  FROM transactions
-  WHERE id = p_transaction_id OR reference = p_reference
-  FOR UPDATE;
+  -- Enforce identifier agreement: if both p_transaction_id and p_reference are provided, require exact match
+  IF p_transaction_id IS NOT NULL AND p_reference IS NOT NULL THEN
+    SELECT * INTO v_tx
+    FROM transactions
+    WHERE id = p_transaction_id AND reference = p_reference
+    FOR UPDATE;
 
-  IF NOT FOUND THEN
-    RETURN jsonb_build_object(
-      'success', false,
-      'error', 'TRANSACTION_NOT_FOUND',
-      'message', 'Transaction was not found in records'
-    );
+    IF NOT FOUND THEN
+      -- If either exists separately, identifiers disagree -> fail closed
+      IF EXISTS (SELECT 1 FROM transactions WHERE id = p_transaction_id) OR
+         EXISTS (SELECT 1 FROM transactions WHERE reference = p_reference) THEN
+        RETURN jsonb_build_object(
+          'success', false,
+          'error', 'IDENTIFIER_MISMATCH',
+          'message', 'Transaction ID and reference do not agree on the same transaction'
+        );
+      END IF;
+
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'TRANSACTION_NOT_FOUND',
+        'message', 'Transaction was not found in records'
+      );
+    END IF;
+  ELSIF p_transaction_id IS NOT NULL THEN
+    SELECT * INTO v_tx
+    FROM transactions
+    WHERE id = p_transaction_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'TRANSACTION_NOT_FOUND',
+        'message', 'Transaction was not found in records'
+      );
+    END IF;
+  ELSE
+    SELECT * INTO v_tx
+    FROM transactions
+    WHERE reference = p_reference
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'TRANSACTION_NOT_FOUND',
+        'message', 'Transaction was not found in records'
+      );
+    END IF;
   END IF;
 
   -- 2. Under transaction lock, check if event was already recorded (durable cross-instance deduplication)
