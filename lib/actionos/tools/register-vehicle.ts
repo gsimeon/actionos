@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { IActionOSTool, ToolResult, WorkflowExecutionContext } from "@/types/actionos";
 import type { Asset } from "@/types/database";
 import { getRepositoryContainer } from "@/lib/repositories";
@@ -69,14 +70,48 @@ export class RegisterVehicleTool implements IActionOSTool<RegisterVehicleInput, 
       };
     }
 
-    // Plate generation or normalization
+    const isSimulated = Boolean(context.isSimulated || context.auth.isDemo);
+
+    // Plate generation or normalization with truthfulness guardrails
     let plate = (input.vehiclePlate || "").trim().toUpperCase();
     if (!plate) {
-      plate = `LAG-${Math.floor(100 + Math.random() * 900)}-${String.fromCharCode(65 + Math.floor(Math.random() * 26))}${String.fromCharCode(65 + Math.floor(Math.random() * 26))}`;
+      if (!isSimulated) {
+        return {
+          success: false,
+          error: {
+            code: "MISSING_VEHICLE_PLATE",
+            message: "Vehicle plate number is mandatory for statutory registration in production mode.",
+          },
+        };
+      }
+      const digest = crypto
+        .createHash("sha256")
+        .update(`${targetCustomerId}:${input.make || "VEH"}:${input.model || "MOD"}`)
+        .digest("hex")
+        .slice(0, 4)
+        .toUpperCase();
+      plate = `SIM-LAG-${digest}`;
     }
 
-    const vin = (input.vin || input.chassisNumber || `DEMO-VIN-${Math.floor(100000 + Math.random() * 900000)}`).trim().toUpperCase();
-    const engine = (input.engineNumber || `DEMO-ENGINE-${Math.floor(100000 + Math.random() * 900000)}`).trim().toUpperCase();
+    const vinHash = crypto
+      .createHash("sha256")
+      .update(`${targetCustomerId}:${plate}`)
+      .digest("hex")
+      .slice(0, 8)
+      .toUpperCase();
+
+    const vin = (input.vin || input.chassisNumber || (isSimulated ? `SIM-VIN-${vinHash}` : "")).trim().toUpperCase();
+    if (!vin) {
+      return {
+        success: false,
+        error: {
+          code: "MISSING_VIN",
+          message: "VIN / chassis number is mandatory for vehicle registration.",
+        },
+      };
+    }
+
+    const engine = (input.engineNumber || (isSimulated ? `SIM-ENG-${vinHash.slice(0, 6)}` : `ENG-${vinHash.slice(0, 6)}`)).trim().toUpperCase();
     const make = input.make || "Toyota";
     const model = input.model || "Camry";
     const name = input.name || `${make} ${model}`;
@@ -99,8 +134,10 @@ export class RegisterVehicleTool implements IActionOSTool<RegisterVehicleInput, 
       };
     }
 
-    const preclearanceToken = niidExec.data?.preclearanceToken || `NIID-${new Date().getFullYear()}-VAL-${Math.floor(100000 + Math.random() * 900000)}`;
-    const frscRegistrationNumber = `FRSC-${new Date().getFullYear()}-${plate}`;
+    const preclearanceToken = niidExec.data?.preclearanceToken || `NIID-${year}-TOKEN-${vinHash}`;
+    const frscRegistrationNumber = isSimulated
+      ? `SIM-FRSC-${year}-${plate}`
+      : `FRSC-${year}-${plate}`;
 
     // 2. Persist in ActionOS Vehicle Repository
     const createdAsset = await repos.assets.create(

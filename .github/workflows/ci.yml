@@ -9,7 +9,7 @@ on:
 jobs:
   verify:
     name: Typecheck, Lint, Test & Build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     env:
       ACTIONOS_RUNTIME_MODE: demo
@@ -41,6 +41,9 @@ jobs:
 
       - name: Protected Integration Stage (Supabase RLS, Tenant Isolation, RPC & Webhooks)
         run: npm run test:integration
+
+      - name: Security Invariant, Ledger Privacy & Database Migration Suite
+        run: npm run test:security
 
       - name: Next.js Production Build
         run: npm run build
