@@ -826,7 +826,6 @@ export class DemoTransactionRepository implements ITransactionRepository {
 
     const prevStatus = tx.status;
     const prevMeta = { ...(tx.metadata || {}) };
-    const prevTxIndex = store.transactions.indexOf(tx);
 
     const isRefund = event.eventType.startsWith("refund.") || extra?.refundAmount !== undefined;
     const refundRef = extra?.refundReference;
@@ -870,7 +869,7 @@ export class DemoTransactionRepository implements ITransactionRepository {
           (h) => (refundRef && h.refund_reference === refundRef) || (extra?.refundId && h.refund_id === extra.refundId)
         );
 
-        let prevCumulative = typeof tx.metadata?.cumulative_refund_amount === "number"
+        const prevCumulative = typeof tx.metadata?.cumulative_refund_amount === "number"
           ? (tx.metadata.cumulative_refund_amount as number)
           : (tx.status as string) === "refunded"
           ? tx.amount

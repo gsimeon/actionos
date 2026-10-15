@@ -10,7 +10,6 @@ import {
   Bot,
   User,
   Cpu,
-  FileCheck,
   ChevronDown,
   Hash,
   RotateCcw,
@@ -21,11 +20,9 @@ import {
   Download,
   Copy,
   Check,
-  ExternalLink,
   Code,
   X,
   FileSpreadsheet,
-  AlertTriangle,
 } from "lucide-react";
 import type { ActionLedgerEvent } from "@/types/actionos";
 import { formatDateTime } from "@/lib/utils";

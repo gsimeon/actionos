@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { resetStore, getStore } from "@/lib/actionos/mock-store";
+import { resetStore } from "@/lib/actionos/mock-store";
 import { DEMO_CONTEXT } from "@/lib/security/auth-context";
 import { getRepositoryContainer, setRepositoryContainer } from "@/lib/repositories";
 import { RefundPaymentTool } from "@/lib/actionos/tools/refund-payment";

@@ -13,13 +13,8 @@ import {
   Info,
   RotateCcw,
   RefreshCw,
-  Zap,
   Layers,
-  ArrowRight,
-  ExternalLink,
-  ShieldCheck,
   Play,
-  Check,
   Activity,
   History,
 } from "lucide-react";
@@ -213,8 +208,27 @@ export function HumanEscalationCenter() {
   }, []);
 
   useEffect(() => {
-    loadReconciliationQueue();
-  }, [loadReconciliationQueue]);
+    let active = true;
+    const load = async () => {
+      try {
+        const res = await fetch("/api/recovery/reconcile");
+        const json = await res.json();
+        if (active && json.success && json.data) {
+          setReconReport(json.data);
+        }
+      } catch {
+        // Fallback to initial state
+      } finally {
+        if (active) {
+          setReconLoading(false);
+        }
+      }
+    };
+    void load();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const filteredCases = cases.filter((c) => {
     if (activeFilter === "all") return true;

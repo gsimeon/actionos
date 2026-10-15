@@ -4,12 +4,10 @@ import React, { useEffect, useState, useCallback, useTransition } from "react";
 import { useSearchParams } from "next/navigation";
 import { ActionLedger } from "@/components/actionos/action-ledger";
 import {
-  ShieldCheck,
   Hash,
   Lock,
   RefreshCw,
   Sparkles,
-  AlertTriangle,
   RotateCcw,
   CheckCircle2,
   Layers,
@@ -220,13 +218,41 @@ export default function ActionLedgerPage() {
   }, [urlSessionId]);
 
   useEffect(() => {
-    fetchLedger();
-  }, [fetchLedger]);
+    let active = true;
+    const load = async () => {
+      try {
+        const query = new URLSearchParams();
+        query.set("verify", "true");
+        query.set("limit", "100");
+        if (urlSessionId) query.set("sessionId", urlSessionId);
+
+        const res = await fetch(`/api/ledger?${query.toString()}`);
+        const json = await res.json();
+
+        if (active && json.success && Array.isArray(json.data?.events)) {
+          setLiveEvents(json.data.events);
+          if (json.data.integrity) {
+            setIntegrity(json.data.integrity);
+          }
+        }
+      } catch {
+        // Clean fallback
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    };
+    void load();
+    return () => {
+      active = false;
+    };
+  }, [urlSessionId]);
 
   useEffect(() => {
     if (!autoRefresh) return;
     const interval = setInterval(() => {
-      fetchLedger();
+      void fetchLedger();
     }, 8000);
     return () => clearInterval(interval);
   }, [autoRefresh, fetchLedger]);
