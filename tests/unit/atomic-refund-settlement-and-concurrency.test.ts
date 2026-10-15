@@ -594,23 +594,29 @@ describe("Sprint 1 Financial Integrity Suite: Atomic Refund Settlement, Fail-Clo
         };
       };
 
-      // When expiry and policy number are missing from authDetails
-      const unverified = buildRenewalSummary({});
-      assert.equal(unverified.newExpiry, "Not available", "Must NOT manufacture a 1-year future date when expiry is absent");
-      assert.equal(unverified.policyNumber, "Not available");
-      assert.equal(unverified.isComplete, false, "Outcome must NOT be complete without verified expiry and policy number");
-      assert.ok(unverified.missingFields.includes("Verified Renewal Expiry Date"));
-      assert.ok(unverified.missingFields.includes("Policy Number"));
+      // Case 1: Missing expiry date -> Not available, isComplete: false
+      const missingExpiry = buildRenewalSummary({ policyNumber: "POL/2026/0099" });
+      assert.equal(missingExpiry.newExpiry, "Not available", "Must report 'Not available' when expiry is absent");
+      assert.equal(missingExpiry.policyNumber, "POL/2026/0099");
+      assert.equal(missingExpiry.isComplete, false, "Must flag outcome as incomplete when expiry is missing");
+      assert.deepEqual(missingExpiry.missingFields, ["Verified Renewal Expiry Date"]);
 
-      // When verified evidence is present
-      const verified = buildRenewalSummary({
+      // Case 2: Missing policy number -> Not available, isComplete: false
+      const missingPolicy = buildRenewalSummary({ newExpiry: "2027-10-15T00:00:00.000Z" });
+      assert.equal(missingPolicy.policyNumber, "Not available", "Must report 'Not available' when policy number is absent");
+      assert.equal(missingPolicy.newExpiry, "2027-10-15T00:00:00.000Z");
+      assert.equal(missingPolicy.isComplete, false, "Must flag outcome as incomplete when policy number is missing");
+      assert.deepEqual(missingPolicy.missingFields, ["Policy Number"]);
+
+      // Case 3: Fully verified renewal -> verified values, isComplete: true
+      const fullyVerified = buildRenewalSummary({
         policyNumber: "POL/2026/0099",
         newExpiry: "2027-10-15T00:00:00.000Z",
       });
-      assert.equal(verified.newExpiry, "2027-10-15T00:00:00.000Z");
-      assert.equal(verified.policyNumber, "POL/2026/0099");
-      assert.equal(verified.isComplete, true);
-      assert.equal(verified.missingFields.length, 0);
+      assert.equal(fullyVerified.newExpiry, "2027-10-15T00:00:00.000Z");
+      assert.equal(fullyVerified.policyNumber, "POL/2026/0099");
+      assert.equal(fullyVerified.isComplete, true, "Must flag outcome as complete when all required evidence is present");
+      assert.equal(fullyVerified.missingFields.length, 0);
     });
   });
 
