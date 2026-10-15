@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useCallback, useTransition } from "react";
+import React, { useEffect, useState, useCallback, useTransition, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { ActionLedger } from "@/components/actionos/action-ledger";
 import {
@@ -180,7 +180,7 @@ interface LedgerIntegrityInfo {
   error?: string;
 }
 
-export default function ActionLedgerPage() {
+function ActionLedgerContent() {
   const searchParams = useSearchParams();
   const urlSessionId = searchParams.get("sessionId");
 
@@ -474,5 +474,19 @@ export default function ActionLedgerPage() {
         onRefresh={fetchLedger}
       />
     </div>
+  );
+}
+
+export default function ActionLedgerPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-[400px] items-center justify-center">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-emerald-500 border-t-transparent" />
+        </div>
+      }
+    >
+      <ActionLedgerContent />
+    </Suspense>
   );
 }
