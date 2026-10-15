@@ -326,6 +326,20 @@ describe("Supabase Schema, Migration Replayability & Type Alignment Validation",
       /GRANT EXECUTE ON FUNCTION public\.release_refund_reservation.*TO authenticated, service_role/i.test(sql),
       "release_refund_reservation must be granted to authenticated and service_role"
     );
+
+    // 4. finalize_atomic_refund_settlement
+    assert.ok(
+      /CREATE OR REPLACE FUNCTION public\.finalize_atomic_refund_settlement/i.test(sql),
+      "Migration must define finalize_atomic_refund_settlement RPC"
+    );
+    assert.ok(
+      /GRANT EXECUTE ON FUNCTION public\.finalize_atomic_refund_settlement.*TO authenticated, service_role/i.test(sql),
+      "finalize_atomic_refund_settlement must be granted to authenticated and service_role"
+    );
+    assert.ok(
+      /REVOKE EXECUTE ON FUNCTION public\.finalize_atomic_refund_settlement.*FROM anon, public/i.test(sql),
+      "finalize_atomic_refund_settlement must be revoked from anon and public"
+    );
   });
 });
 

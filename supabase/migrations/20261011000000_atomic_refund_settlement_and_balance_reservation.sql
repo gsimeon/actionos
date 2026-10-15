@@ -44,17 +44,56 @@ DECLARE
   v_reserved_balance NUMERIC(14, 2) := 0;
 BEGIN
   -- 1. Atomically lock the original payment transaction row to serialize all concurrent operations
-  SELECT * INTO v_tx
-  FROM transactions
-  WHERE id = p_transaction_id OR reference = p_reference
-  FOR UPDATE;
+  -- Enforce identifier agreement: if both p_transaction_id and p_reference are provided, require exact match
+  IF p_transaction_id IS NOT NULL AND p_reference IS NOT NULL THEN
+    SELECT * INTO v_tx
+    FROM transactions
+    WHERE id = p_transaction_id AND reference = p_reference
+    FOR UPDATE;
 
-  IF NOT FOUND THEN
-    RETURN jsonb_build_object(
-      'success', false,
-      'error', 'TRANSACTION_NOT_FOUND',
-      'message', 'Transaction was not found in records'
-    );
+    IF NOT FOUND THEN
+      -- If either exists separately, identifiers disagree -> fail closed
+      IF EXISTS (SELECT 1 FROM transactions WHERE id = p_transaction_id) OR
+         EXISTS (SELECT 1 FROM transactions WHERE reference = p_reference) THEN
+        RETURN jsonb_build_object(
+          'success', false,
+          'error', 'IDENTIFIER_MISMATCH',
+          'message', 'Transaction ID and reference do not agree on the same transaction'
+        );
+      END IF;
+
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'TRANSACTION_NOT_FOUND',
+        'message', 'Transaction was not found in records'
+      );
+    END IF;
+  ELSIF p_transaction_id IS NOT NULL THEN
+    SELECT * INTO v_tx
+    FROM transactions
+    WHERE id = p_transaction_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'TRANSACTION_NOT_FOUND',
+        'message', 'Transaction was not found in records'
+      );
+    END IF;
+  ELSE
+    SELECT * INTO v_tx
+    FROM transactions
+    WHERE reference = p_reference
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'TRANSACTION_NOT_FOUND',
+        'message', 'Transaction was not found in records'
+      );
+    END IF;
   END IF;
 
   v_is_refund := (p_event_type LIKE 'refund.%' OR p_refund_amount IS NOT NULL);
@@ -463,3 +502,258 @@ REVOKE EXECUTE ON FUNCTION public.reserve_refund_balance FROM anon, public;
 
 GRANT EXECUTE ON FUNCTION public.release_refund_reservation TO authenticated, service_role;
 REVOKE EXECUTE ON FUNCTION public.release_refund_reservation FROM anon, public;
+
+-- 4. Atomic Refund Settlement Finalization Function
+-- Atomically creates/updates the refund transaction record, clears reservation, updates original payment balance & status under row lock
+CREATE OR REPLACE FUNCTION public.finalize_atomic_refund_settlement(
+  p_original_transaction_id UUID,
+  p_refund_amount NUMERIC,
+  p_refund_reference VARCHAR,
+  p_provider VARCHAR,
+  p_reason TEXT DEFAULT '',
+  p_status VARCHAR DEFAULT 'succeeded',
+  p_refund_state VARCHAR DEFAULT 'refund_confirmed',
+  p_reservation_id VARCHAR DEFAULT NULL,
+  p_gateway_refund_reference VARCHAR DEFAULT NULL,
+  p_refund_id VARCHAR DEFAULT NULL,
+  p_currency VARCHAR DEFAULT 'NGN',
+  p_metadata JSONB DEFAULT '{}'::jsonb,
+  p_organization_id UUID DEFAULT NULL,
+  p_customer_id UUID DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_tx RECORD;
+  v_existing_refund_tx RECORD;
+  v_refund_tx RECORD;
+  v_tx_updated RECORD;
+  v_effective_refund NUMERIC(14, 2);
+  v_current_cumulative NUMERIC(14, 2) := 0;
+  v_new_cumulative NUMERIC(14, 2) := 0;
+  v_target_status VARCHAR;
+  v_refund_tx_status VARCHAR;
+  v_merged_metadata JSONB;
+  v_new_reservations JSONB := '[]'::jsonb;
+  v_elem JSONB;
+  v_reserved_balance NUMERIC(14, 2) := 0;
+  v_refund_history_entry JSONB;
+  v_is_already_in_history BOOLEAN := false;
+  v_current_history JSONB;
+BEGIN
+  v_effective_refund := ABS(p_refund_amount);
+
+  -- 1. Atomically lock original payment transaction row
+  SELECT * INTO v_tx
+  FROM transactions
+  WHERE id = p_original_transaction_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'TRANSACTION_NOT_FOUND',
+      'message', 'Original transaction was not found in records'
+    );
+  END IF;
+
+  -- 2. Tenant isolation verification
+  IF p_organization_id IS NOT NULL AND v_tx.organization_id IS NOT NULL AND v_tx.organization_id != p_organization_id THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'UNAUTHORIZED',
+      'message', 'Tenant authorization mismatch'
+    );
+  END IF;
+
+  IF p_customer_id IS NOT NULL AND v_tx.customer_id != p_customer_id THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'UNAUTHORIZED',
+      'message', 'Customer tenant authorization mismatch'
+    );
+  END IF;
+
+  -- 3. Invariant: Original transaction must be in a settled refundable state
+  IF v_tx.status NOT IN ('succeeded', 'partially_refunded') THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'INVALID_TRANSACTION_STATUS',
+      'message', format('Transaction in status ''%s'' cannot be refunded. Must be succeeded or partially_refunded.', v_tx.status)
+    );
+  END IF;
+
+  -- 4. Check idempotency: does this refund reference already exist?
+  SELECT * INTO v_existing_refund_tx
+  FROM transactions
+  WHERE reference = p_refund_reference AND transaction_type = 'refund';
+
+  IF FOUND THEN
+    RETURN jsonb_build_object(
+      'success', true,
+      'duplicate', true,
+      'original_transaction', row_to_json(v_tx),
+      'refund_transaction', row_to_json(v_existing_refund_tx)
+    );
+  END IF;
+
+  -- 5. Cumulative refund accounting & limit check under lock
+  v_current_history := COALESCE(v_tx.metadata->'refund_history', '[]'::jsonb);
+  IF jsonb_typeof(v_current_history) = 'array' THEN
+    SELECT EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(v_current_history) AS elem
+      WHERE (elem->>'refund_reference' = p_refund_reference)
+         OR (p_gateway_refund_reference IS NOT NULL AND elem->>'refund_reference' = p_gateway_refund_reference)
+         OR (p_refund_id IS NOT NULL AND elem->>'refund_id' = p_refund_id)
+    ) INTO v_is_already_in_history;
+  END IF;
+
+  v_current_cumulative := COALESCE((v_tx.metadata->>'cumulative_refund_amount')::numeric, 0);
+  IF v_current_cumulative = 0 AND v_tx.status = 'refunded' THEN
+    v_current_cumulative := v_tx.amount;
+  END IF;
+
+  IF v_is_already_in_history THEN
+    v_new_cumulative := v_current_cumulative;
+  ELSIF COALESCE(p_refund_state, 'refund_confirmed') = 'refund_confirmed' AND p_status = 'succeeded' THEN
+    v_new_cumulative := v_current_cumulative + v_effective_refund;
+  ELSE
+    v_new_cumulative := v_current_cumulative;
+  END IF;
+
+  IF COALESCE(p_refund_state, 'refund_confirmed') = 'refund_confirmed' AND p_status = 'succeeded' AND v_new_cumulative > (v_tx.amount + 0.01) THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'CUMULATIVE_REFUND_LIMIT_EXCEEDED',
+      'message', format('Cumulative refund amount (%s) exceeds original payment transaction amount (%s). Refusing refund settlement.', v_new_cumulative, v_tx.amount)
+    );
+  END IF;
+
+  -- Determine target status for original payment
+  IF COALESCE(p_refund_state, 'refund_confirmed') = 'refund_confirmed' AND p_status = 'succeeded' THEN
+    IF v_new_cumulative >= (v_tx.amount - 0.01) THEN
+      v_target_status := 'refunded';
+    ELSE
+      v_target_status := 'partially_refunded';
+    END IF;
+  ELSE
+    v_target_status := v_tx.status;
+  END IF;
+
+  v_refund_tx_status := CASE WHEN p_status = 'succeeded' THEN 'succeeded' ELSE 'pending' END;
+
+  -- 6. Insert refund transaction record
+  INSERT INTO transactions (
+    customer_id,
+    organization_id,
+    renewal_id,
+    amount,
+    currency,
+    provider,
+    reference,
+    status,
+    transaction_type,
+    metadata
+  ) VALUES (
+    v_tx.customer_id,
+    v_tx.organization_id,
+    v_tx.renewal_id,
+    -v_effective_refund,
+    COALESCE(p_currency, v_tx.currency, 'NGN'),
+    p_provider,
+    p_refund_reference,
+    v_refund_tx_status::transaction_status,
+    'refund',
+    jsonb_build_object(
+      'original_transaction_id', v_tx.id,
+      'originalReference', v_tx.reference,
+      'gatewayRefundReference', p_gateway_refund_reference,
+      'refund_reference', p_refund_reference,
+      'refund_id', p_refund_id,
+      'expected_refund_amount', v_effective_refund,
+      'refund_amount', v_effective_refund,
+      'refund_state', p_refund_state,
+      'reason', p_reason,
+      'isSagaCompensating', true,
+      'gatewayVerified', (p_status = 'succeeded'),
+      'settled_at', NOW()
+    ) || COALESCE(p_metadata, '{}'::jsonb)
+  )
+  ON CONFLICT (reference) DO UPDATE
+  SET
+    status = EXCLUDED.status,
+    metadata = transactions.metadata || EXCLUDED.metadata,
+    updated_at = NOW()
+  RETURNING * INTO v_refund_tx;
+
+  -- 7. Update reservation balance on original transaction
+  v_reserved_balance := GREATEST(0, COALESCE((v_tx.metadata->>'reserved_refund_amount')::numeric, 0) - v_effective_refund);
+
+  IF p_reservation_id IS NOT NULL AND jsonb_typeof(v_tx.metadata->'active_refund_reservations') = 'array' THEN
+    FOR v_elem IN SELECT * FROM jsonb_array_elements(v_tx.metadata->'active_refund_reservations')
+    LOOP
+      IF v_elem->>'reservation_id' != p_reservation_id THEN
+        v_new_reservations := v_new_reservations || jsonb_build_array(v_elem);
+      END IF;
+    END LOOP;
+  ELSE
+    v_new_reservations := COALESCE(v_tx.metadata->'active_refund_reservations', '[]'::jsonb);
+  END IF;
+
+  v_merged_metadata := COALESCE(v_tx.metadata, '{}'::jsonb) || jsonb_build_object(
+    'reserved_refund_amount', v_reserved_balance,
+    'active_refund_reservations', v_new_reservations
+  );
+
+  IF COALESCE(p_refund_state, 'refund_confirmed') = 'refund_confirmed' AND p_status = 'succeeded' THEN
+    v_merged_metadata := v_merged_metadata || jsonb_build_object(
+      'cumulative_refund_amount', v_new_cumulative,
+      'remaining_balance', GREATEST(0, v_tx.amount - v_new_cumulative),
+      'is_partial_refund', (v_new_cumulative < v_tx.amount - 0.01),
+      'refund_state', 'refund_confirmed',
+      'last_refund_settled_at', NOW()
+    );
+
+    IF NOT v_is_already_in_history THEN
+      v_refund_history_entry := jsonb_build_object(
+        'refund_reference', p_refund_reference,
+        'refund_id', COALESCE(p_refund_id, p_gateway_refund_reference, ''),
+        'amount', v_effective_refund,
+        'currency', COALESCE(p_currency, v_tx.currency, 'NGN'),
+        'settled_at', NOW()
+      );
+      v_merged_metadata := jsonb_set(
+        v_merged_metadata,
+        '{refund_history}',
+        COALESCE(v_merged_metadata->'refund_history', '[]'::jsonb) || jsonb_build_array(v_refund_history_entry)
+      );
+    END IF;
+  ELSE
+    v_merged_metadata := v_merged_metadata || jsonb_build_object(
+      'refund_state', p_refund_state
+    );
+  END IF;
+
+  UPDATE transactions
+  SET
+    status = v_target_status::transaction_status,
+    metadata = v_merged_metadata,
+    updated_at = NOW()
+  WHERE id = v_tx.id
+  RETURNING * INTO v_tx_updated;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'duplicate', false,
+    'original_transaction', row_to_json(v_tx_updated),
+    'refund_transaction', row_to_json(v_refund_tx)
+  );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.finalize_atomic_refund_settlement TO authenticated, service_role;
+REVOKE EXECUTE ON FUNCTION public.finalize_atomic_refund_settlement FROM anon, public;

@@ -193,8 +193,12 @@ export function ActionConsole() {
           // Zero fabrication policy: only display verified identifiers returned by backend and ledger
           const certRef = certEvent?.referenceId?.trim() || "";
           const payRef = payEvent?.referenceId?.trim() || "";
+          const policyNum = authDetails?.policyNumber?.trim() || "";
+          const verifiedExpiry = authDetails?.newExpiry?.trim() || "";
 
           const missing: string[] = [];
+          if (!policyNum) missing.push("Policy Number");
+          if (!verifiedExpiry) missing.push("Verified Renewal Expiry Date");
           if (!certRef) missing.push("Statutory Certificate Reference");
           if (!payRef) missing.push("Payment Settlement Reference");
 
@@ -204,8 +208,8 @@ export function ActionConsole() {
             underwriter: authDetails?.providerName || options?.selectedUnderwriter || "Not available",
             amount: options?.customAmount || authDetails?.amount || 0,
             currentExpiry: authDetails?.currentExpiry || undefined,
-            newExpiry: authDetails?.newExpiry || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
-            policyNumber: authDetails?.policyNumber || "Not available",
+            newExpiry: verifiedExpiry || "Not available",
+            policyNumber: policyNum || "Not available",
             certificateNumber: certRef || "Not available",
             paymentReference: payRef || "Not available",
             isComplete: missing.length === 0,

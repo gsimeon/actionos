@@ -156,6 +156,32 @@ export interface ITransactionRepository {
     tenant?: TenantContext,
     options?: { reservationId?: string }
   ): Promise<void>;
+  finalizeRefundSettlement(
+    transactionIdOrRef: string,
+    refundData: FinalizeRefundSettlementInput,
+    tenant?: TenantContext
+  ): Promise<FinalizeRefundSettlementResult>;
+}
+
+export interface FinalizeRefundSettlementInput {
+  amount: number;
+  refundReference: string;
+  gatewayRefundReference?: string | null;
+  refundId?: string | null;
+  provider: string;
+  reason: string;
+  status: "succeeded" | "pending";
+  refundState: "refund_confirmed" | "refund_pending";
+  reservationId?: string | null;
+  currency?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface FinalizeRefundSettlementResult {
+  success: boolean;
+  originalTransaction: Transaction;
+  refundTransaction: Transaction;
+  isDuplicate?: boolean;
 }
 
 export interface IDocumentRepository {

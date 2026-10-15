@@ -17,6 +17,8 @@ import type {
   RepositoryContainer,
   TenantContext,
   LedgerQueryOptions,
+  FinalizeRefundSettlementInput,
+  FinalizeRefundSettlementResult,
 } from "../interfaces";
 import type {
   Customer,
@@ -819,7 +821,20 @@ export class DemoTransactionRepository implements ITransactionRepository {
     refundTransaction?: Transaction | null;
   }> {
     const store = getStore();
-    const tx = store.transactions.find((t) => t.id === id || t.reference === id || t.reference === event.reference);
+    // Enforce identifier agreement: if both id and event.reference are supplied, they must match the same transaction
+    let tx: Transaction | undefined;
+    if (id && event.reference) {
+      const txById = store.transactions.find((t) => t.id === id || t.reference === id);
+      const txByRef = store.transactions.find((t) => t.reference === event.reference);
+      if (txById && txByRef && txById.id !== txByRef.id) {
+        const mismatchErr = new Error(`Transaction identifier mismatch: id '${id}' and reference '${event.reference}' do not refer to the same transaction.`);
+        (mismatchErr as { code?: string }).code = "IDENTIFIER_MISMATCH";
+        throw mismatchErr;
+      }
+      tx = txById || txByRef;
+    } else {
+      tx = store.transactions.find((t) => (id && (t.id === id || t.reference === id)) || (event.reference && t.reference === event.reference));
+    }
     if (!tx) {
       throw new Error(`Transaction not found: ${id || event.reference}`);
     }
@@ -1110,6 +1125,178 @@ export class DemoTransactionRepository implements ITransactionRepository {
       last_reservation_released_at: new Date().toISOString(),
     };
     tx.updated_at = new Date().toISOString();
+  }
+
+  async finalizeRefundSettlement(
+    transactionIdOrRef: string,
+    refundData: FinalizeRefundSettlementInput,
+    tenant?: TenantContext
+  ): Promise<FinalizeRefundSettlementResult> {
+    const store = getStore();
+    const tx = store.transactions.find((t) => t.id === transactionIdOrRef || t.reference === transactionIdOrRef);
+    if (!tx) {
+      const notFoundErr = new Error(`Original transaction was not found in records: ${transactionIdOrRef}`);
+      (notFoundErr as { code?: string }).code = "TRANSACTION_NOT_FOUND";
+      throw notFoundErr;
+    }
+
+    if (tenant?.customerId && tx.customer_id !== tenant.customerId) {
+      const authErr = new Error(`Tenant authorization violation for transaction ${transactionIdOrRef}`);
+      (authErr as { code?: string }).code = "UNAUTHORIZED";
+      throw authErr;
+    }
+    if (tenant?.organizationId) {
+      const cust = store.customers.find((c) => c.id === tx.customer_id);
+      if (!cust || cust.organization_id !== tenant.organizationId) {
+        const authErr = new Error(`Tenant authorization violation for transaction ${transactionIdOrRef}`);
+        (authErr as { code?: string }).code = "UNAUTHORIZED";
+        throw authErr;
+      }
+    }
+
+    if (tx.status !== "succeeded" && tx.status !== "partially_refunded") {
+      const statusErr = new Error(`Transaction in status '${tx.status}' cannot be refunded. Must be succeeded or partially_refunded.`);
+      (statusErr as { code?: string }).code = "INVALID_TRANSACTION_STATUS";
+      throw statusErr;
+    }
+
+    // Idempotency check: does refund reference already exist?
+    const existingRefund = store.transactions.find(
+      (t) => t.reference === refundData.refundReference && t.transaction_type === "refund"
+    );
+    if (existingRefund) {
+      return {
+        success: true,
+        isDuplicate: true,
+        originalTransaction: tx,
+        refundTransaction: existingRefund,
+      };
+    }
+
+    const prevStatus = tx.status;
+    const prevMeta = { ...(tx.metadata || {}) };
+    let newlyCreatedRefundTx: Transaction | null = null;
+
+    try {
+      const refundAmt = Math.abs(refundData.amount);
+      const prevCumulative = typeof tx.metadata?.cumulative_refund_amount === "number"
+        ? (tx.metadata.cumulative_refund_amount as number)
+        : 0;
+
+      const isConfirmed = refundData.status === "succeeded" && refundData.refundState === "refund_confirmed";
+      const newCumulative = isConfirmed ? prevCumulative + refundAmt : prevCumulative;
+
+      if (isConfirmed && newCumulative > tx.amount + 0.01) {
+        const limitErr = new Error(
+          `Cumulative refund amount (${newCumulative}) exceeds original payment transaction amount (${tx.amount}). Refusing refund settlement.`
+        );
+        (limitErr as { code?: string }).code = "CUMULATIVE_REFUND_LIMIT_EXCEEDED";
+        throw limitErr;
+      }
+
+      const targetStatus: Transaction["status"] = isConfirmed
+        ? (newCumulative >= tx.amount - 0.01 ? "refunded" : "partially_refunded")
+        : tx.status;
+
+      // 1. Create refund transaction
+      newlyCreatedRefundTx = await this.create(
+        {
+          customer_id: tx.customer_id,
+          organization_id: tx.organization_id || "a0000000-0000-0000-0000-000000000001",
+          renewal_id: tx.renewal_id || null,
+          amount: -refundAmt,
+          currency: refundData.currency || tx.currency || "NGN",
+          provider: refundData.provider || tx.provider || "paystack",
+          reference: refundData.refundReference,
+          status: refundData.status,
+          transaction_type: "refund",
+          metadata: {
+            original_transaction_id: tx.id,
+            originalReference: tx.reference,
+            gatewayRefundReference: refundData.gatewayRefundReference || null,
+            refund_reference: refundData.refundReference,
+            refund_id: refundData.refundId || null,
+            expected_refund_amount: refundAmt,
+            refund_amount: refundAmt,
+            refund_state: refundData.refundState,
+            reason: refundData.reason,
+            isSagaCompensating: true,
+            gatewayVerified: isConfirmed,
+            settled_at: new Date().toISOString(),
+            ...(refundData.metadata || {}),
+          },
+        },
+        tenant
+      );
+
+      // 2. Clear reservation and update balances
+      const currentReserved = Number(tx.metadata?.reserved_refund_amount || 0);
+      const newReserved = Math.max(0, currentReserved - refundAmt);
+
+      let activeReservations = Array.isArray(tx.metadata?.active_refund_reservations)
+        ? [...(tx.metadata.active_refund_reservations as Array<Record<string, unknown>>)]
+        : [];
+      if (refundData.reservationId) {
+        activeReservations = activeReservations.filter((r) => r.reservation_id !== refundData.reservationId);
+      }
+
+      const existingHistory = Array.isArray(tx.metadata?.refund_history)
+        ? [...(tx.metadata.refund_history as Array<Record<string, unknown>>)]
+        : [];
+
+      const updatedHistory = isConfirmed
+        ? [
+            ...existingHistory,
+            {
+              refund_reference: refundData.refundReference,
+              refund_id: refundData.refundId || refundData.gatewayRefundReference || "",
+              amount: refundAmt,
+              currency: refundData.currency || tx.currency || "NGN",
+              settled_at: new Date().toISOString(),
+            },
+          ]
+        : existingHistory;
+
+      const updatedMeta: Record<string, unknown> = {
+        ...tx.metadata,
+        reserved_refund_amount: newReserved,
+        active_refund_reservations: activeReservations,
+      };
+
+      if (isConfirmed) {
+        updatedMeta.cumulative_refund_amount = newCumulative;
+        updatedMeta.remaining_balance = Math.max(0, tx.amount - newCumulative);
+        updatedMeta.is_partial_refund = newCumulative < tx.amount - 0.01;
+        updatedMeta.refund_history = updatedHistory;
+        updatedMeta.refund_state = "refund_confirmed";
+        updatedMeta.last_refund_settled_at = new Date().toISOString();
+      } else {
+        updatedMeta.refund_state = refundData.refundState;
+      }
+
+      // 3. Atomically update parent status and metadata (delegates to updateStatus so mocks/hooks fire)
+      const updatedParent = await this.updateStatus(tx.id, targetStatus, tenant, { metadata: updatedMeta });
+
+      return {
+        success: true,
+        isDuplicate: false,
+        originalTransaction: updatedParent,
+        refundTransaction: newlyCreatedRefundTx,
+      };
+    } catch (err) {
+      // All-or-nothing rollback on any failure
+      if (newlyCreatedRefundTx) {
+        const idx = store.transactions.indexOf(newlyCreatedRefundTx);
+        if (idx !== -1) {
+          store.transactions.splice(idx, 1);
+        }
+      }
+      if (tx) {
+        tx.status = prevStatus;
+        tx.metadata = prevMeta;
+      }
+      throw err;
+    }
   }
 }
 
