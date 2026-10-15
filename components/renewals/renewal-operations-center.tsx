@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useCallback } from "react";
 import Link from "next/link";
 import {
   Zap,
@@ -159,9 +159,9 @@ export function RenewalOperationsCenter() {
     deadLetteredCount: number;
   } | null>(null);
 
-  const loadData = async () => {
+  const loadData = useCallback(async (isRefresh = false) => {
     try {
-      setRefreshing(true);
+      if (isRefresh) setRefreshing(true);
       const [renRes, polRes, cusRes, recRes] = await Promise.all([
         fetch("/api/renewals").then((r) => r.json()).catch(() => ({ success: false })),
         fetch("/api/policies").then((r) => r.json()).catch(() => ({ success: false })),
@@ -183,12 +183,42 @@ export function RenewalOperationsCenter() {
       setActionAlert({ type: "warning", message: "Failed to reload pipeline state from server." });
     } finally {
       setLoading(false);
-      setRefreshing(false);
+      if (isRefresh) setRefreshing(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    loadData();
+    let active = true;
+    const load = async () => {
+      try {
+        const [renRes, polRes, cusRes, recRes] = await Promise.all([
+          fetch("/api/renewals").then((r) => r.json()).catch(() => ({ success: false })),
+          fetch("/api/policies").then((r) => r.json()).catch(() => ({ success: false })),
+          fetch("/api/customers").then((r) => r.json()).catch(() => ({ success: false })),
+          fetch("/api/recovery/reconcile").then((r) => r.json()).catch(() => ({ success: false })),
+        ]);
+        if (active) {
+          if (renRes.success) setRenewals(renRes.data || []);
+          if (polRes.success) setPolicies(polRes.data || []);
+          if (cusRes.success) setCustomers(cusRes.data || []);
+          if (recRes.success && recRes.data) {
+            setReconStatus({
+              totalPending: recRes.data.totalPending,
+              retryableCount: recRes.data.retryableCount,
+              deadLetteredCount: recRes.data.deadLetteredCount,
+            });
+          }
+        }
+      } catch {
+        // Fallback handled
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+    void load();
+    return () => {
+      active = false;
+    };
   }, []);
 
   const copyToClipboard = (text: string, id: string) => {
@@ -368,6 +398,17 @@ export function RenewalOperationsCenter() {
       const payEv = events.find(
         (e: ActionLedgerEvent) => e.tool === "execute_payment" || e.action === "execute_payment"
       );
+      const renewEv = events.find(
+        (e: ActionLedgerEvent) => e.tool === "renew_policy" || e.action === "renew_policy"
+      );
+
+      const renewMeta = (renewEv?.metadata || {}) as Record<string, unknown>;
+      const resolvedExpiry =
+        (renewMeta.newExpiry as string) ||
+        (json.data.policy?.expiry_date ? formatDate(json.data.policy.expiry_date) : undefined) ||
+        (sagaState.policy?.expiry_date
+          ? formatDate(new Date(new Date(sagaState.policy.expiry_date).setFullYear(new Date(sagaState.policy.expiry_date).getFullYear() + 1)).toISOString())
+          : "1 Year Forward");
 
       setSagaState((prev) => ({
         ...prev,
@@ -375,9 +416,9 @@ export function RenewalOperationsCenter() {
         resultMessage: json.data.message,
         ledgerEvents: json.data.events || prev.ledgerEvents,
         settlementSummary: {
-          txReference: payEv?.referenceId || "Not available",
-          certificateNumber: certEv?.referenceId || "Not available",
-          newExpiry: "October 14, 2027",
+          txReference: payEv?.referenceId || ((payEv?.metadata as Record<string, unknown> | undefined)?.reference as string) || (isCompensated ? "Compensated Refund" : "Pending"),
+          certificateNumber: certEv?.referenceId || ((certEv?.metadata as Record<string, unknown> | undefined)?.documentNumber as string) || (isCompensated ? "Revoked / Compensated" : "Generated"),
+          newExpiry: isCompensated ? "Policy Reverted to Original Expiry" : resolvedExpiry,
           provider: options?.selectedUnderwriter || "Leadway Assurance",
           amount: options?.customAmount || 87500,
           compensatingAction: isCompensated ? "Paystack Refund Issued & Policy Reverted" : undefined,
@@ -457,7 +498,7 @@ export function RenewalOperationsCenter() {
 
           <button
             type="button"
-            onClick={loadData}
+            onClick={() => { void loadData(true); }}
             disabled={refreshing}
             className="p-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 border border-slate-200 transition-all cursor-pointer disabled:opacity-50"
             title="Refresh pipeline data"
