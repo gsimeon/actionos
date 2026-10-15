@@ -100,6 +100,8 @@ interface CompletedOutcome {
   policyNumber: string;
   certificateNumber: string;
   paymentReference: string;
+  isComplete: boolean;
+  missingFields: string[];
 }
 
 export function ActionConsole() {
@@ -188,16 +190,26 @@ export function ActionConsole() {
             (e) => e.tool === "execute_payment" || e.action === "execute_payment"
           );
 
+          // Zero fabrication policy: only display verified identifiers returned by backend and ledger
+          const certRef = certEvent?.referenceId?.trim() || "";
+          const payRef = payEvent?.referenceId?.trim() || "";
+
+          const missing: string[] = [];
+          if (!certRef) missing.push("Statutory Certificate Reference");
+          if (!payRef) missing.push("Payment Settlement Reference");
+
           setCompletedOutcome({
-            vehicle: authDetails?.assetName || "Toyota Camry",
-            plateNumber: authDetails?.assetIdentifier || "ABC-123-XY",
-            underwriter: authDetails?.providerName || options?.selectedUnderwriter || "Leadway Assurance",
-            amount: options?.customAmount || authDetails?.amount || 87500,
-            currentExpiry: authDetails?.currentExpiry || new Date().toISOString(),
+            vehicle: authDetails?.assetName || "Not available",
+            plateNumber: authDetails?.assetIdentifier || "Not available",
+            underwriter: authDetails?.providerName || options?.selectedUnderwriter || "Not available",
+            amount: options?.customAmount || authDetails?.amount || 0,
+            currentExpiry: authDetails?.currentExpiry || undefined,
             newExpiry: authDetails?.newExpiry || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
-            policyNumber: authDetails?.policyNumber || "AUTO-2026-00182",
-            certificateNumber: certEvent?.referenceId || `NAICOM-2026-CERT-${Math.floor(100000 + Math.random() * 900000)}`,
-            paymentReference: payEvent?.referenceId || `PAY-2026-${Math.floor(100000 + Math.random() * 900000)}`,
+            policyNumber: authDetails?.policyNumber || "Not available",
+            certificateNumber: certRef || "Not available",
+            paymentReference: payRef || "Not available",
+            isComplete: missing.length === 0,
+            missingFields: missing,
           });
         }
 
@@ -439,26 +451,48 @@ export function ActionConsole() {
 
       {/* 05: Verify and Audit — Verified Execution Outcome & Certificate Preview */}
       {sessionStatus === "completed" && completedOutcome && (
-        <div className="rounded-3xl border-2 border-emerald-400/80 bg-gradient-to-b from-white via-emerald-50/20 to-emerald-50/40 p-6 sm:p-8 shadow-xl shadow-emerald-500/10 space-y-6 animate-in fade-in duration-300">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-emerald-100 pb-4">
+        <div className={`rounded-3xl border-2 ${
+          completedOutcome.isComplete
+            ? "border-emerald-400/80 bg-gradient-to-b from-white via-emerald-50/20 to-emerald-50/40 shadow-emerald-500/10"
+            : "border-amber-400/80 bg-gradient-to-b from-white via-amber-50/20 to-amber-50/40 shadow-amber-500/10"
+        } p-6 sm:p-8 shadow-xl space-y-6 animate-in fade-in duration-300`}>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200/60 pb-4">
             <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-800 border border-emerald-300 shadow-xs">
-                <CheckCircle2 className="h-6 w-6 text-emerald-700" />
+              <div className={`flex h-11 w-11 items-center justify-center rounded-2xl ${
+                completedOutcome.isComplete
+                  ? "bg-emerald-100 text-emerald-800 border border-emerald-300"
+                  : "bg-amber-100 text-amber-800 border border-amber-300"
+              } shadow-xs`}>
+                {completedOutcome.isComplete ? (
+                  <CheckCircle2 className="h-6 w-6 text-emerald-700" />
+                ) : (
+                  <AlertTriangle className="h-6 w-6 text-amber-700" />
+                )}
               </div>
               <div>
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="text-base font-extrabold text-slate-900 tracking-tight">
-                    Workflow Completed: Verified Renewal & Test Certificate
+                    {completedOutcome.isComplete
+                      ? "Workflow Completed: Verified Renewal & Test Certificate"
+                      : "Workflow Completed: Incomplete Verification"}
                   </h3>
-                  <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-black text-emerald-900 border border-emerald-300">
-                    EXECUTION VERIFIED
-                  </span>
+                  {completedOutcome.isComplete ? (
+                    <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-black text-emerald-900 border border-emerald-300">
+                      EXECUTION VERIFIED
+                    </span>
+                  ) : (
+                    <span className="rounded-full bg-rose-100 px-2.5 py-0.5 text-[10px] font-black text-rose-900 border border-rose-300">
+                      INCOMPLETE OUTCOME: UNVERIFIED EVIDENCE
+                    </span>
+                  )}
                   <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-[10px] font-black text-amber-900 border border-amber-300">
                     SANDBOX RECORD
                   </span>
                 </div>
                 <p className="text-xs text-slate-600 mt-0.5 font-medium">
-                  Autonomous lifecycle finished: eligibility validated, customer authorized, simulated payment settled, and policy rolled forward.
+                  {completedOutcome.isComplete
+                    ? "Autonomous lifecycle finished: eligibility validated, customer authorized, simulated payment settled, and policy rolled forward."
+                    : "Autonomous lifecycle reported completed status, but one or more required ledger artifacts are missing from response."}
                 </p>
               </div>
             </div>
@@ -466,14 +500,28 @@ export function ActionConsole() {
             <div className="flex items-center gap-2 self-start sm:self-auto">
               <button
                 type="button"
+                disabled={completedOutcome.certificateNumber === "Not available"}
                 onClick={() => setShowCertModal(true)}
-                className="px-3.5 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 text-xs font-bold shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+                className="px-3.5 py-2 rounded-xl bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-800 border border-slate-200 text-xs font-bold shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+                title={completedOutcome.certificateNumber === "Not available" ? "Certificate not available in ledger records" : "View Certificate Preview"}
               >
                 <FileCheck className="w-3.5 h-3.5 text-emerald-600" />
                 <span>View Certificate Preview</span>
               </button>
             </div>
           </div>
+
+          {/* Incomplete Outcome Warning Callout */}
+          {!completedOutcome.isComplete && (
+            <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-xs text-rose-950 flex items-start gap-2.5">
+              <AlertTriangle className="w-4 h-4 text-rose-700 shrink-0 mt-0.5" />
+              <div className="leading-relaxed">
+                <strong>Incomplete Verification Flag:</strong> Missing backend-verified references for:{" "}
+                <span className="font-bold underline">{completedOutcome.missingFields.join(", ")}</span>.
+                ActionOS strictly refuses to fabricate random fallback references. Please inspect the Action Ledger or escalation queue.
+              </div>
+            </div>
+          )}
 
           {/* Details 4-box grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
@@ -502,8 +550,13 @@ export function ActionConsole() {
               <div className="text-[10px] text-slate-600 font-medium mt-0.5">
                 Rail: <strong className="text-slate-800">Paystack (Simulated)</strong>
               </div>
-              <div className="mt-1 text-[10px] font-mono text-slate-400 truncate">
-                Ref: {completedOutcome.paymentReference}
+              <div className="mt-1 text-[10px] font-mono truncate">
+                Ref:{" "}
+                {completedOutcome.paymentReference !== "Not available" ? (
+                  <span className="text-slate-600 font-bold">{completedOutcome.paymentReference}</span>
+                ) : (
+                  <span className="text-rose-600 font-bold">Not available</span>
+                )}
               </div>
             </div>
 
@@ -514,12 +567,22 @@ export function ActionConsole() {
               <div className="text-xs font-bold text-slate-900">
                 {completedOutcome.underwriter}
               </div>
-              <div className="text-[10px] font-mono text-emerald-700 font-bold mt-0.5 truncate">
-                {completedOutcome.certificateNumber}
+              <div className="text-[10px] font-mono font-bold mt-0.5 truncate">
+                {completedOutcome.certificateNumber !== "Not available" ? (
+                  <span className="text-emerald-700">{completedOutcome.certificateNumber}</span>
+                ) : (
+                  <span className="text-rose-600">Not available</span>
+                )}
               </div>
-              <div className="mt-2 inline-block px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-amber-100 text-amber-900 border border-amber-200">
-                NON-STATUTORY FIXTURE
-              </div>
+              {completedOutcome.certificateNumber !== "Not available" ? (
+                <div className="mt-2 inline-block px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-amber-100 text-amber-900 border border-amber-200">
+                  NON-STATUTORY FIXTURE
+                </div>
+              ) : (
+                <div className="mt-2 inline-block px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-rose-100 text-rose-900 border border-rose-200">
+                  MISSING RECORD
+                </div>
+              )}
             </div>
 
             <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-2xs">
@@ -542,7 +605,7 @@ export function ActionConsole() {
           <div className="p-3.5 rounded-2xl bg-amber-50/80 border border-amber-200 text-xs text-amber-950 flex items-start gap-2.5">
             <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
             <div className="leading-relaxed">
-              <strong>Sandbox Disclosure:</strong> This transaction and generated certificate (#{completedOutcome.certificateNumber}) are simulated demo fixtures for the NITDA 2026 AI Innovation Challenge. In production deployment, ActionOS verifies policies against the live NAICOM NIID database and processes real settlement via production Paystack keys.
+              <strong>Sandbox Disclosure:</strong> This transaction and generated certificate ({completedOutcome.certificateNumber !== "Not available" ? `#${completedOutcome.certificateNumber}` : "Not available"}) are simulated demo fixtures for the NITDA 2026 AI Innovation Challenge. In production deployment, ActionOS verifies policies against the live NAICOM NIID database and processes real settlement via production Paystack keys.
             </div>
           </div>
         </div>

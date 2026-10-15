@@ -271,5 +271,61 @@ describe("Supabase Schema, Migration Replayability & Type Alignment Validation",
       "Function execution must be revoked from anon and public"
     );
   });
+
+  it("should verify atomic refund settlement and balance reservation migration defines updated settle_payment_webhook and reservation RPCs", () => {
+    const refundMigrationFile = path.join(migrationsDir, "20261011000000_atomic_refund_settlement_and_balance_reservation.sql");
+    assert.ok(fs.existsSync(refundMigrationFile), "Atomic refund settlement and balance reservation migration must exist");
+    const sql = fs.readFileSync(refundMigrationFile, "utf-8");
+
+    // 1. settle_payment_webhook updated signature with refund parameters
+    assert.ok(
+      /p_refund_amount NUMERIC DEFAULT NULL/i.test(sql),
+      "settle_payment_webhook must accept p_refund_amount"
+    );
+    assert.ok(
+      /p_refund_reference (TEXT|VARCHAR) DEFAULT NULL/i.test(sql),
+      "settle_payment_webhook must accept p_refund_reference"
+    );
+    assert.ok(
+      /p_refund_id (TEXT|VARCHAR) DEFAULT NULL/i.test(sql),
+      "settle_payment_webhook must accept p_refund_id"
+    );
+    assert.ok(
+      /p_refund_state (TEXT|VARCHAR) DEFAULT NULL/i.test(sql),
+      "settle_payment_webhook must accept p_refund_state"
+    );
+    assert.ok(
+      /FOR UPDATE/i.test(sql),
+      "settle_payment_webhook must lock original payment with FOR UPDATE"
+    );
+    assert.ok(
+      /FROM payment_webhook_events\s+WHERE provider = p_provider AND event_id = p_event_id/i.test(sql),
+      "settle_payment_webhook must check duplicate webhook events under row lock"
+    );
+
+    // 2. reserve_refund_balance
+    assert.ok(
+      /CREATE OR REPLACE FUNCTION public\.reserve_refund_balance/i.test(sql),
+      "Migration must define reserve_refund_balance RPC"
+    );
+    assert.ok(
+      /CUMULATIVE_REFUND_LIMIT_EXCEEDED/i.test(sql),
+      "reserve_refund_balance must reject refunds exceeding remaining balance"
+    );
+    assert.ok(
+      /GRANT EXECUTE ON FUNCTION public\.reserve_refund_balance.*TO authenticated, service_role/i.test(sql),
+      "reserve_refund_balance must be granted to authenticated and service_role"
+    );
+
+    // 3. release_refund_reservation
+    assert.ok(
+      /CREATE OR REPLACE FUNCTION public\.release_refund_reservation/i.test(sql),
+      "Migration must define release_refund_reservation RPC"
+    );
+    assert.ok(
+      /GRANT EXECUTE ON FUNCTION public\.release_refund_reservation.*TO authenticated, service_role/i.test(sql),
+      "release_refund_reservation must be granted to authenticated and service_role"
+    );
+  });
 });
 

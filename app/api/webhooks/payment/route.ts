@@ -1383,7 +1383,13 @@ export async function POST(req: Request) {
               metadata: eventMetadata,
             },
             undefined,
-            { metadata: updatedMetadata }
+            {
+              metadata: updatedMetadata,
+              refundAmount: isRefundEvent ? effectiveRefundAmount : undefined,
+              refundReference: isRefundEvent ? currentRefundIdentifier : undefined,
+              refundId: isRefundEvent ? (verifiedRefundId || webhookRefundId || undefined) : undefined,
+              refundState: isRefundEvent ? refundLifecycleState : undefined,
+            }
           );
           if (settlementRes?.isDuplicate) {
             isSettlementDuplicate = true;
@@ -1396,7 +1402,7 @@ export async function POST(req: Request) {
             );
           }
 
-          // Fallback only allowed in demo/test mode if mock repos did not implement atomic settlement
+          // Fallback only allowed in demo/test mode if custom mock container did not implement atomic settlement
           await repos.transactions.updateStatus(existingTx.id, txStatus, undefined, {
             metadata: updatedMetadata,
           });
@@ -1413,45 +1419,27 @@ export async function POST(req: Request) {
               isSettlementDuplicate = true;
             }
           }
-        }
-
-        // Create or update dedicated refund-specific transaction record for partial or full refund
-        if (isRefundEvent && currentRefundIdentifier && !isSettlementDuplicate) {
-          const refundTxRef = currentRefundIdentifier;
-          try {
-            const existingRefundTx = await repos.transactions.findByReference(refundTxRef);
-            if (!existingRefundTx) {
-              await repos.transactions.create({
-                customer_id: existingTx.customer_id,
-                organization_id: existingTx.organization_id,
-                renewal_id: existingTx.renewal_id,
-                amount: -Math.abs(effectiveRefundAmount),
-                currency: (payload.data.currency || existingTx.currency || "NGN").toUpperCase().trim(),
-                provider: existingTx.provider || "paystack",
-                reference: refundTxRef,
-                status: refundLifecycleState === "refund_confirmed" ? "succeeded" : "pending",
-                transaction_type: "refund",
-                metadata: {
-                  original_transaction_id: existingTx.id,
-                  originalReference: ref,
-                  refund_reference: currentRefundIdentifier,
-                  refund_id: verifiedRefundId || webhookRefundId || null,
-                  refund_amount: effectiveRefundAmount,
-                  refund_state: refundLifecycleState,
-                  settled_at: new Date().toISOString(),
-                },
-              });
-            } else if (refundLifecycleState === "refund_confirmed" && existingRefundTx.status !== "succeeded") {
-              await repos.transactions.updateStatus(existingRefundTx.id, "succeeded", undefined, {
-                metadata: {
-                  ...existingRefundTx.metadata,
-                  refund_state: "refund_confirmed",
-                  settled_at: new Date().toISOString(),
-                },
-              });
-            }
-          } catch {
-            // Non-fatal if refund record already exists or concurrent insertion handled
+          if (isRefundEvent && currentRefundIdentifier) {
+            await repos.transactions.create({
+              customer_id: existingTx.customer_id,
+              organization_id: existingTx.organization_id,
+              renewal_id: existingTx.renewal_id,
+              amount: -Math.abs(effectiveRefundAmount),
+              currency: (payload.data.currency || existingTx.currency || "NGN").toUpperCase().trim(),
+              provider: existingTx.provider || "paystack",
+              reference: currentRefundIdentifier,
+              status: refundLifecycleState === "refund_confirmed" ? "succeeded" : "pending",
+              transaction_type: "refund",
+              metadata: {
+                original_transaction_id: existingTx.id,
+                originalReference: ref,
+                refund_reference: currentRefundIdentifier,
+                refund_id: verifiedRefundId || webhookRefundId || null,
+                refund_amount: effectiveRefundAmount,
+                refund_state: refundLifecycleState,
+                settled_at: new Date().toISOString(),
+              },
+            });
           }
         }
 

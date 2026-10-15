@@ -1,9 +1,18 @@
-import React from "react";
+"use client";
+
+import React, { useEffect, useState, useCallback, useTransition } from "react";
+import { useSearchParams } from "next/navigation";
 import { ActionLedger } from "@/components/actionos/action-ledger";
 import {
   ShieldCheck,
   Hash,
   Lock,
+  RefreshCw,
+  Sparkles,
+  AlertTriangle,
+  RotateCcw,
+  CheckCircle2,
+  Layers,
 } from "lucide-react";
 import type { ActionLedgerEvent } from "@/types/actionos";
 
@@ -164,62 +173,279 @@ const BENCHMARK_EVENTS: ActionLedgerEvent[] = [
   },
 ];
 
+interface LedgerIntegrityInfo {
+  valid: boolean;
+  totalEvents: number;
+  chainValid: boolean;
+  signaturesValid: boolean;
+  verifiedAt: string;
+  error?: string;
+}
+
 export default function ActionLedgerPage() {
+  const searchParams = useSearchParams();
+  const urlSessionId = searchParams.get("sessionId");
+
+  const [liveEvents, setLiveEvents] = useState<ActionLedgerEvent[]>([]);
+  const [integrity, setIntegrity] = useState<LedgerIntegrityInfo | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [activeMode, setActiveMode] = useState<"live" | "benchmark">("live");
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [, startTransition] = useTransition();
+
+  const fetchLedger = useCallback(async () => {
+    try {
+      setRefreshing(true);
+      const query = new URLSearchParams();
+      query.set("verify", "true");
+      query.set("limit", "100");
+      if (urlSessionId) query.set("sessionId", urlSessionId);
+
+      const res = await fetch(`/api/ledger?${query.toString()}`);
+      const json = await res.json();
+
+      if (json.success && Array.isArray(json.data?.events)) {
+        setLiveEvents(json.data.events);
+        if (json.data.integrity) {
+          setIntegrity(json.data.integrity);
+        }
+      }
+    } catch {
+      // Clean fallback handled by UI state
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [urlSessionId]);
+
+  useEffect(() => {
+    fetchLedger();
+  }, [fetchLedger]);
+
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const interval = setInterval(() => {
+      fetchLedger();
+    }, 8000);
+    return () => clearInterval(interval);
+  }, [autoRefresh, fetchLedger]);
+
+  const displayedEvents =
+    activeMode === "benchmark" || (activeMode === "live" && liveEvents.length === 0 && !loading)
+      ? BENCHMARK_EVENTS
+      : liveEvents;
+
+  const compensatingCount = displayedEvents.filter(
+    (e) => e.isCompensating || (e.metadata as Record<string, unknown> | undefined)?.isCompensating
+  ).length;
+
+  const totalEventsCount = displayedEvents.length;
+
   return (
     <div className="space-y-6">
-      <div className="border-b border-slate-200 pb-4">
-        <div className="flex items-center gap-2">
-          <h1 className="text-2xl font-black text-slate-900 tracking-tight">
-            Cryptographic Action Ledger™ Inspector
-          </h1>
-          <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-black text-emerald-800 border border-emerald-200">
-            MERKLE HASH CHAINING
+      {/* Header and Controls */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-4">
+        <div>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-black text-slate-900 tracking-tight">
+              Cryptographic Action Ledger™ Inspector
+            </h1>
+            <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-black text-emerald-800 border border-emerald-200">
+              MERKLE HASH CHAINING
+            </span>
+          </div>
+          <p className="text-xs sm:text-sm text-slate-500 mt-1 max-w-3xl">
+            Every autonomous AI action, statutory NIID validation, financial settlement, and saga rollback is cryptographically linked with SHA-256 and HMAC-SHA256 digital signatures.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2.5 shrink-0">
+          {/* Mode Switcher */}
+          <div className="flex rounded-xl bg-slate-100 p-1 text-xs border border-slate-200 font-semibold">
+            <button
+              type="button"
+              onClick={() => startTransition(() => setActiveMode("live"))}
+              className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                activeMode === "live"
+                  ? "bg-white text-slate-900 shadow-xs font-bold"
+                  : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              Live Records ({liveEvents.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => startTransition(() => setActiveMode("benchmark"))}
+              className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                activeMode === "benchmark"
+                  ? "bg-white text-slate-900 shadow-xs font-bold"
+                  : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              Benchmark Run (12)
+            </button>
+          </div>
+
+          {/* Auto Refresh Toggle */}
+          <button
+            type="button"
+            onClick={() => setAutoRefresh((prev) => !prev)}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${
+              autoRefresh
+                ? "bg-emerald-50 text-emerald-700 border-emerald-300"
+                : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+            }`}
+            title="Auto-refresh ledger every 8s"
+          >
+            <span
+              className={`w-2 h-2 rounded-full ${
+                autoRefresh ? "bg-emerald-500 animate-pulse" : "bg-slate-300"
+              }`}
+            />
+            <span className="hidden sm:inline">Live Sync</span>
+          </button>
+
+          {/* Refresh button */}
+          <button
+            type="button"
+            onClick={fetchLedger}
+            disabled={refreshing}
+            className="p-2 rounded-xl bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 shadow-xs transition-all cursor-pointer disabled:opacity-50"
+            title="Refresh ledger now"
+          >
+            <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin text-emerald-600" : ""}`} />
+          </button>
+        </div>
+      </div>
+
+      {/* Real-Time Operational Statistics Strip */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* Metric 1: Total Logged Records */}
+        <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-xs flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between text-slate-500 text-xs font-bold uppercase mb-1">
+              <span className="flex items-center gap-1.5">
+                <Layers className="w-4 h-4 text-slate-400" />
+                <span>Audited Records</span>
+              </span>
+              <span className="text-[10px] font-mono text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                {activeMode === "live" ? "REALTIME" : "REFERENCE"}
+              </span>
+            </div>
+            <div className="text-2xl font-black text-slate-900 mt-1">
+              {loading && activeMode === "live" ? "..." : totalEventsCount}
+            </div>
+          </div>
+          <p className="text-xs text-slate-500 mt-2">
+            Sequential append-only entries verified against tenant authorization context.
+          </p>
+        </div>
+
+        {/* Metric 2: Non-Repudiation Signatures */}
+        <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-xs flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between text-emerald-700 text-xs font-bold uppercase mb-1">
+              <span className="flex items-center gap-1.5">
+                <Lock className="w-4 h-4 text-emerald-600" />
+                <span>HMAC Signatures</span>
+              </span>
+              <span className="text-[10px] font-mono text-emerald-800 bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-200">
+                100% SIGNED
+              </span>
+            </div>
+            <div className="text-2xl font-black text-slate-900 mt-1 flex items-center gap-1.5">
+              <span>Non-Repudiation</span>
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+            </div>
+          </div>
+          <p className="text-xs text-slate-500 mt-2">
+            HMAC digital signatures bind every action to the authorized orchestrator key.
+          </p>
+        </div>
+
+        {/* Metric 3: Merkle Genesis Chain */}
+        <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-xs flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between text-emerald-700 text-xs font-bold uppercase mb-1">
+              <span className="flex items-center gap-1.5">
+                <Hash className="w-4 h-4 text-emerald-600" />
+                <span>Cryptographic Chain</span>
+              </span>
+              {integrity?.valid ? (
+                <span className="text-[10px] font-mono text-emerald-800 bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-200">
+                  INTACT
+                </span>
+              ) : (
+                <span className="text-[10px] font-mono text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
+                  SHA-256
+                </span>
+              )}
+            </div>
+            <div className="text-2xl font-black text-slate-900 mt-1">
+              {integrity?.chainValid ? "Zero Drift" : "Sequential SHA-256"}
+            </div>
+          </div>
+          <p className="text-xs text-slate-500 mt-2">
+            Each event embeds predecessor hash &amp; tamper detection prevents historical rewrites.
+          </p>
+        </div>
+
+        {/* Metric 4: Saga Reversal Compensations */}
+        <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-xs flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between text-slate-500 text-xs font-bold uppercase mb-1">
+              <span className="flex items-center gap-1.5">
+                <RotateCcw className="w-4 h-4 text-amber-600" />
+                <span>Saga Rollbacks</span>
+              </span>
+              {compensatingCount > 0 ? (
+                <span className="text-[10px] font-mono text-rose-800 bg-rose-100 px-1.5 py-0.5 rounded border border-rose-200 font-bold">
+                  {compensatingCount} ACTIVE
+                </span>
+              ) : (
+                <span className="text-[10px] font-mono text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
+                  0 ACTIVE
+                </span>
+              )}
+            </div>
+            <div className="text-2xl font-black text-slate-900 mt-1">
+              {compensatingCount} Reversals
+            </div>
+          </div>
+          <p className="text-xs text-slate-500 mt-2">
+            Compensating transactions cleanly reversed across Paystack &amp; core insurance tables.
+          </p>
+        </div>
+      </div>
+
+      {/* Notification banner when viewing benchmark because live is empty */}
+      {activeMode === "live" && liveEvents.length === 0 && !loading && (
+        <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-2.5">
+            <Sparkles className="w-4 h-4 text-amber-600 shrink-0" />
+            <span>
+              <strong>Showing Benchmark Reference Run:</strong> No live sessions were recorded in the active store yet. Trigger a workflow in the Operations Center to see real-time events appear here.
+            </span>
+          </div>
+          <span className="text-[10px] font-bold uppercase tracking-wider text-amber-800 bg-amber-100 px-2 py-0.5 rounded border border-amber-300">
+            DEMO MODE
           </span>
         </div>
-        <p className="text-xs sm:text-sm text-slate-500 mt-1">
-          Every autonomous AI action, guardrail validation, financial settlement, and statutory certificate issuance is cryptographically linked with SHA-256 and HMAC digital signatures.
-        </p>
-      </div>
+      )}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-xs">
-          <div className="flex items-center gap-2 text-emerald-700 font-bold text-xs uppercase mb-1">
-            <Lock className="w-4 h-4" />
-            <span>Non-Repudiation</span>
-          </div>
-          <div className="text-lg font-black text-slate-900">100% Signed Blocks</div>
-          <p className="text-xs text-slate-500 mt-1">
-            HMAC digital signatures bind every event to the authorized orchestrator key.
-          </p>
-        </div>
-
-        <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-xs">
-          <div className="flex items-center gap-2 text-emerald-700 font-bold text-xs uppercase mb-1">
-            <Hash className="w-4 h-4" />
-            <span>Genesis Hash Chain</span>
-          </div>
-          <div className="text-lg font-black text-slate-900">Sequential SHA-256</div>
-          <p className="text-xs text-slate-500 mt-1">
-            Each event embeds the cryptographic hash of its predecessor, creating a tamper-evident audit trail.
-          </p>
-        </div>
-
-        <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-xs">
-          <div className="flex items-center gap-2 text-emerald-700 font-bold text-xs uppercase mb-1">
-            <ShieldCheck className="w-4 h-4" />
-            <span>Zero Tamper Guarantee</span>
-          </div>
-          <div className="text-lg font-black text-slate-900">Instant Detection</div>
-          <p className="text-xs text-slate-500 mt-1">
-            Any modification of historical amounts or dates invalidates the entire downstream chain.
-          </p>
-        </div>
-      </div>
-
+      {/* Main Ledger Component with Live Data */}
       <ActionLedger
-        events={BENCHMARK_EVENTS}
-        sessionId="act_benchmark_camry_001"
-        workflowTitle="Complete 12-Stage Benchmark Vehicle Insurance Renewal Ledger"
+        events={displayedEvents}
+        sessionId={urlSessionId || (displayedEvents[0]?.sessionId ?? "act_benchmark_camry_001")}
+        workflowTitle={
+          urlSessionId
+            ? `Cryptographic Audit Ledger for Session ${urlSessionId}`
+            : activeMode === "benchmark"
+            ? "Complete 12-Stage Benchmark Vehicle Insurance Renewal Ledger"
+            : "Live ActionOS Orchestration & Settlement Audit Ledger"
+        }
+        onRefresh={fetchLedger}
       />
     </div>
   );

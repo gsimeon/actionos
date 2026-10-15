@@ -25,6 +25,8 @@ import {
   Copy,
   Layers,
   Clock,
+  RotateCcw,
+  ArrowRight,
 } from "lucide-react";
 import { StatusBadge } from "@/components/actionos/status-badge";
 import { AuthorizationCard, type AuthorizationOptions } from "@/components/actionos/authorization-dialog";
@@ -151,18 +153,32 @@ export function RenewalOperationsCenter() {
     ledgerEvents: [],
   });
 
+  const [reconStatus, setReconStatus] = useState<{
+    totalPending: number;
+    retryableCount: number;
+    deadLetteredCount: number;
+  } | null>(null);
+
   const loadData = async () => {
     try {
       setRefreshing(true);
-      const [renRes, polRes, cusRes] = await Promise.all([
-        fetch("/api/renewals").then((r) => r.json()),
-        fetch("/api/policies").then((r) => r.json()),
-        fetch("/api/customers").then((r) => r.json()),
+      const [renRes, polRes, cusRes, recRes] = await Promise.all([
+        fetch("/api/renewals").then((r) => r.json()).catch(() => ({ success: false })),
+        fetch("/api/policies").then((r) => r.json()).catch(() => ({ success: false })),
+        fetch("/api/customers").then((r) => r.json()).catch(() => ({ success: false })),
+        fetch("/api/recovery/reconcile").then((r) => r.json()).catch(() => ({ success: false })),
       ]);
 
       if (renRes.success) setRenewals(renRes.data || []);
       if (polRes.success) setPolicies(polRes.data || []);
       if (cusRes.success) setCustomers(cusRes.data || []);
+      if (recRes.success && recRes.data) {
+        setReconStatus({
+          totalPending: recRes.data.totalPending,
+          retryableCount: recRes.data.retryableCount,
+          deadLetteredCount: recRes.data.deadLetteredCount,
+        });
+      }
     } catch {
       setActionAlert({ type: "warning", message: "Failed to reload pipeline state from server." });
     } finally {
@@ -209,7 +225,8 @@ export function RenewalOperationsCenter() {
       const matchesStatus =
         statusFilter === "all" ||
         r.status === statusFilter ||
-        (statusFilter === "pending" && (r.status === "scheduled" || r.status === "awaiting_confirmation"));
+        (statusFilter === "pending" && (r.status === "scheduled" || r.status === "awaiting_confirmation")) ||
+        (statusFilter === "failed" && (r.status === "failed" || r.status === "escalated"));
 
       // Urgency filter
       let matchesUrgency = true;
@@ -231,9 +248,10 @@ export function RenewalOperationsCenter() {
       (r) => r.status === "awaiting_confirmation"
     ).length;
     const completed = renewals.filter((r) => r.status === "completed").length;
+    const failed = renewals.filter((r) => r.status === "failed" || r.status === "escalated").length;
     const grossPremium = renewals.reduce((acc, r) => acc + (r.quote_amount || 87500), 0);
 
-    return { total, urgent, awaitingAuth, completed, grossPremium };
+    return { total, urgent, awaitingAuth, completed, failed, grossPremium };
   }, [renewals]);
 
   // Launch AI Renewal Saga workflow
@@ -343,14 +361,22 @@ export function RenewalOperationsCenter() {
         json.data.status === "failed" ||
         json.data.status === "escalated";
 
+      const events: ActionLedgerEvent[] = json.data.events || [];
+      const certEv = events.find(
+        (e: ActionLedgerEvent) => e.tool === "generate_certificate" || e.action === "issue_certificate"
+      );
+      const payEv = events.find(
+        (e: ActionLedgerEvent) => e.tool === "execute_payment" || e.action === "execute_payment"
+      );
+
       setSagaState((prev) => ({
         ...prev,
         status: isCompensated ? "failed" : "completed",
         resultMessage: json.data.message,
         ledgerEvents: json.data.events || prev.ledgerEvents,
         settlementSummary: {
-          txReference: `PSTK-${Date.now().toString().slice(-8)}`,
-          certificateNumber: `NAICOM-2026-CERT-${Math.floor(100000 + Math.random() * 900000)}`,
+          txReference: payEv?.referenceId || "Not available",
+          certificateNumber: certEv?.referenceId || "Not available",
           newExpiry: "October 14, 2027",
           provider: options?.selectedUnderwriter || "Leadway Assurance",
           amount: options?.customAmount || 87500,
@@ -469,6 +495,38 @@ export function RenewalOperationsCenter() {
           >
             <X className="w-4 h-4" />
           </button>
+        </div>
+      )}
+
+      {/* Operational Reconciliation Alert Callout */}
+      {reconStatus && reconStatus.totalPending > 0 && (
+        <div className="p-4 rounded-2xl border border-amber-300 bg-amber-50/90 text-amber-950 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm animate-in fade-in duration-200">
+          <div className="flex items-start sm:items-center gap-3">
+            <div className="p-2 rounded-xl bg-amber-100 text-amber-800 border border-amber-200 shrink-0">
+              <RotateCcw className="w-5 h-5 animate-spin" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-extrabold text-sm text-amber-900">
+                  Payment Settlement &amp; Refund Reconciliation Active ({reconStatus.totalPending} pending)
+                </span>
+                <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-amber-200/80 text-amber-800">
+                  SUPERVISOR QUEUE
+                </span>
+              </div>
+              <p className="text-xs text-amber-800/90 mt-0.5">
+                Ambiguous gateway response or unconfirmed refund detected. ActionOS Durable Recovery Worker holds idempotency gates to prevent duplicate debits.
+              </p>
+            </div>
+          </div>
+
+          <Link
+            href="/escalations"
+            className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition-all shadow-xs inline-flex items-center gap-1.5 shrink-0 cursor-pointer"
+          >
+            <span>Open Reconciliation Queue</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </Link>
         </div>
       )}
 
@@ -630,6 +688,21 @@ export function RenewalOperationsCenter() {
             >
               Completed ({metrics.completed})
             </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setUrgencyFilter("all");
+                setStatusFilter("failed");
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
+                statusFilter === "failed"
+                  ? "bg-rose-600 text-white shadow-xs"
+                  : "bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100"
+              }`}
+            >
+              Needs Review ({metrics.failed})
+            </button>
           </div>
         </div>
       </div>
@@ -725,7 +798,7 @@ export function RenewalOperationsCenter() {
                                 engine: (vehicleMeta.engine_number as string) || "DEMO-ENGINE-000001",
                                 vehicleName,
                                 owner: customer?.full_name || "Amina Bello",
-                                token: `NIID-2026-VAL-${Math.floor(100000 + Math.random() * 900000)}`,
+                                token: `NIID-2026-VAL-${policyNum.replace(/\D/g, "").padEnd(6, "0").slice(-6) || "000182"}`,
                               })
                             }
                             className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-200 cursor-pointer transition-all"
@@ -793,6 +866,15 @@ export function RenewalOperationsCenter() {
                       {/* 6. Action Trigger */}
                       <td className="px-5 py-4 text-right">
                         <div className="flex items-center justify-end gap-2">
+                          <Link
+                            href={`/ledger?sessionId=${r.id}`}
+                            className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 text-xs font-semibold transition-all inline-flex items-center gap-1"
+                            title="Inspect Cryptographic Action Ledger"
+                          >
+                            <FileText className="w-3 h-3 text-emerald-600" />
+                            <span className="hidden sm:inline">Ledger</span>
+                          </Link>
+
                           <button
                             type="button"
                             onClick={() => {

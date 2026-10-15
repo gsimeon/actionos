@@ -1181,8 +1181,19 @@ export class SupabaseTransactionRepository implements ITransactionRepository {
       metadata?: Record<string, unknown>;
     },
     tenant?: TenantContext,
-    extra?: { metadata?: Record<string, unknown> }
-  ): Promise<{ transaction: Transaction; webhookEvent: WebhookEventRecord; isDuplicate?: boolean }> {
+    extra?: {
+      metadata?: Record<string, unknown>;
+      refundAmount?: number;
+      refundReference?: string;
+      refundId?: string;
+      refundState?: string;
+    }
+  ): Promise<{
+    transaction: Transaction;
+    webhookEvent: WebhookEventRecord;
+    isDuplicate?: boolean;
+    refundTransaction?: Transaction | null;
+  }> {
     // 1. Attempt atomic settlement via Postgres RPC
     try {
       const { data, error } = await this.client.rpc("settle_payment_webhook", {
@@ -1194,6 +1205,10 @@ export class SupabaseTransactionRepository implements ITransactionRepository {
         p_event_type: event.eventType,
         p_reference: event.reference,
         p_event_metadata: event.metadata ?? {},
+        p_refund_amount: extra?.refundAmount ?? null,
+        p_refund_reference: extra?.refundReference ?? null,
+        p_refund_id: extra?.refundId ?? null,
+        p_refund_state: extra?.refundState ?? null,
       });
 
       if (error) {
@@ -1216,12 +1231,14 @@ export class SupabaseTransactionRepository implements ITransactionRepository {
             transaction: (data.transaction || {}) as Transaction,
             webhookEvent: (data.webhook_event || {}) as WebhookEventRecord,
             isDuplicate: true,
+            refundTransaction: (data.refund_transaction || null) as Transaction | null,
           };
         }
         return {
           transaction: data.transaction as Transaction,
           webhookEvent: data.webhook_event as WebhookEventRecord,
           isDuplicate: false,
+          refundTransaction: (data.refund_transaction || null) as Transaction | null,
         };
       }
     } catch (rpcErr) {
@@ -1263,6 +1280,7 @@ export class SupabaseTransactionRepository implements ITransactionRepository {
           transaction: existingTx || ({} as Transaction),
           webhookEvent: {} as WebhookEventRecord,
           isDuplicate: true,
+          refundTransaction: null,
         };
       }
       throw new DatabaseError(`Failed to record webhook event: ${eventErr.message}`, eventErr.code, eventErr);
@@ -1274,6 +1292,7 @@ export class SupabaseTransactionRepository implements ITransactionRepository {
         transaction: updated,
         webhookEvent: eventData as WebhookEventRecord,
         isDuplicate: false,
+        refundTransaction: null,
       };
     } catch (statusErr) {
       // Rollback inserted webhook event so subsequent provider retries can re-attempt cleanly
@@ -1286,6 +1305,69 @@ export class SupabaseTransactionRepository implements ITransactionRepository {
         // Ignore rollback cleanup errors and propagate original statusErr
       }
       throw statusErr;
+    }
+  }
+
+  async reserveRefundBalance(
+    transactionIdOrRef: string,
+    amount: number,
+    tenant?: TenantContext,
+    options?: { refundReference?: string; reason?: string }
+  ): Promise<{ success: boolean; remainingBalance: number; reservationId?: string }> {
+    const existing = await this.findByReference(transactionIdOrRef, tenant);
+    const targetId = existing?.id || transactionIdOrRef;
+
+    const { data, error } = await this.client.rpc("reserve_refund_balance", {
+      p_transaction_id: targetId,
+      p_amount: amount,
+      p_organization_id: tenant?.organizationId ?? null,
+      p_customer_id: tenant?.customerId ?? null,
+      p_refund_reference: options?.refundReference ?? null,
+    });
+
+    if (error) {
+      throw new DatabaseError(
+        `Failed to reserve refund balance: ${error.message}`,
+        error.code,
+        error
+      );
+    }
+
+    if (!data || data.success === false) {
+      throw new DatabaseError(
+        data?.message || "Failed to reserve refund balance",
+        data?.error || "CUMULATIVE_REFUND_LIMIT_EXCEEDED"
+      );
+    }
+
+    return {
+      success: true,
+      remainingBalance: typeof data.remaining_balance === "number" ? data.remaining_balance : 0,
+      reservationId: data.reservation_id,
+    };
+  }
+
+  async releaseRefundReservation(
+    transactionIdOrRef: string,
+    amount: number,
+    tenant?: TenantContext,
+    options?: { reservationId?: string }
+  ): Promise<void> {
+    const existing = await this.findByReference(transactionIdOrRef, tenant);
+    const targetId = existing?.id || transactionIdOrRef;
+
+    const { error } = await this.client.rpc("release_refund_reservation", {
+      p_transaction_id: targetId,
+      p_amount: amount,
+      p_reservation_id: options?.reservationId ?? null,
+    });
+
+    if (error) {
+      throw new DatabaseError(
+        `Failed to release refund reservation: ${error.message}`,
+        error.code,
+        error
+      );
     }
   }
 }
@@ -1497,6 +1579,40 @@ export class SupabaseLedgerRepository implements ILedgerRepository {
       .order("sequence_number", { ascending: true });
 
     if (error) throw new DatabaseError(`Ledger query failed: ${error.message}`, error.code, error);
+    return (data || []).map((row) => ({
+      id: row.id,
+      sessionId: row.session_id,
+      sequenceNumber: row.sequence_number,
+      timestamp: row.timestamp,
+      action: row.action,
+      description: row.description,
+      actor: row.actor as ActionLedgerEvent["actor"],
+      status: row.status as ActionLedgerEvent["status"],
+      tool: row.tool ?? undefined,
+      referenceId: row.reference_id ?? undefined,
+      previousHash: row.previous_hash,
+      hash: row.event_hash,
+      signature: row.signature,
+      signingKeyVersion: row.signing_key_version,
+      eventClass: (row.event_class as ActionLedgerEvent["eventClass"]) || undefined,
+      isCompensating: typeof row.is_compensating === "boolean" ? row.is_compensating : undefined,
+      metadata: (row.metadata as Record<string, unknown>) || {},
+    }));
+  }
+
+  async getAllEvents(tenant?: TenantContext, options?: { limit?: number; offset?: number }): Promise<ActionLedgerEvent[]> {
+    let query = this.client
+      .from("action_ledger_events")
+      .select("*")
+      .order("timestamp", { ascending: false });
+
+    if (options?.limit) {
+      const from = options.offset || 0;
+      query = query.range(from, from + options.limit - 1);
+    }
+
+    const { data, error } = await query;
+    if (error) throw new DatabaseError(`Ledger query all failed: ${error.message}`, error.code, error);
     return (data || []).map((row) => ({
       id: row.id,
       sessionId: row.session_id,

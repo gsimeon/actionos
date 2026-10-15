@@ -94,51 +94,82 @@ export class RefundPaymentTool implements IActionOSTool<RefundPaymentInput, Refu
       role: context.auth.role,
     };
 
-    // Lookup original transaction if present to validate refund limits and persist expected refund amount
+    // 1. FAIL CLOSED: Require a successfully retrieved, tenant-authorized original transaction before initiating any refund
     let originalTx: Transaction | null = null;
     try {
       originalTx = await repos.transactions.findByReference(input.reference, tenantContext);
-    } catch {
-      // Non-fatal if original transaction not found
+    } catch (dbErr) {
+      return {
+        success: false,
+        error: {
+          code: "DATABASE_LOOKUP_FAILED",
+          message: `Database error querying original transaction '${input.reference}': ${dbErr instanceof Error ? dbErr.message : String(dbErr)}. Failing closed.`,
+        },
+      };
     }
 
-    if (originalTx) {
-      const prevCumulative: number =
-        typeof originalTx.metadata?.cumulative_refund_amount === "number"
-          ? (originalTx.metadata.cumulative_refund_amount as number)
-          : originalTx.status === "refunded"
-          ? originalTx.amount
-          : 0;
-
-      const remainingBalance = Math.max(0, originalTx.amount - prevCumulative);
-
-      if (input.amount > remainingBalance + 0.01) {
-        return {
-          success: false,
-          error: {
-            code: "CUMULATIVE_REFUND_LIMIT_EXCEEDED",
-            message: `Requested refund amount (${input.amount}) exceeds remaining refundable balance (${remainingBalance}) of original payment transaction (${originalTx.amount}). Previous cumulative refunds: ${prevCumulative}.`,
-          },
-        };
-      }
-
-      // Persist expected refund amount on original transaction metadata separately
-      try {
-        await repos.transactions.updateStatus(originalTx.id, originalTx.status, tenantContext, {
-          metadata: {
-            ...originalTx.metadata,
-            expected_refund_amount: input.amount,
-            last_refund_initiated_at: new Date().toISOString(),
-          },
-        });
-      } catch {
-        // Non-fatal update
-      }
+    if (!originalTx) {
+      return {
+        success: false,
+        error: {
+          code: "TRANSACTION_NOT_FOUND",
+          message: `Original payment transaction '${input.reference}' was not found or tenant authorization mismatch. Cannot refund an unverified transaction.`,
+        },
+      };
     }
 
-    // 1. Process refund directly through payment rail provider
+    if (originalTx.status !== "succeeded" && originalTx.status !== "partially_refunded") {
+      return {
+        success: false,
+        error: {
+          code: "INVALID_TRANSACTION_STATUS",
+          message: `Cannot refund transaction in status '${originalTx.status}'. Only succeeded or partially_refunded transactions may be refunded.`,
+        },
+      };
+    }
+
+    // 2. ATOMIC BALANCE RESERVATION: Move refund balance reservation and cumulative-limit enforcement into an atomic database operation
+    // Prevents two simultaneous refund requests from spending the same balance
+    let reservationResult: { success: boolean; remainingBalance: number; reservationId?: string };
+    try {
+      reservationResult = await repos.transactions.reserveRefundBalance(
+        originalTx.id,
+        input.amount,
+        tenantContext,
+        { reason: input.reason }
+      );
+    } catch (reserveErr) {
+      const errCode = (reserveErr as { code?: string })?.code || "CUMULATIVE_REFUND_LIMIT_EXCEEDED";
+      const errMsg = reserveErr instanceof Error ? reserveErr.message : String(reserveErr);
+      return {
+        success: false,
+        error: {
+          code: errCode,
+          message: errMsg,
+        },
+      };
+    }
+
+    if (!reservationResult || !reservationResult.success) {
+      return {
+        success: false,
+        error: {
+          code: "CUMULATIVE_REFUND_LIMIT_EXCEEDED",
+          message: `Requested refund amount (${input.amount}) exceeds remaining refundable balance.`,
+        },
+      };
+    }
+
+    const reservationId = reservationResult.reservationId;
+
+    // 3. Process refund directly through payment rail provider
     const paymentProvider = getPaymentProvider();
     if (!paymentProvider.refundPayment) {
+      try {
+        await repos.transactions.releaseRefundReservation(originalTx.id, input.amount, tenantContext, { reservationId });
+      } catch {
+        // ignore release error
+      }
       return {
         success: false,
         error: {
@@ -147,22 +178,87 @@ export class RefundPaymentTool implements IActionOSTool<RefundPaymentInput, Refu
         },
       };
     }
-    const refundProviderRes = await paymentProvider.refundPayment(input.reference, input.amount, {
-      simulateRefundFailure: input.simulateRefundFailure,
-      simulateRefundPending: input.simulateRefundPending,
-      simulateRefundUnknown: input.simulateRefundUnknown,
-    });
+
+    let refundProviderRes;
+    try {
+      refundProviderRes = await paymentProvider.refundPayment(input.reference, input.amount, {
+        simulateRefundFailure: input.simulateRefundFailure,
+        simulateRefundPending: input.simulateRefundPending,
+        simulateRefundUnknown: input.simulateRefundUnknown,
+      });
+    } catch (providerErr) {
+      const errMsg = providerErr instanceof Error ? providerErr.message : String(providerErr);
+      const isNetworkOrUnknown =
+        errMsg.includes("EAI_AGAIN") ||
+        errMsg.includes("ETIMEDOUT") ||
+        errMsg.includes("ECONNRESET") ||
+        errMsg.includes("timeout") ||
+        errMsg.includes("DNS lookup") ||
+        errMsg.includes("network") ||
+        errMsg.includes("FetchError");
+
+      if (!isNetworkOrUnknown) {
+        try {
+          await repos.transactions.releaseRefundReservation(originalTx.id, input.amount, tenantContext, { reservationId });
+        } catch {
+          // ignore
+        }
+      }
+
+      return {
+        success: false,
+        data: {
+          originalReference: input.reference,
+          amount: input.amount,
+          currency: input.currency || "NGN",
+          status: "failed",
+          reason: input.reason,
+          refundedAt: new Date().toISOString(),
+          refundState: isNetworkOrUnknown ? "refund_unknown" : "refund_failed",
+        },
+        error: {
+          code: isNetworkOrUnknown ? "REFUND_UNKNOWN" : "PROVIDER_REFUND_ERROR",
+          message: `Payment provider error during refund execution: ${errMsg}`,
+        },
+      };
+    }
 
     const isConfirmed = refundProviderRes.status === "refund_confirmed" || refundProviderRes.status === "refunded";
     const isPending = refundProviderRes.status === "refund_pending";
     const isUnknown = refundProviderRes.status === "refund_unknown" || refundProviderRes.status === "unknown";
+
+    if (!isConfirmed && !isPending && !isUnknown) {
+      // Provider explicitly failed/declined refund: release reservation and fail closed
+      try {
+        await repos.transactions.releaseRefundReservation(originalTx.id, input.amount, tenantContext, { reservationId });
+      } catch {
+        // ignore
+      }
+      return {
+        success: false,
+        data: {
+          refundReference: refundProviderRes.refundReference,
+          originalReference: input.reference,
+          amount: refundProviderRes.amount !== undefined ? refundProviderRes.amount : input.amount,
+          currency: refundProviderRes.currency || input.currency || "NGN",
+          status: "failed",
+          reason: input.reason,
+          refundedAt: new Date().toISOString(),
+          refundState: "refund_failed",
+        },
+        error: {
+          code: "REFUND_FAILED",
+          message: refundProviderRes.error || "Payment provider declined refund request.",
+        },
+      };
+    }
 
     const refundRef = refundProviderRes.refundReference;
     const dbTxRef = refundRef || `tx_refund_${input.reference}_${Date.now()}`;
     const providerName = paymentProvider.name.includes("Paystack Gateway") ? "paystack" : "mock_paystack";
 
     if (isConfirmed) {
-      // 2. Authoritative confirmation: Record reversing transaction as succeeded
+      // 4. Authoritative confirmation: Record reversing transaction as succeeded
       await repos.transactions.create(
         {
           customer_id: customerId,
@@ -186,31 +282,60 @@ export class RefundPaymentTool implements IActionOSTool<RefundPaymentInput, Refu
         tenantContext
       );
 
-      if (originalTx) {
-        const prevCumulative: number =
-          typeof originalTx.metadata?.cumulative_refund_amount === "number"
-            ? (originalTx.metadata.cumulative_refund_amount as number)
-            : 0;
-        const newCumulative = prevCumulative + input.amount;
-        const isFullRefund = newCumulative >= originalTx.amount - 0.01;
-        try {
-          await repos.transactions.updateStatus(
-            originalTx.id,
-            isFullRefund ? "refunded" : "partially_refunded",
-            tenantContext,
-            {
-              metadata: {
-                ...originalTx.metadata,
-                refund_state: "refund_confirmed",
-                cumulative_refund_amount: newCumulative,
-                remaining_balance: Math.max(0, originalTx.amount - newCumulative),
-                is_partial_refund: !isFullRefund,
-              },
-            }
-          );
-        } catch {
-          // Non-fatal metadata sync
-        }
+      // Update original transaction status and cumulative refund metadata - FAIL CLOSED if update fails
+      const prevCumulative: number =
+        typeof originalTx.metadata?.cumulative_refund_amount === "number"
+          ? (originalTx.metadata.cumulative_refund_amount as number)
+          : 0;
+      const newCumulative = prevCumulative + input.amount;
+      const isFullRefund = newCumulative >= originalTx.amount - 0.01;
+
+      const existingHistory: Array<Record<string, unknown>> = Array.isArray(originalTx.metadata?.refund_history)
+        ? [...(originalTx.metadata.refund_history as Array<Record<string, unknown>>)]
+        : [];
+
+      const updatedHistory = [
+        ...existingHistory,
+        {
+          refund_reference: refundRef || dbTxRef,
+          amount: input.amount,
+          currency: input.currency || originalTx.currency || "NGN",
+          settled_at: new Date().toISOString(),
+        },
+      ];
+
+      const reservedBalance = Math.max(
+        0,
+        Number(originalTx.metadata?.reserved_refund_amount || 0) - input.amount
+      );
+
+      try {
+        await repos.transactions.updateStatus(
+          originalTx.id,
+          isFullRefund ? "refunded" : "partially_refunded",
+          tenantContext,
+          {
+            metadata: {
+              ...originalTx.metadata,
+              refund_state: "refund_confirmed",
+              cumulative_refund_amount: newCumulative,
+              remaining_balance: Math.max(0, originalTx.amount - newCumulative),
+              reserved_refund_amount: reservedBalance,
+              is_partial_refund: !isFullRefund,
+              refund_history: updatedHistory,
+              last_refund_settled_at: new Date().toISOString(),
+            },
+          }
+        );
+      } catch (updateErr) {
+        // Do NOT treat update failure as non-fatal; propagate failure
+        return {
+          success: false,
+          error: {
+            code: "TRANSACTION_UPDATE_FAILED",
+            message: `Failed to update original transaction after confirmed refund: ${updateErr instanceof Error ? updateErr.message : String(updateErr)}. Requires ledger reconciliation.`,
+          },
+        };
       }
 
       return {

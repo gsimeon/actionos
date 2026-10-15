@@ -328,6 +328,19 @@ describe("Payment Provider Adapter Isolation & Production Fail-Closed Tests", ()
         tenantContext
       );
 
+      await repos.transactions.create(
+        {
+          customer_id: "cust_test",
+          amount: 85000,
+          currency: "NGN",
+          provider: "mock_paystack",
+          reference: "ref_mismatch_tx",
+          status: "succeeded",
+          transaction_type: "renewal_premium",
+        },
+        tenantContext
+      );
+
       const refundOutcome = await (orchestrator as unknown as SagaRefundOrchestrator).executeVerifiedSagaRefund({
         sessionId: session.id,
         paymentReference: "ref_mismatch_tx",
@@ -411,6 +424,19 @@ describe("Payment Provider Adapter Isolation & Production Fail-Closed Tests", ()
           customer_id: "cust_test",
           channel: "web",
           status: "executing",
+        },
+        tenantContext
+      );
+
+      await repos.transactions.create(
+        {
+          customer_id: "cust_test",
+          amount: 85000,
+          currency: "NGN",
+          provider: "mock_paystack",
+          reference: "ref_exact_tx",
+          status: "succeeded",
+          transaction_type: "renewal_premium",
         },
         tenantContext
       );

@@ -16,6 +16,7 @@ import type {
   WebhookEventRecord,
   RepositoryContainer,
   TenantContext,
+  LedgerQueryOptions,
 } from "../interfaces";
 import type {
   Customer,
@@ -804,8 +805,36 @@ export class DemoTransactionRepository implements ITransactionRepository {
       metadata?: Record<string, unknown>;
     },
     tenant?: TenantContext,
-    extra?: { metadata?: Record<string, unknown> }
-  ): Promise<{ transaction: Transaction; webhookEvent: WebhookEventRecord; isDuplicate?: boolean }> {
+    extra?: {
+      metadata?: Record<string, unknown>;
+      refundAmount?: number;
+      refundReference?: string;
+      refundId?: string;
+      refundState?: string;
+    }
+  ): Promise<{
+    transaction: Transaction;
+    webhookEvent: WebhookEventRecord;
+    isDuplicate?: boolean;
+    refundTransaction?: Transaction | null;
+  }> {
+    const store = getStore();
+    const tx = store.transactions.find((t) => t.id === id || t.reference === id || t.reference === event.reference);
+    if (!tx) {
+      throw new Error(`Transaction not found: ${id || event.reference}`);
+    }
+
+    const prevStatus = tx.status;
+    const prevMeta = { ...(tx.metadata || {}) };
+    const prevTxIndex = store.transactions.indexOf(tx);
+
+    const isRefund = event.eventType.startsWith("refund.") || extra?.refundAmount !== undefined;
+    const refundRef = extra?.refundReference;
+    let existingRefundTx: Transaction | null = null;
+    if (refundRef) {
+      existingRefundTx = store.transactions.find((t) => t.reference === refundRef && t.transaction_type === "refund") || null;
+    }
+
     const webhookRepo = this.webhookRepo || new DemoWebhookEventRepository();
     // 1. Check or reserve webhook event record first (durable cross-instance uniqueness check)
     const recordResult = await webhookRepo.recordEvent({
@@ -818,29 +847,129 @@ export class DemoTransactionRepository implements ITransactionRepository {
     });
 
     if (recordResult.isDuplicate) {
-      const existingTx =
-        (await this.findByReference(event.reference, tenant)) ||
-        (await this.findByReference(id, tenant));
       return {
-        transaction: existingTx || ({} as Transaction),
+        transaction: tx,
         webhookEvent: recordResult.event,
         isDuplicate: true,
+        refundTransaction: existingRefundTx,
       };
     }
 
-    const store = getStore();
-    const tx = store.transactions.find((t) => t.id === id || t.reference === id);
-    const prevStatus = tx?.status || "pending";
-    const prevMeta = { ...(tx?.metadata || {}) };
+    let newlyCreatedRefundTx: Transaction | null = null;
 
     try {
+      let targetStatus = status;
+
+      if (isRefund && extra?.refundAmount !== undefined) {
+        const refundAmt = Math.abs(extra.refundAmount);
+        const existingHistory = Array.isArray(tx.metadata?.refund_history)
+          ? [...(tx.metadata.refund_history as Array<Record<string, unknown>>)]
+          : [];
+
+        const isAlreadyCounted = existingHistory.some(
+          (h) => (refundRef && h.refund_reference === refundRef) || (extra?.refundId && h.refund_id === extra.refundId)
+        );
+
+        let prevCumulative = typeof tx.metadata?.cumulative_refund_amount === "number"
+          ? (tx.metadata.cumulative_refund_amount as number)
+          : (tx.status as string) === "refunded"
+          ? tx.amount
+          : 0;
+
+        let newCumulative = prevCumulative;
+        if (!isAlreadyCounted && extra?.refundState !== "refund_failed" && extra?.refundState !== "refund_pending") {
+          newCumulative = prevCumulative + refundAmt;
+        }
+
+        if (extra.refundState !== "refund_failed" && extra.refundState !== "refund_pending" && newCumulative > tx.amount + 0.01) {
+          const limitErr = new Error(
+            `Cumulative refund amount (${newCumulative}) exceeds original payment transaction amount (${tx.amount}). Refusing refund settlement.`
+          );
+          (limitErr as { code?: string }).code = "CUMULATIVE_REFUND_LIMIT_EXCEEDED";
+          throw limitErr;
+        }
+
+        if (extra.refundState !== "refund_failed" && extra.refundState !== "refund_pending") {
+          targetStatus = newCumulative >= tx.amount - 0.01 ? "refunded" : "partially_refunded";
+        }
+
+        // Atomically insert or update refund transaction
+        if (refundRef) {
+          const refundTxStatus = extra.refundState === "refund_confirmed" ? "succeeded" : "pending";
+          if (!existingRefundTx) {
+            newlyCreatedRefundTx = await this.create({
+              customer_id: tx.customer_id,
+              organization_id: tx.organization_id || "a0000000-0000-0000-0000-000000000001",
+              renewal_id: tx.renewal_id || null,
+              amount: -refundAmt,
+              currency: tx.currency || "NGN",
+              provider: tx.provider || "paystack",
+              reference: refundRef,
+              status: refundTxStatus,
+              transaction_type: "refund",
+              metadata: {
+                original_transaction_id: tx.id,
+                originalReference: tx.reference,
+                refund_reference: refundRef,
+                refund_id: extra.refundId || null,
+                refund_amount: refundAmt,
+                refund_state: extra.refundState || "refund_confirmed",
+                settled_at: new Date().toISOString(),
+              },
+            }, tenant);
+          } else {
+            existingRefundTx.status = refundTxStatus;
+            existingRefundTx.metadata = {
+              ...existingRefundTx.metadata,
+              refund_state: extra.refundState || "refund_confirmed",
+              settled_at: new Date().toISOString(),
+            };
+            existingRefundTx.updated_at = new Date().toISOString();
+          }
+        }
+
+        // Update original transaction metadata
+        const updatedHistory = isAlreadyCounted || extra.refundState === "refund_failed" || extra.refundState === "refund_pending"
+          ? existingHistory
+          : [
+              ...existingHistory,
+              {
+                refund_reference: refundRef || "",
+                refund_id: extra.refundId || "",
+                amount: refundAmt,
+                currency: tx.currency || "NGN",
+                settled_at: new Date().toISOString(),
+              },
+            ];
+
+        const reservedBalance = Math.max(
+          0,
+          Number(tx.metadata?.reserved_refund_amount || 0) - (extra.refundState === "refund_confirmed" ? refundAmt : 0)
+        );
+
+        extra = {
+          ...extra,
+          metadata: {
+            ...tx.metadata,
+            ...(extra?.metadata || {}),
+            cumulative_refund_amount: newCumulative,
+            remaining_balance: Math.max(0, tx.amount - newCumulative),
+            reserved_refund_amount: reservedBalance,
+            is_partial_refund: newCumulative < tx.amount - 0.01,
+            refund_history: updatedHistory,
+            last_refund_settled_at: new Date().toISOString(),
+          },
+        };
+      }
+
       // Mutate transaction status; this invokes any mocked updateStatus (e.g. simulating DB failure)
-      const updatedTx = await this.updateStatus(id, status, tenant, extra);
+      const updatedTx = await this.updateStatus(id, targetStatus, tenant, extra);
 
       return {
         transaction: updatedTx,
         webhookEvent: recordResult.event,
         isDuplicate: false,
+        refundTransaction: newlyCreatedRefundTx || existingRefundTx,
       };
     } catch (err) {
       // Rollback on any failure to guarantee zero partial writes
@@ -848,12 +977,140 @@ export class DemoTransactionRepository implements ITransactionRepository {
       if (store.webhookEvents) {
         delete store.webhookEvents[key];
       }
+      if (newlyCreatedRefundTx) {
+        const idx = store.transactions.indexOf(newlyCreatedRefundTx);
+        if (idx !== -1) {
+          store.transactions.splice(idx, 1);
+        }
+      }
       if (tx) {
         tx.status = prevStatus;
         tx.metadata = prevMeta;
       }
       throw err;
     }
+  }
+
+  async reserveRefundBalance(
+    transactionIdOrRef: string,
+    amount: number,
+    tenant?: TenantContext,
+    options?: { refundReference?: string; reason?: string }
+  ): Promise<{ success: boolean; remainingBalance: number; reservationId?: string }> {
+    const store = getStore();
+    const tx = store.transactions.find((t) => t.id === transactionIdOrRef || t.reference === transactionIdOrRef);
+    if (!tx) {
+      const notFoundErr = new Error(`Original transaction was not found in records: ${transactionIdOrRef}`);
+      (notFoundErr as { code?: string }).code = "TRANSACTION_NOT_FOUND";
+      throw notFoundErr;
+    }
+
+    if (tenant?.customerId && tx.customer_id !== tenant.customerId) {
+      const authErr = new Error(`Tenant authorization violation for transaction ${transactionIdOrRef}`);
+      (authErr as { code?: string }).code = "UNAUTHORIZED";
+      throw authErr;
+    }
+    if (tenant?.organizationId) {
+      const cust = store.customers.find((c) => c.id === tx.customer_id);
+      if (!cust || cust.organization_id !== tenant.organizationId) {
+        const authErr = new Error(`Tenant authorization violation for transaction ${transactionIdOrRef}`);
+        (authErr as { code?: string }).code = "UNAUTHORIZED";
+        throw authErr;
+      }
+    }
+
+    if (tx.status !== "succeeded" && tx.status !== "partially_refunded") {
+      const statusErr = new Error(
+        `Transaction in status '${tx.status}' cannot be refunded. Must be succeeded or partially_refunded.`
+      );
+      (statusErr as { code?: string }).code = "INVALID_TRANSACTION_STATUS";
+      throw statusErr;
+    }
+
+    const currentCumulative = Number(
+      tx.metadata?.cumulative_refund_amount !== undefined
+        ? tx.metadata.cumulative_refund_amount
+        : (tx.status as string) === "refunded"
+        ? tx.amount
+        : 0
+    );
+    const currentReserved = Number(tx.metadata?.reserved_refund_amount || 0);
+    const remainingBalance = Math.max(0, tx.amount - (currentCumulative + currentReserved));
+
+    if (amount > remainingBalance + 0.01) {
+      const limitErr = new Error(
+        `Requested refund amount (${amount}) exceeds remaining refundable balance (${remainingBalance}) of original payment transaction (${tx.amount}). Previous cumulative: ${currentCumulative}, Reserved: ${currentReserved}.`
+      );
+      (limitErr as { code?: string }).code = "CUMULATIVE_REFUND_LIMIT_EXCEEDED";
+      throw limitErr;
+    }
+
+    const reservationId = options?.refundReference || generateDemoId("resv");
+    const activeReservations = Array.isArray(tx.metadata?.active_refund_reservations)
+      ? [...(tx.metadata.active_refund_reservations as Array<Record<string, unknown>>)]
+      : [];
+    activeReservations.push({
+      reservation_id: reservationId,
+      amount,
+      created_at: new Date().toISOString(),
+    });
+
+    const newRemainingBalance = Math.max(0, remainingBalance - amount);
+    tx.metadata = {
+      ...tx.metadata,
+      reserved_refund_amount: currentReserved + amount,
+      remaining_balance: newRemainingBalance,
+      active_refund_reservations: activeReservations,
+      last_refund_initiated_at: new Date().toISOString(),
+      expected_refund_amount: amount,
+    };
+    tx.updated_at = new Date().toISOString();
+
+    return {
+      success: true,
+      remainingBalance: newRemainingBalance,
+      reservationId,
+    };
+  }
+
+  async releaseRefundReservation(
+    transactionIdOrRef: string,
+    amount: number,
+    tenant?: TenantContext,
+    options?: { reservationId?: string }
+  ): Promise<void> {
+    const store = getStore();
+    const tx = store.transactions.find((t) => t.id === transactionIdOrRef || t.reference === transactionIdOrRef);
+    if (!tx) return;
+
+    const currentReserved = Number(tx.metadata?.reserved_refund_amount || 0);
+    const newReserved = Math.max(0, currentReserved - Math.abs(amount));
+
+    let activeReservations = Array.isArray(tx.metadata?.active_refund_reservations)
+      ? [...(tx.metadata.active_refund_reservations as Array<Record<string, unknown>>)]
+      : [];
+
+    if (options?.reservationId) {
+      activeReservations = activeReservations.filter((r) => r.reservation_id !== options.reservationId);
+    }
+
+    const currentCumulative = Number(
+      tx.metadata?.cumulative_refund_amount !== undefined
+        ? tx.metadata.cumulative_refund_amount
+        : tx.status === "refunded"
+        ? tx.amount
+        : 0
+    );
+    const remainingBalance = Math.max(0, tx.amount - (currentCumulative + newReserved));
+
+    tx.metadata = {
+      ...tx.metadata,
+      reserved_refund_amount: newReserved,
+      remaining_balance: remainingBalance,
+      active_refund_reservations: activeReservations,
+      last_reservation_released_at: new Date().toISOString(),
+    };
+    tx.updated_at = new Date().toISOString();
   }
 }
 
@@ -996,6 +1253,42 @@ export class DemoLedgerRepository implements ILedgerRepository {
       if (tenant.customerId && session.customer_id !== tenant.customerId) return [];
     }
     return [...(store.ledgerEvents[sessionId] || [])];
+  }
+
+  async getAllEvents(tenant?: TenantContext, options?: LedgerQueryOptions): Promise<ActionLedgerEvent[]> {
+    const store = getStore();
+    const all = Object.values(store.ledgerEvents).flat();
+    const filtered = all.filter((ev) => {
+      if (tenant?.organizationId || tenant?.customerId) {
+        const session = store.sessions.find((s) => s.id === ev.sessionId);
+        if (session) {
+          if (tenant.organizationId && session.organization_id !== tenant.organizationId) return false;
+          if (tenant.customerId && session.customer_id !== tenant.customerId) return false;
+        }
+      }
+      if (options?.sessionId && ev.sessionId !== options.sessionId) return false;
+      if (options?.actor && ev.actor.toLowerCase() !== options.actor.toLowerCase()) return false;
+      if (options?.status && ev.status.toLowerCase() !== options.status.toLowerCase()) return false;
+      if (options?.isCompensating !== undefined) {
+        const isComp = Boolean(ev.isCompensating || (ev.metadata as Record<string, unknown> | undefined)?.isCompensating);
+        if (isComp !== options.isCompensating) return false;
+      }
+      if (options?.search) {
+        const q = options.search.toLowerCase().trim();
+        const matches =
+          ev.description.toLowerCase().includes(q) ||
+          ev.action.toLowerCase().includes(q) ||
+          (ev.tool && ev.tool.toLowerCase().includes(q)) ||
+          (ev.sessionId && ev.sessionId.toLowerCase().includes(q)) ||
+          (ev.referenceId && ev.referenceId.toLowerCase().includes(q));
+        if (!matches) return false;
+      }
+      return true;
+    });
+    filtered.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    const offset = options?.offset || 0;
+    const limit = options?.limit || 100;
+    return filtered.slice(offset, offset + limit);
   }
 }
 

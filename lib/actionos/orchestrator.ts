@@ -2258,6 +2258,30 @@ export class ActionOSOrchestrator {
     }
 
     if (isSettled) {
+      if (!tx && effectiveRef) {
+        try {
+          tx = await repos.transactions.create(
+            {
+              customer_id: session.customer_id || "cust_reconciled",
+              amount: settledAmount || expectedAmount || 0,
+              currency: settledCurrency || expectedCurrency || "NGN",
+              provider: getPaymentProvider().name.includes("Paystack") ? "paystack" : "mock_paystack",
+              reference: effectiveRef,
+              status: "succeeded",
+              transaction_type: "renewal_premium",
+              metadata: {
+                reconciledFromGateway: true,
+                sessionId,
+                reconciledAt: new Date().toISOString(),
+              },
+            },
+            tenantContext
+          );
+        } catch (createTxErr) {
+          console.warn(`[Reconcile] Failed to record reconciled transaction: ${createTxErr}`);
+        }
+      }
+
       // Payment was settled! Check if policy renewal was finished:
       let policy = null;
       if (policyNumber) {

@@ -131,8 +131,31 @@ export interface ITransactionRepository {
       metadata?: Record<string, unknown>;
     },
     tenant?: TenantContext,
-    extra?: { metadata?: Record<string, unknown> }
-  ): Promise<{ transaction: Transaction; webhookEvent: WebhookEventRecord; isDuplicate?: boolean }>;
+    extra?: {
+      metadata?: Record<string, unknown>;
+      refundAmount?: number;
+      refundReference?: string;
+      refundId?: string;
+      refundState?: string;
+    }
+  ): Promise<{
+    transaction: Transaction;
+    webhookEvent: WebhookEventRecord;
+    isDuplicate?: boolean;
+    refundTransaction?: Transaction | null;
+  }>;
+  reserveRefundBalance(
+    transactionIdOrRef: string,
+    amount: number,
+    tenant?: TenantContext,
+    options?: { refundReference?: string; reason?: string }
+  ): Promise<{ success: boolean; remainingBalance: number; reservationId?: string }>;
+  releaseRefundReservation(
+    transactionIdOrRef: string,
+    amount: number,
+    tenant?: TenantContext,
+    options?: { reservationId?: string }
+  ): Promise<void>;
 }
 
 export interface IDocumentRepository {
@@ -150,9 +173,20 @@ export interface IAuditRepository {
   log(data: Partial<AuditLog> & { organization_id: string; action: string; resource_type: string }, tenant?: TenantContext): Promise<AuditLog>;
 }
 
+export interface LedgerQueryOptions {
+  limit?: number;
+  offset?: number;
+  sessionId?: string;
+  actor?: string;
+  status?: string;
+  isCompensating?: boolean;
+  search?: string;
+}
+
 export interface ILedgerRepository {
   appendEvent(event: ActionLedgerEvent, tenant?: TenantContext): Promise<ActionLedgerEvent>;
   getEventsBySessionId(sessionId: string, tenant?: TenantContext): Promise<ActionLedgerEvent[]>;
+  getAllEvents(tenant?: TenantContext, options?: LedgerQueryOptions): Promise<ActionLedgerEvent[]>;
 }
 
 export interface IQuoteRepository {
