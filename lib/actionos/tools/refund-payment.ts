@@ -258,74 +258,31 @@ export class RefundPaymentTool implements IActionOSTool<RefundPaymentInput, Refu
     const providerName = paymentProvider.name.includes("Paystack Gateway") ? "paystack" : "mock_paystack";
 
     if (isConfirmed) {
-      // 4. Authoritative confirmation: Record reversing transaction as succeeded
-      await repos.transactions.create(
-        {
-          customer_id: customerId,
-          renewal_id: null,
-          amount: -Math.abs(input.amount),
-          currency: input.currency || "NGN",
-          provider: providerName,
-          reference: dbTxRef,
-          status: "succeeded",
-          transaction_type: "refund",
-          metadata: {
-            originalReference: input.reference,
-            gatewayRefundReference: refundRef || null,
-            expected_refund_amount: input.amount,
-            reason: input.reason,
-            isSagaCompensating: true,
-            gatewayVerified: true,
-            refundState: "refund_confirmed",
-          },
-        },
-        tenantContext
-      );
-
-      // Update original transaction status and cumulative refund metadata - FAIL CLOSED if update fails
-      const prevCumulative: number =
-        typeof originalTx.metadata?.cumulative_refund_amount === "number"
-          ? (originalTx.metadata.cumulative_refund_amount as number)
-          : 0;
-      const newCumulative = prevCumulative + input.amount;
-      const isFullRefund = newCumulative >= originalTx.amount - 0.01;
-
-      const existingHistory: Array<Record<string, unknown>> = Array.isArray(originalTx.metadata?.refund_history)
-        ? [...(originalTx.metadata.refund_history as Array<Record<string, unknown>>)]
-        : [];
-
-      const updatedHistory = [
-        ...existingHistory,
-        {
-          refund_reference: refundRef || dbTxRef,
-          amount: input.amount,
-          currency: input.currency || originalTx.currency || "NGN",
-          settled_at: new Date().toISOString(),
-        },
-      ];
-
-      const reservedBalance = Math.max(
-        0,
-        Number(originalTx.metadata?.reserved_refund_amount || 0) - input.amount
-      );
-
+      // 4. Authoritative confirmation: Atomically finalize refund settlement, insert refund transaction, and update parent balances under row lock
       try {
-        await repos.transactions.updateStatus(
+        await repos.transactions.finalizeRefundSettlement(
           originalTx.id,
-          isFullRefund ? "refunded" : "partially_refunded",
-          tenantContext,
           {
+            amount: input.amount,
+            refundReference: dbTxRef,
+            gatewayRefundReference: refundRef || null,
+            refundId: refundRef || null,
+            provider: providerName,
+            reason: input.reason,
+            status: "succeeded",
+            refundState: "refund_confirmed",
+            reservationId,
+            currency: input.currency || originalTx.currency || "NGN",
             metadata: {
-              ...originalTx.metadata,
-              refund_state: "refund_confirmed",
-              cumulative_refund_amount: newCumulative,
-              remaining_balance: Math.max(0, originalTx.amount - newCumulative),
-              reserved_refund_amount: reservedBalance,
-              is_partial_refund: !isFullRefund,
-              refund_history: updatedHistory,
-              last_refund_settled_at: new Date().toISOString(),
+              originalReference: input.reference,
+              gatewayRefundReference: refundRef || null,
+              expected_refund_amount: input.amount,
+              reason: input.reason,
+              isSagaCompensating: true,
+              gatewayVerified: true,
             },
-          }
+          },
+          tenantContext
         );
       } catch (updateErr) {
         // Do NOT treat update failure as non-fatal; propagate failure
@@ -354,29 +311,41 @@ export class RefundPaymentTool implements IActionOSTool<RefundPaymentInput, Refu
     }
 
     if (isPending) {
-      // Accepted by gateway but not yet settled: record transaction as pending, NOT succeeded
-      await repos.transactions.create(
-        {
-          customer_id: customerId,
-          renewal_id: null,
-          amount: -Math.abs(input.amount),
-          currency: input.currency || "NGN",
-          provider: providerName,
-          reference: dbTxRef,
-          status: "pending",
-          transaction_type: "refund",
-          metadata: {
-            originalReference: input.reference,
+      // Accepted by gateway but not yet settled: atomically record pending refund transaction and track reservation
+      try {
+        await repos.transactions.finalizeRefundSettlement(
+          originalTx.id,
+          {
+            amount: input.amount,
+            refundReference: dbTxRef,
             gatewayRefundReference: refundRef || null,
-            expected_refund_amount: input.amount,
+            refundId: refundRef || null,
+            provider: providerName,
             reason: input.reason,
-            isSagaCompensating: true,
-            gatewayVerified: false,
+            status: "pending",
             refundState: "refund_pending",
+            reservationId,
+            currency: input.currency || "NGN",
+            metadata: {
+              originalReference: input.reference,
+              gatewayRefundReference: refundRef || null,
+              expected_refund_amount: input.amount,
+              reason: input.reason,
+              isSagaCompensating: true,
+              gatewayVerified: false,
+            },
           },
-        },
-        tenantContext
-      );
+          tenantContext
+        );
+      } catch (pendingErr) {
+        return {
+          success: false,
+          error: {
+            code: "TRANSACTION_UPDATE_FAILED",
+            message: `Failed to record pending refund settlement: ${pendingErr instanceof Error ? pendingErr.message : String(pendingErr)}. Requires ledger reconciliation.`,
+          },
+        };
+      }
 
       return {
         success: false,

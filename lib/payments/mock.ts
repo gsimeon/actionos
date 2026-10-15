@@ -220,10 +220,7 @@ export class MockPaymentProvider implements IPaymentProvider {
     }
 
     const repos = getRepositoryContainer();
-    const tx = await repos.transactions.findByReference(reference);
-    if (tx) {
-      await repos.transactions.updateStatus(tx.id, "refunded");
-    }
+    const tx = await repos.transactions.findByReference(reference).catch(() => null);
 
     return {
       status: "refund_confirmed",

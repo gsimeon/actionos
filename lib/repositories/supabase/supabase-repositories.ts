@@ -16,6 +16,8 @@ import type {
   WebhookEventRecord,
   RepositoryContainer,
   TenantContext,
+  FinalizeRefundSettlementInput,
+  FinalizeRefundSettlementResult,
 } from "../interfaces";
 import type {
   Customer,
@@ -1369,6 +1371,54 @@ export class SupabaseTransactionRepository implements ITransactionRepository {
         error
       );
     }
+  }
+
+  async finalizeRefundSettlement(
+    transactionIdOrRef: string,
+    refundData: FinalizeRefundSettlementInput,
+    tenant?: TenantContext
+  ): Promise<FinalizeRefundSettlementResult> {
+    const existing = await this.findByReference(transactionIdOrRef, tenant);
+    const targetId = existing?.id || transactionIdOrRef;
+
+    const { data, error } = await this.client.rpc("finalize_atomic_refund_settlement", {
+      p_original_transaction_id: targetId,
+      p_refund_amount: refundData.amount,
+      p_refund_reference: refundData.refundReference,
+      p_provider: refundData.provider,
+      p_reason: refundData.reason,
+      p_status: refundData.status,
+      p_refund_state: refundData.refundState,
+      p_reservation_id: refundData.reservationId ?? null,
+      p_gateway_refund_reference: refundData.gatewayRefundReference ?? null,
+      p_refund_id: refundData.refundId ?? null,
+      p_currency: refundData.currency ?? "NGN",
+      p_metadata: refundData.metadata ?? {},
+      p_organization_id: tenant?.organizationId ?? null,
+      p_customer_id: tenant?.customerId ?? null,
+    });
+
+    if (error) {
+      throw new DatabaseError(
+        `Failed to finalize atomic refund settlement: ${error.message}`,
+        error.code,
+        error
+      );
+    }
+
+    if (!data || data.success === false) {
+      throw new DatabaseError(
+        data?.message || "Failed to finalize atomic refund settlement",
+        data?.error || "ATOMIC_REFUND_SETTLEMENT_FAILED"
+      );
+    }
+
+    return {
+      success: true,
+      isDuplicate: !!data.duplicate,
+      originalTransaction: data.original_transaction as Transaction,
+      refundTransaction: data.refund_transaction as Transaction,
+    };
   }
 }
 
