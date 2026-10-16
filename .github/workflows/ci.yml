@@ -45,5 +45,12 @@ jobs:
       - name: Security Invariant, Ledger Privacy & Database Migration Suite
         run: npm run test:security
 
+      - name: ActionOS Reliability Gate: Database Invariants & Migration Verification
+        env:
+          SUPABASE_STAGING_URL: ${{ secrets.SUPABASE_STAGING_URL }}
+          SUPABASE_STAGING_ANON_KEY: ${{ secrets.SUPABASE_STAGING_ANON_KEY }}
+          SUPABASE_STAGING_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_STAGING_SERVICE_ROLE_KEY }}
+        run: npm run db:verify
+
       - name: Next.js Production Build
         run: npm run build

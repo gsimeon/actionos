@@ -8,7 +8,7 @@ import type {
 // Allowed Action State Machine Transitions
 export const ALLOWED_STATE_TRANSITIONS: Record<ActionSessionStatus, ActionSessionStatus[]> = {
   received: ["understanding", "cancelled"],
-  understanding: ["planning", "failed", "escalated"],
+  understanding: ["planning", "completed", "failed", "escalated"],
   planning: ["validating", "failed", "escalated"],
   validating: ["awaiting_authorization", "executing", "failed", "escalated"],
   awaiting_authorization: ["executing", "cancelled", "expired", "failed"],
