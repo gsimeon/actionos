@@ -398,10 +398,10 @@ export class OfficialNAtlasProvider implements NAtlasProvider {
  * Factory creating either official N-ATLAS boundary provider or deterministic demo provider.
  */
 export function createNAtlasProvider(): NAtlasProvider {
-  if (isDemoMode()) {
-    return new DeterministicDemoAIProvider();
+  if (customNAtlasAdapter || process.env.N_ATLAS_API_KEY || !isDemoMode()) {
+    return new OfficialNAtlasProvider();
   }
 
-  return new OfficialNAtlasProvider();
+  return new DeterministicDemoAIProvider();
 }
 

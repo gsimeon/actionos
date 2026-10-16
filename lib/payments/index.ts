@@ -26,11 +26,18 @@ export function getPaymentProvider(): IPaymentProvider {
     return currentPaymentProvider;
   }
 
-  if (isProductionMode()) {
-    const paystackKey = process.env.PAYSTACK_SECRET_KEY;
+  const paystackKey = process.env.PAYSTACK_SECRET_KEY;
+  const isPaystackRequested = process.env.PAYMENT_PROVIDER === "paystack";
+
+  if (isProductionMode() || isPaystackRequested) {
     if (!paystackKey) {
+      if (isProductionMode()) {
+        throw new Error(
+          "Production runtime requires PAYSTACK_SECRET_KEY for authoritative payment settlement and reconciliation. Demo mock payment provider is strictly disabled in production."
+        );
+      }
       throw new Error(
-        "Production runtime requires PAYSTACK_SECRET_KEY for authoritative payment settlement and reconciliation. Demo mock payment provider is strictly disabled in production."
+        "PAYMENT_PROVIDER is set to 'paystack', but PAYSTACK_SECRET_KEY is not defined in your environment."
       );
     }
     return new PaystackPaymentProvider(paystackKey);

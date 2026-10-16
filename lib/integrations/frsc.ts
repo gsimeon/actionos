@@ -38,7 +38,7 @@ export class FrscGatewayClient {
   private clientId: string;
 
   constructor(options?: { apiUrl?: string; apiKey?: string; clientId?: string }) {
-    this.apiUrl = options?.apiUrl || process.env.FRSC_API_URL || "https://nvis.frsc.gov.ng/api/v1";
+    this.apiUrl = options?.apiUrl || process.env.FRSC_API_BASE_URL || process.env.FRSC_API_URL || "https://nvis.frsc.gov.ng/api/v1";
     this.apiKey = options?.apiKey || process.env.FRSC_API_KEY || "";
     this.clientId = options?.clientId || process.env.FRSC_CLIENT_ID || "";
   }
@@ -48,7 +48,7 @@ export class FrscGatewayClient {
    */
   async verifyPlate(plateNumber: string): Promise<FrscPlateVerificationResult> {
     const normalizedPlate = plateNumber.trim().toUpperCase().replace(/\s+/g, "-");
-    const hasLiveCredentials = Boolean(this.apiKey && this.apiUrl && !isDemoMode());
+    const hasLiveCredentials = Boolean(this.apiKey && this.apiUrl);
 
     if (hasLiveCredentials) {
       try {
@@ -121,7 +121,7 @@ export class FrscGatewayClient {
    */
   async verifyDriverLicense(dlNumber: string, dateOfBirth?: string): Promise<FrscDriverLicenseVerificationResult> {
     const cleanDl = dlNumber.trim().toUpperCase();
-    const hasLiveCredentials = Boolean(this.apiKey && this.apiUrl && !isDemoMode());
+    const hasLiveCredentials = Boolean(this.apiKey && this.apiUrl);
 
     if (hasLiveCredentials) {
       try {
