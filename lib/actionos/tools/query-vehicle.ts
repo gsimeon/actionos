@@ -2,6 +2,7 @@ import type { IActionOSTool, ToolResult, WorkflowExecutionContext } from "@/type
 import type { Asset } from "@/types/database";
 import { getRepositoryContainer } from "@/lib/repositories";
 import { VerifyNiidTool, type NiidVerificationOutput } from "./verify-niid";
+import { frscGateway, type FrscPlateVerificationResult } from "@/lib/integrations/frsc";
 import {
   normalizeNigerianLanguage,
   formatVehicleFoundMessage,
@@ -28,6 +29,7 @@ export interface QueryVehicleOutput {
   makeModel?: string;
   registrationStatus: string;
   niidVerification?: NiidVerificationOutput;
+  frscVerification?: FrscPlateVerificationResult;
   localizedMessage: string;
   language: SupportedNigerianLanguage;
 }
@@ -121,6 +123,9 @@ export class QueryVehicleTool implements IActionOSTool<QueryVehicleInput, QueryV
         }
       }
 
+      // Perform FRSC NVIS plate lookup
+      const frscResult = await frscGateway.verifyPlate(matchedVehicle.identifier);
+
       const localizedMessage = formatVehicleFoundMessage(matchedVehicle, ownerName, targetLang);
 
       return {
@@ -134,6 +139,7 @@ export class QueryVehicleTool implements IActionOSTool<QueryVehicleInput, QueryV
           makeModel: matchedVehicle.name,
           registrationStatus: "registered",
           niidVerification: niidResult,
+          frscVerification: frscResult,
           localizedMessage,
           language: targetLang,
         },
