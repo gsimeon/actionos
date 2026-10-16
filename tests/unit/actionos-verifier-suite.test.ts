@@ -31,8 +31,8 @@ describe("ActionOSVerifier Multi-Modal Verification Suite", () => {
     it("should successfully verify settled payment with equal or greater amount", async () => {
       const mockProvider: IPaymentProvider = {
         name: "MockPaystack",
-        async initializePayment() {
-          return { authorizationUrl: "https://pay.test", accessCode: "acc_1", reference: "ref_1" };
+        async requestPayment(input) {
+          return { status: "succeeded", reference: input.reference, providerReference: "prov_1" };
         },
         async verifyPayment(ref: string) {
           return {
@@ -44,7 +44,7 @@ describe("ActionOSVerifier Multi-Modal Verification Suite", () => {
           };
         },
         async refundPayment() {
-          return { status: "succeeded", refundId: "rfd_1", reference: "ref_1", amount: 87500, currency: "NGN" };
+          return { status: "refund_confirmed" as const, refundId: "rfd_1", reference: "ref_1", amount: 87500, currency: "NGN" };
         },
       };
 
@@ -60,11 +60,11 @@ describe("ActionOSVerifier Multi-Modal Verification Suite", () => {
     it("should fail verification when settled amount is less than expected (AMOUNT_MISMATCH)", async () => {
       const mockProvider: IPaymentProvider = {
         name: "MockPaystack",
-        async initializePayment() { return { authorizationUrl: "", accessCode: "", reference: "" }; },
+        async requestPayment(input) { return { status: "succeeded", reference: input.reference, providerReference: "" }; },
         async verifyPayment(ref: string) {
           return { status: "succeeded", amount: 50000, currency: "NGN", reference: ref, providerReference: "pstk_partial" };
         },
-        async refundPayment() { return { status: "succeeded", refundId: "", reference: "", amount: 0, currency: "NGN" }; },
+        async refundPayment() { return { status: "refund_confirmed" as const, refundId: "", reference: "", amount: 0, currency: "NGN" }; },
       };
 
       const customVerifier = new ActionOSVerifier(mockProvider);
@@ -78,11 +78,11 @@ describe("ActionOSVerifier Multi-Modal Verification Suite", () => {
     it("should fail verification when payment status is not succeeded (PAYMENT_NOT_SETTLED)", async () => {
       const mockProvider: IPaymentProvider = {
         name: "MockPaystack",
-        async initializePayment() { return { authorizationUrl: "", accessCode: "", reference: "" }; },
+        async requestPayment(input) { return { status: "succeeded", reference: input.reference, providerReference: "" }; },
         async verifyPayment(ref: string) {
           return { status: "pending", amount: 87500, currency: "NGN", reference: ref, providerReference: "" };
         },
-        async refundPayment() { return { status: "succeeded", refundId: "", reference: "", amount: 0, currency: "NGN" }; },
+        async refundPayment() { return { status: "refund_confirmed" as const, refundId: "", reference: "", amount: 0, currency: "NGN" }; },
       };
 
       const customVerifier = new ActionOSVerifier(mockProvider);
@@ -96,11 +96,11 @@ describe("ActionOSVerifier Multi-Modal Verification Suite", () => {
     it("should catch and handle payment provider network error gracefully", async () => {
       const mockProvider: IPaymentProvider = {
         name: "MockPaystack",
-        async initializePayment() { return { authorizationUrl: "", accessCode: "", reference: "" }; },
+        async requestPayment(input) { return { status: "succeeded", reference: input.reference, providerReference: "" }; },
         async verifyPayment() {
           throw new Error("Paystack Gateway Timeout 504");
         },
-        async refundPayment() { return { status: "succeeded", refundId: "", reference: "", amount: 0, currency: "NGN" }; },
+        async refundPayment() { return { status: "refund_confirmed" as const, refundId: "", reference: "", amount: 0, currency: "NGN" }; },
       };
 
       const customVerifier = new ActionOSVerifier(mockProvider);
@@ -119,10 +119,12 @@ describe("ActionOSVerifier Multi-Modal Verification Suite", () => {
       await repos.policies.create(
         {
           customer_id: DEMO_CUSTOMER,
+          provider_id: "prov_leadway",
+          policy_type_id: "poltype_comp",
           policy_number: "AUTO-2026-VERIFY-01",
           start_date: "2026-01-01T00:00:00Z",
           expiry_date: "2027-01-01T00:00:00Z",
-          premium_amount: 87500,
+          premium: 87500,
           currency: "NGN",
           status: "renewed",
         },
@@ -148,10 +150,12 @@ describe("ActionOSVerifier Multi-Modal Verification Suite", () => {
       await repos.policies.create(
         {
           customer_id: DEMO_CUSTOMER,
+          provider_id: "prov_leadway",
+          policy_type_id: "poltype_comp",
           policy_number: "AUTO-2026-CANCELLED-01",
           start_date: "2026-01-01T00:00:00Z",
           expiry_date: "2027-01-01T00:00:00Z",
-          premium_amount: 87500,
+          premium: 87500,
           currency: "NGN",
           status: "cancelled",
         },
@@ -169,10 +173,12 @@ describe("ActionOSVerifier Multi-Modal Verification Suite", () => {
       await repos.policies.create(
         {
           customer_id: DEMO_CUSTOMER,
+          provider_id: "prov_leadway",
+          policy_type_id: "poltype_comp",
           policy_number: "AUTO-2026-EXPIRED-01",
           start_date: "2025-01-01T00:00:00Z",
           expiry_date: "2025-12-31T23:59:59Z",
-          premium_amount: 87500,
+          premium: 87500,
           currency: "NGN",
           status: "active",
         },
@@ -190,10 +196,12 @@ describe("ActionOSVerifier Multi-Modal Verification Suite", () => {
       await repos.policies.create(
         {
           customer_id: DEMO_CUSTOMER,
+          provider_id: "prov_leadway",
+          policy_type_id: "poltype_comp",
           policy_number: "AUTO-2026-TENANT-A-POL",
           start_date: "2026-01-01T00:00:00Z",
           expiry_date: "2027-01-01T00:00:00Z",
-          premium_amount: 87500,
+          premium: 87500,
           currency: "NGN",
           status: "renewed",
         },
