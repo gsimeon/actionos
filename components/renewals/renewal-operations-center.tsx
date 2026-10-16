@@ -33,6 +33,7 @@ import { AuthorizationCard, type AuthorizationOptions } from "@/components/actio
 import { formatNaira, formatDate } from "@/lib/utils";
 import type { Renewal, Policy, Customer } from "@/types/database";
 import type { AuthorizationDetails, UnderwriterQuote, ActionLedgerEvent } from "@/types/actionos";
+import { useRenewalsRealtime } from "@/lib/realtime";
 
 // Underwriter comparison benchmark data
 const UNDERWRITER_MARKETPLACE: Record<string, UnderwriterQuote[]> = {
@@ -112,6 +113,23 @@ export function RenewalOperationsCenter() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  useRenewalsRealtime({
+    onRenewalChange: (renewal, eventType) => {
+      setRenewals((prev) => {
+        if (eventType === "INSERT") {
+          return [renewal, ...prev.filter((r) => r.id !== renewal.id)];
+        }
+        if (eventType === "UPDATE") {
+          return prev.map((r) => (r.id === renewal.id ? renewal : r));
+        }
+        if (eventType === "DELETE") {
+          return prev.filter((r) => r.id !== renewal.id);
+        }
+        return prev;
+      });
+    },
+  });
 
   // Filters
   const [searchQuery, setSearchQuery] = useState("");

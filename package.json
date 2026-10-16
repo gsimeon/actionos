@@ -11,7 +11,8 @@
     "test": "tsx --test tests/**/*.test.ts",
     "test:unit": "tsx --test tests/unit/**/*.test.ts",
     "test:integration": "tsx --test tests/integration/**/*.test.ts",
-    "test:security": "tsx --test tests/unit/*security*.test.ts tests/integration/supabase-security-and-webhooks.test.ts tests/integration/ledger-persistence-and-privacy.test.ts tests/integration/schema-migration.test.ts"
+    "test:security": "tsx --test tests/unit/*security*.test.ts tests/integration/supabase-security-and-webhooks.test.ts tests/integration/ledger-persistence-and-privacy.test.ts tests/integration/schema-migration.test.ts",
+    "db:check": "node scripts/check-live.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",

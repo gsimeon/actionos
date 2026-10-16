@@ -21,6 +21,7 @@ import { ActionLedger } from "./action-ledger";
 import type { ActionLedgerEvent, AuthorizationDetails } from "@/types/actionos";
 import type { ActionSessionStatus } from "@/types/database";
 import { formatNaira, formatDate } from "@/lib/utils";
+import { useActionSessionRealtime, useLedgerRealtime } from "@/lib/realtime";
 
 const PRESET_PROMPTS = [
   {
@@ -227,6 +228,23 @@ export function ActionConsole() {
   const [ledgerEvents, setLedgerEvents] = useState<ActionLedgerEvent[]>([]);
   const [completedOutcome, setCompletedOutcome] = useState<CompletedOutcome | null>(null);
   const [showCertModal, setShowCertModal] = useState(false);
+
+  useActionSessionRealtime({
+    sessionId,
+    onSessionUpdate: (session) => {
+      setSessionStatus(session.status);
+    },
+  });
+
+  useLedgerRealtime({
+    sessionId,
+    onNewEvent: (event) => {
+      setLedgerEvents((prev) => {
+        if (prev.some((e) => e.id === event.id)) return prev;
+        return [...prev, event];
+      });
+    },
+  });
 
   const handleStartWorkflow = async (textToUse?: string) => {
     const text = textToUse || inputText;

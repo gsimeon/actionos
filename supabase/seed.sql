@@ -87,7 +87,13 @@ VALUES
   ('40000000-0000-0000-0000-000000000007', 'renew_policy', 'Execute policy renewal state transition and roll forward expiry date', 'policy', '1.0.0', 'active', 'high', true, '{}'::jsonb),
   ('40000000-0000-0000-0000-000000000008', 'generate_certificate', 'Produce digitally signed official insurance certificate document', 'document', '1.0.0', 'active', 'medium', false, '{}'::jsonb),
   ('40000000-0000-0000-0000-000000000009', 'send_notification', 'Dispatch multi-channel notification (in-app, SMS, email, WhatsApp)', 'communication', '1.0.0', 'active', 'low', false, '{}'::jsonb),
-  ('40000000-0000-0000-0000-000000000010', 'schedule_reminder', 'Set up automated reminder cascade (30d, 14d, 7d, 1d before next expiry)', 'scheduler', '1.0.0', 'active', 'low', false, '{}'::jsonb)
+  ('40000000-0000-0000-0000-000000000010', 'schedule_reminder', 'Set up automated reminder cascade (30d, 14d, 7d, 1d before next expiry)', 'scheduler', '1.0.0', 'active', 'low', false, '{}'::jsonb),
+  ('40000000-0000-0000-0000-000000000011', 'query_vehicle', 'Query official vehicle registry by license plate or VIN/chassis number', 'vehicle', '1.0.0', 'active', 'low', false, '{}'::jsonb),
+  ('40000000-0000-0000-0000-000000000012', 'register_vehicle', 'Register vehicle asset and issue registration identifier', 'vehicle', '1.0.0', 'active', 'medium', false, '{}'::jsonb),
+  ('40000000-0000-0000-0000-000000000013', 'verify_vehicle_inspection', 'Verify computerized LACVIS roadworthiness inspection clearance', 'regulatory', '1.0.0', 'active', 'low', false, '{}'::jsonb),
+  ('40000000-0000-0000-0000-000000000014', 'renew_vehicle_license', 'Autonomous vehicle license renewal and statutory fee settlement with MVAA', 'regulatory', '1.0.0', 'active', 'medium', true, '{}'::jsonb),
+  ('40000000-0000-0000-0000-000000000015', 'verify_niid', 'Verify insurance policy status on Nigeria Insurance Industry Database (NIID)', 'regulatory', '1.0.0', 'active', 'low', false, '{}'::jsonb),
+  ('40000000-0000-0000-0000-000000000016', 'refund_payment', 'Atomic compensation saga reversal and payment refund', 'payment', '1.0.0', 'active', 'high', true, '{}'::jsonb)
 ON CONFLICT (id) DO NOTHING;
 
 -- 11. Tool Permissions (RBAC defaults)
@@ -106,3 +112,49 @@ ON CONFLICT (tool_id, role) DO NOTHING;
 INSERT INTO tool_permissions (tool_id, role, allowed, requires_approval, max_transaction_amount)
 SELECT id, 'admin'::member_role, true, false, NULL FROM tools
 ON CONFLICT (tool_id, role) DO NOTHING;
+
+-- 12. Realtime Publications
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables 
+    WHERE pubname = 'supabase_realtime' AND tablename = 'action_sessions'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE action_sessions;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables 
+    WHERE pubname = 'supabase_realtime' AND tablename = 'action_steps'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE action_steps;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables 
+    WHERE pubname = 'supabase_realtime' AND tablename = 'action_ledger_events'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE action_ledger_events;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables 
+    WHERE pubname = 'supabase_realtime' AND tablename = 'notifications'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE notifications;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables 
+    WHERE pubname = 'supabase_realtime' AND tablename = 'renewals'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE renewals;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables 
+    WHERE pubname = 'supabase_realtime' AND tablename = 'transactions'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE transactions;
+  END IF;
+END $$;

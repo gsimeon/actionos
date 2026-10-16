@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import type { NotificationRecord } from "@/types/database";
 import { formatDateTime } from "@/lib/utils";
+import { useNotificationsRealtime } from "@/lib/realtime";
 
 export interface NotificationPreview {
   channel: "in_app" | "sms" | "whatsapp" | "email";
@@ -66,6 +67,27 @@ export function NotificationMonitor() {
   const [isDispatching, setIsDispatching] = useState(false);
   const [dispatchSuccess, setDispatchSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  useNotificationsRealtime({
+    onNotification: (r) => {
+      const newPreview: NotificationPreview = {
+        channel: (r.channel as "whatsapp" | "sms" | "email" | "in_app") || "in_app",
+        recipient:
+          r.channel === "sms"
+            ? "+234 801 111 1111"
+            : r.channel === "email"
+            ? "customer@actionos.ng"
+            : r.channel === "whatsapp"
+            ? "+234 801 111 1111 (Demo Customer)"
+            : "In-App Notification Feed",
+        title: r.title,
+        body: r.message,
+        timestamp: formatDateTime(r.sent_at || r.scheduled_for),
+        status: "delivered",
+      };
+      setNotifications((prev) => [newPreview, ...prev]);
+    },
+  });
 
   const fetchLiveNotifications = async () => {
     setLoading(true);
