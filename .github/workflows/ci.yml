@@ -50,7 +50,16 @@ jobs:
           SUPABASE_STAGING_URL: ${{ secrets.SUPABASE_STAGING_URL }}
           SUPABASE_STAGING_ANON_KEY: ${{ secrets.SUPABASE_STAGING_ANON_KEY }}
           SUPABASE_STAGING_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_STAGING_SERVICE_ROLE_KEY }}
+          RELIABILITY_GATE_MODE: ${{ secrets.SUPABASE_STAGING_URL != '' && 'staging-required' || 'offline' }}
         run: npm run db:verify
+
+      - name: Archive Reliability Gate Machine-Readable Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reliability-gate-report
+          path: reliability-gate-report.json
+          if-no-files-found: ignore
 
       - name: Next.js Production Build
         run: npm run build

@@ -43,3 +43,6 @@ next-env.d.ts
 
 # supabase cli temporary artifacts
 supabase/.temp/
+
+# test & verification reports
+reliability-gate-report.json
