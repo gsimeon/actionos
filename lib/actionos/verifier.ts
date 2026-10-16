@@ -27,8 +27,10 @@ export class ActionOSVerifier {
       if (payment.status !== "succeeded") {
         return {
           verified: false,
+          passed: false,
           type: "payment",
           details: `Payment reference ${reference} has status '${payment.status}'`,
+          reason: `Payment reference ${reference} has status '${payment.status}'`,
           error: "PAYMENT_NOT_SETTLED",
         };
       }
@@ -36,23 +38,30 @@ export class ActionOSVerifier {
       if (payment.amount < expectedAmount) {
         return {
           verified: false,
+          passed: false,
           type: "payment",
           details: `Settled amount ₦${payment.amount} is less than expected ₦${expectedAmount}`,
+          reason: `Settled amount ₦${payment.amount} is less than expected ₦${expectedAmount}`,
           error: "AMOUNT_MISMATCH",
         };
       }
 
       return {
         verified: true,
+        passed: true,
         type: "payment",
         details: `Payment of ₦${payment.amount.toLocaleString()} independently confirmed via ${provider.name}. Settlement ref: ${payment.providerReference}`,
+        reason: `Payment of ₦${payment.amount.toLocaleString()} independently confirmed via ${provider.name}. Settlement ref: ${payment.providerReference}`,
       };
     } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : "NETWORK_ERROR";
       return {
         verified: false,
+        passed: false,
         type: "payment",
-        details: "Payment verification call failed",
-        error: err instanceof Error ? err.message : "NETWORK_ERROR",
+        details: `Payment verification call failed: ${errMsg}`,
+        reason: `Payment verification call failed: ${errMsg}`,
+        error: errMsg,
       };
     }
   }
@@ -110,18 +119,33 @@ export class ActionOSVerifier {
   /**
    * Independently verify digital certificate generation and tamper-evident metadata
    */
-  async verifyCertificate(customerId: string, policyNumber: string, tenant?: TenantContext): Promise<VerificationResult> {
+  async verifyCertificate(customerId: string, policyNumber?: string, tenant?: TenantContext): Promise<VerificationResult> {
     const repos = getRepositoryContainer();
     const documents = await repos.documents.findByCustomerId(customerId, tenant);
-    const cert = documents.find((d) => d.document_type === "certificate");
+    
+    let cert = documents.find(
+      (d) =>
+        d.document_type === "certificate" &&
+        policyNumber &&
+        (d.file_name.includes(policyNumber) ||
+          d.file_name.includes(policyNumber.replace(/[^A-Z0-9]/gi, "_")) ||
+          d.file_path.includes(policyNumber.replace(/[^A-Z0-9]/gi, "_")))
+    );
 
     if (!cert) {
+      cert = documents.find((d) => d.document_type === "certificate");
+    }
+
+    if (!cert) {
+      const details = policyNumber
+        ? `No electronic certificate found for customer ${customerId} matching policy ${policyNumber}`
+        : `No electronic certificate found for customer ${customerId}`;
       return {
         verified: false,
         passed: false,
         type: "certificate",
-        details: `No electronic certificate found for customer ${customerId}`,
-        reason: `No electronic certificate found for customer ${customerId}`,
+        details,
+        reason: details,
         error: "CERTIFICATE_NOT_FOUND",
       };
     }
