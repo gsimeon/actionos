@@ -1237,7 +1237,19 @@ export function RenewalOperationsCenter() {
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-slate-700">
-                  <span>Anti-Theft Interpol & Police Database Flag:</span>
+                  <span>LACVIS Computerized Inspection:</span>
+                  <span className="text-emerald-700 font-bold flex items-center gap-1">
+                    <Check className="w-3.5 h-3.5" /> 84% Brake Efficiency (PASSED)
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-slate-700">
+                  <span>MVAA State Vehicle Licensing:</span>
+                  <span className="text-blue-700 font-bold flex items-center gap-1">
+                    <Check className="w-3.5 h-3.5" /> Gateway Ready &bull; Valid
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-slate-700">
+                  <span>Anti-Theft Interpol &amp; Police Flag:</span>
                   <span className="text-emerald-700 font-bold flex items-center gap-1">
                     <Check className="w-3.5 h-3.5" /> Clear (No Encumbrance)
                   </span>

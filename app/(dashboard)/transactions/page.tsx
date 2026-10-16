@@ -89,7 +89,10 @@ export default function TransactionsPage() {
         const idMatch = t.id.toLowerCase().includes(q);
         const providerMatch = t.provider.toLowerCase().includes(q);
         const typeMatch = (t.transaction_type || "").toLowerCase().includes(q);
-        if (!refMatch && !idMatch && !providerMatch && !typeMatch) return false;
+        const plateMatch = typeof t.metadata?.plate === "string" && t.metadata.plate.toLowerCase().includes(q);
+        const vehicleMatch = typeof t.metadata?.vehicleName === "string" && t.metadata.vehicleName.toLowerCase().includes(q);
+        const mvaaMatch = typeof t.metadata?.mvaaLicenseNumber === "string" && t.metadata.mvaaLicenseNumber.toLowerCase().includes(q);
+        if (!refMatch && !idMatch && !providerMatch && !typeMatch && !plateMatch && !vehicleMatch && !mvaaMatch) return false;
       }
       return true;
     });
@@ -141,9 +144,15 @@ export default function TransactionsPage() {
           >
             <RotateCcw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
           </button>
-          <div className="flex items-center gap-2 text-xs font-semibold text-emerald-800 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-200">
-            <ShieldCheck className="w-4 h-4 text-emerald-600" />
-            <span>Paystack Rail Active</span>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-2 text-xs font-semibold text-emerald-800 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-200">
+              <ShieldCheck className="w-4 h-4 text-emerald-600" />
+              <span>Paystack Rail Active</span>
+            </div>
+            <div className="flex items-center gap-2 text-xs font-semibold text-blue-800 bg-blue-50 px-3 py-1.5 rounded-xl border border-blue-200">
+              <ShieldCheck className="w-4 h-4 text-blue-600" />
+              <span>MVAA Licensing Rail Active</span>
+            </div>
           </div>
         </div>
       </div>
@@ -161,7 +170,7 @@ export default function TransactionsPage() {
             {formatNaira(metrics.grossInflow)}
           </div>
           <div className="mt-1 text-[11px] text-slate-500 font-medium">
-            From policy renewals & issuances
+            From policy renewals & statutory licensing
           </div>
         </div>
 
@@ -302,6 +311,10 @@ export default function TransactionsPage() {
                             <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
                               PARTIAL REFUND
                             </span>
+                          ) : t.provider === "mvaa_pay" || t.transaction_type === "fee" ? (
+                            <span className="text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                              STATUTORY LICENSING FEE
+                            </span>
                           ) : (
                             <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
                               RENEWAL PREMIUM
@@ -315,13 +328,26 @@ export default function TransactionsPage() {
 
                       <td className="px-5 py-4">
                         <div className="flex items-center gap-2">
-                          <CreditCard className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                          <CreditCard
+                            className={`w-3.5 h-3.5 shrink-0 ${
+                              t.provider === "mvaa_pay" ? "text-blue-600" : "text-emerald-600"
+                            }`}
+                          />
                           <span className="font-semibold text-slate-800">
-                            {t.provider === "mock_paystack" ? "Paystack Sandbox" : t.provider}
+                            {t.provider === "mock_paystack"
+                              ? "Paystack Sandbox"
+                              : t.provider === "mvaa_pay"
+                              ? "MVAA Licensing Gateway"
+                              : t.provider === "paystack"
+                              ? "Paystack Direct"
+                              : t.provider}
                           </span>
                         </div>
                         <span className="text-[10px] text-slate-400 block ml-5">
-                          {t.currency || "NGN"} Out-of-Band Rail
+                          {t.currency || "NGN"}{" "}
+                          {t.provider === "mvaa_pay"
+                            ? "State Treasury Revenue Rail"
+                            : "Out-of-Band Rail"}
                         </span>
                       </td>
 
@@ -332,6 +358,8 @@ export default function TransactionsPage() {
                               ? "text-purple-700"
                               : isPartial
                               ? "text-indigo-700"
+                              : t.provider === "mvaa_pay" || t.transaction_type === "fee"
+                              ? "text-blue-700"
                               : "text-emerald-700"
                           }`}
                         >
@@ -382,119 +410,209 @@ export default function TransactionsPage() {
       </div>
 
       {/* Transaction Details Drawer / Modal */}
-      {selectedTx && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-          <div className="relative w-full max-w-2xl rounded-3xl border border-slate-200 bg-white p-6 sm:p-8 shadow-2xl overflow-y-auto max-h-[90vh]">
-            <button
-              type="button"
-              onClick={() => setSelectedTx(null)}
-              className="absolute top-5 right-5 p-2 rounded-xl bg-slate-100 text-slate-500 hover:text-slate-800 hover:bg-slate-200 cursor-pointer"
-            >
-              <X className="w-5 h-5" />
-            </button>
+      {selectedTx && (() => {
+        const meta = (selectedTx.metadata || {}) as Record<string, unknown>;
+        const plate = typeof meta.plate === "string" ? meta.plate : undefined;
+        const vehicleName = typeof meta.vehicleName === "string" ? meta.vehicleName : undefined;
+        const mvaaLicenseNumber = typeof meta.mvaaLicenseNumber === "string" ? meta.mvaaLicenseNumber : undefined;
+        const roadworthinessNumber = typeof meta.roadworthinessNumber === "string" ? meta.roadworthinessNumber : undefined;
+        const feeBreakdown = (meta.feeBreakdown && typeof meta.feeBreakdown === "object" ? meta.feeBreakdown : null) as Record<string, unknown> | null;
+        const hasMvaaDetails = Boolean(plate || vehicleName || mvaaLicenseNumber || roadworthinessNumber || feeBreakdown);
 
-            <div className="flex items-start gap-4 mb-6">
-              <div
-                className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 shadow-md ${
-                  selectedTx.transaction_type === "refund" || selectedTx.amount < 0
-                    ? "bg-purple-600 text-white shadow-purple-600/20"
-                    : "bg-emerald-600 text-white shadow-emerald-600/20"
-                }`}
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+            <div className="relative w-full max-w-2xl rounded-3xl border border-slate-200 bg-white p-6 sm:p-8 shadow-2xl overflow-y-auto max-h-[90vh]">
+              <button
+                type="button"
+                onClick={() => setSelectedTx(null)}
+                className="absolute top-5 right-5 p-2 rounded-xl bg-slate-100 text-slate-500 hover:text-slate-800 hover:bg-slate-200 cursor-pointer"
               >
-                <CreditCard className="w-6 h-6" />
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h2 className="text-xl font-black text-slate-900">
-                    Transaction Details
-                  </h2>
-                  <StatusBadge status={selectedTx.status} size="sm" />
+                <X className="w-5 h-5" />
+              </button>
+
+              <div className="flex items-start gap-4 mb-6">
+                <div
+                  className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 shadow-md ${
+                    selectedTx.transaction_type === "refund" || selectedTx.amount < 0
+                      ? "bg-purple-600 text-white shadow-purple-600/20"
+                      : selectedTx.provider === "mvaa_pay" || selectedTx.transaction_type === "fee"
+                      ? "bg-blue-600 text-white shadow-blue-600/20"
+                      : "bg-emerald-600 text-white shadow-emerald-600/20"
+                  }`}
+                >
+                  <CreditCard className="w-6 h-6" />
                 </div>
-                <div className="flex items-center gap-2 mt-1 font-mono text-xs text-slate-500">
-                  <span>Reference: {selectedTx.reference}</span>
-                  <button
-                    type="button"
-                    onClick={() => handleCopy(selectedTx.reference, "ref")}
-                    className="text-emerald-600 hover:text-emerald-700"
-                    title="Copy reference"
-                  >
-                    {copiedField === "ref" ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                  </button>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-xl font-black text-slate-900">
+                      Transaction Details
+                    </h2>
+                    <StatusBadge status={selectedTx.status} size="sm" />
+                  </div>
+                  <div className="flex items-center gap-2 mt-1 font-mono text-xs text-slate-500">
+                    <span>Reference: {selectedTx.reference}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleCopy(selectedTx.reference, "ref")}
+                      className="text-emerald-600 hover:text-emerald-700"
+                      title="Copy reference"
+                    >
+                      {copiedField === "ref" ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* Information Grid */}
-            <div className="grid grid-cols-2 gap-4 text-xs mb-6 p-4 rounded-2xl bg-slate-50 border border-slate-200">
-              <div>
-                <span className="text-slate-500 block text-[10px] font-bold uppercase">SETTLEMENT AMOUNT</span>
-                <span className="font-mono font-bold text-base text-slate-900">
-                  {selectedTx.amount < 0 ? `-${formatNaira(Math.abs(selectedTx.amount))}` : formatNaira(selectedTx.amount)}
-                </span>
-                <span className="text-[10px] text-slate-400 block mt-0.5">Currency: {selectedTx.currency || "NGN"}</span>
+              {/* Information Grid */}
+              <div className="grid grid-cols-2 gap-4 text-xs mb-6 p-4 rounded-2xl bg-slate-50 border border-slate-200">
+                <div>
+                  <span className="text-slate-500 block text-[10px] font-bold uppercase">SETTLEMENT AMOUNT</span>
+                  <span className="font-mono font-bold text-base text-slate-900">
+                    {selectedTx.amount < 0 ? `-${formatNaira(Math.abs(selectedTx.amount))}` : formatNaira(selectedTx.amount)}
+                  </span>
+                  <span className="text-[10px] text-slate-400 block mt-0.5">Currency: {selectedTx.currency || "NGN"}</span>
+                </div>
+
+                <div>
+                  <span className="text-slate-500 block text-[10px] font-bold uppercase">TRANSACTION TYPE</span>
+                  <span className="font-bold text-slate-800 uppercase">
+                    {selectedTx.provider === "mvaa_pay" || selectedTx.transaction_type === "fee"
+                      ? "Statutory Licensing Settlement"
+                      : selectedTx.transaction_type || "renewal_premium"}
+                  </span>
+                  <span className="text-[10px] text-slate-400 block mt-0.5">
+                    Rail:{" "}
+                    {selectedTx.provider === "mvaa_pay"
+                      ? "MVAA Licensing Gateway (State Treasury Rail)"
+                      : selectedTx.provider === "mock_paystack"
+                      ? "Paystack Sandbox"
+                      : selectedTx.provider === "paystack"
+                      ? "Paystack Direct"
+                      : selectedTx.provider}
+                  </span>
+                </div>
+
+                <div>
+                  <span className="text-slate-500 block text-[10px] font-bold uppercase">CUSTOMER ID</span>
+                  <span className="font-mono text-slate-700 block truncate" title={selectedTx.customer_id}>
+                    {selectedTx.customer_id}
+                  </span>
+                </div>
+
+                <div>
+                  <span className="text-slate-500 block text-[10px] font-bold uppercase">SETTLED AT</span>
+                  <span className="font-mono text-slate-700 block">
+                    {formatDateTime(selectedTx.created_at)}
+                  </span>
+                </div>
+
+                {selectedTx.renewal_id && (
+                  <div className="col-span-2">
+                    <span className="text-slate-500 block text-[10px] font-bold uppercase">RENEWAL ID</span>
+                    <span className="font-mono text-slate-700">{selectedTx.renewal_id}</span>
+                  </div>
+                )}
               </div>
 
-              <div>
-                <span className="text-slate-500 block text-[10px] font-bold uppercase">TRANSACTION TYPE</span>
-                <span className="font-bold text-slate-800 uppercase">
-                  {selectedTx.transaction_type || "renewal_premium"}
-                </span>
-                <span className="text-[10px] text-slate-400 block mt-0.5">Rail: {selectedTx.provider}</span>
-              </div>
+              {/* MVAA & LACVIS Statutory Breakdown if present */}
+              {hasMvaaDetails && (
+                <div className="mb-6 p-4 rounded-2xl bg-blue-50/70 border border-blue-200 text-xs">
+                  <div className="flex items-center justify-between border-b border-blue-200/60 pb-2 mb-3">
+                    <div className="flex items-center gap-2">
+                      <ShieldCheck className="w-4 h-4 text-blue-600" />
+                      <span className="font-extrabold text-blue-950 uppercase tracking-tight">
+                        Lagos State MVAA & LACVIS Statutory Breakdown
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full">
+                      OFFICIAL REVENUE SCHEDULE
+                    </span>
+                  </div>
 
-              <div>
-                <span className="text-slate-500 block text-[10px] font-bold uppercase">CUSTOMER ID</span>
-                <span className="font-mono text-slate-700 block truncate" title={selectedTx.customer_id}>
-                  {selectedTx.customer_id}
-                </span>
-              </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-3">
+                    {plate && (
+                      <div>
+                        <span className="text-slate-500 block text-[10px] font-bold uppercase">VEHICLE PLATE</span>
+                        <span className="font-mono font-bold text-slate-900">{plate}</span>
+                      </div>
+                    )}
+                    {vehicleName && (
+                      <div>
+                        <span className="text-slate-500 block text-[10px] font-bold uppercase">VEHICLE MODEL</span>
+                        <span className="font-bold text-slate-800">{vehicleName}</span>
+                      </div>
+                    )}
+                    {mvaaLicenseNumber && (
+                      <div>
+                        <span className="text-slate-500 block text-[10px] font-bold uppercase">MVAA LICENSE NO.</span>
+                        <span className="font-mono font-bold text-blue-800">{mvaaLicenseNumber}</span>
+                      </div>
+                    )}
+                    {roadworthinessNumber && (
+                      <div>
+                        <span className="text-slate-500 block text-[10px] font-bold uppercase">LACVIS CERT NO.</span>
+                        <span className="font-mono font-bold text-emerald-800">{roadworthinessNumber}</span>
+                      </div>
+                    )}
+                  </div>
 
-              <div>
-                <span className="text-slate-500 block text-[10px] font-bold uppercase">SETTLED AT</span>
-                <span className="font-mono text-slate-700 block">
-                  {formatDateTime(selectedTx.created_at)}
-                </span>
-              </div>
-
-              {selectedTx.renewal_id && (
-                <div className="col-span-2">
-                  <span className="text-slate-500 block text-[10px] font-bold uppercase">RENEWAL ID</span>
-                  <span className="font-mono text-slate-700">{selectedTx.renewal_id}</span>
+                  {feeBreakdown && (
+                    <div className="space-y-1.5 pt-2 border-t border-blue-200/60 font-mono text-[11px]">
+                      {typeof feeBreakdown.vehicleLicenseFee === "number" && (
+                        <div className="flex justify-between text-slate-700">
+                          <span>Vehicle License Renewal Fee:</span>
+                          <span className="font-bold">{formatNaira(Number(feeBreakdown.vehicleLicenseFee))}</span>
+                        </div>
+                      )}
+                      {typeof feeBreakdown.roadworthinessFee === "number" && (
+                        <div className="flex justify-between text-slate-700">
+                          <span>LACVIS Roadworthiness Inspection Fee:</span>
+                          <span className="font-bold">{formatNaira(Number(feeBreakdown.roadworthinessFee))}</span>
+                        </div>
+                      )}
+                      {typeof feeBreakdown.adminProcessingFee === "number" && (
+                        <div className="flex justify-between text-slate-700">
+                          <span>State Administrative Processing Fee:</span>
+                          <span className="font-bold">{formatNaira(Number(feeBreakdown.adminProcessingFee))}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
-            </div>
 
-            {/* Metadata JSON Viewer */}
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-bold uppercase tracking-wider text-slate-600">
-                  Settlement & Audit Metadata
-                </span>
-                <button
-                  type="button"
-                  onClick={() => handleCopy(JSON.stringify(selectedTx.metadata || {}, null, 2), "meta")}
-                  className="text-xs font-semibold text-emerald-600 hover:text-emerald-700 flex items-center gap-1 cursor-pointer"
-                >
-                  {copiedField === "meta" ? (
-                    <>
-                      <Check className="w-3.5 h-3.5" />
-                      <span>Copied JSON</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-3.5 h-3.5" />
-                      <span>Copy Metadata</span>
-                    </>
-                  )}
-                </button>
+              {/* Metadata JSON Viewer */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                    Settlement & Audit Metadata
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleCopy(JSON.stringify(selectedTx.metadata || {}, null, 2), "meta")}
+                    className="text-xs font-semibold text-emerald-600 hover:text-emerald-700 flex items-center gap-1 cursor-pointer"
+                  >
+                    {copiedField === "meta" ? (
+                      <>
+                        <Check className="w-3.5 h-3.5" />
+                        <span>Copied JSON</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>Copy Metadata</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+                <pre className="p-4 rounded-2xl bg-slate-900 text-slate-100 font-mono text-xs overflow-x-auto max-h-60 border border-slate-800">
+                  {JSON.stringify(selectedTx.metadata || {}, null, 2)}
+                </pre>
               </div>
-              <pre className="p-4 rounded-2xl bg-slate-900 text-slate-100 font-mono text-xs overflow-x-auto max-h-60 border border-slate-800">
-                {JSON.stringify(selectedTx.metadata || {}, null, 2)}
-              </pre>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

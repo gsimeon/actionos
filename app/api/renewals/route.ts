@@ -14,6 +14,26 @@ export async function GET(req: Request) {
     const repos = getRepositoryContainer();
     const url = new URL(req.url);
     const status = url.searchParams.get("status") || undefined;
+    const requestedCustomerId = url.searchParams.get("customerId") || undefined;
+    const policyId = url.searchParams.get("policyId") || undefined;
+
+    if (requestedCustomerId) {
+      if (context.role === "customer" && context.customerId && requestedCustomerId !== context.customerId) {
+        return NextResponse.json(
+          { success: false, error: { code: "FORBIDDEN", message: "Cannot access renewals for another customer" } },
+          { status: 403 }
+        );
+      }
+      tenant.customerId = requestedCustomerId;
+    }
+
+    if (policyId) {
+      const renewal = await repos.renewals.findByPolicyId(policyId, tenant);
+      return NextResponse.json({
+        success: true,
+        data: renewal ? [renewal] : [],
+      });
+    }
 
     const renewals = await repos.renewals.findAll({ status, tenant });
 
