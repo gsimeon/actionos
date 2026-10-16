@@ -172,12 +172,47 @@ ActionOS interfaces directly with Nigerian statutory registries to verify vehicu
 
 ---
 
-## 7. Extensibility to Future Verticals
+## 7. Interactive Regulatory & Webhook Simulator Architecture
+
+To empower NITDA competition judges, developers, and operators to interactively explore and verify statutory workflows without waiting for external API network handshakes, ActionOS provides an in-app interactive simulation subsystem:
+
+```
+[Dashboard UI: RegulatoryWebhookSimulator]
+         │ (POST /api/simulator)
+         ▼
+[Simulator API Route: app/api/simulator/route.ts]
+   ├── probe_frsc        ──→ FrscGatewayClient.lookupVehicle / verifyDriverLicense
+   ├── probe_lacvis      ──→ LacvisGatewayClient.verifyInspection (Brake %, Emissions)
+   ├── probe_niid        ──→ NiidGatewayClient.verifyPolicy / issueESticker
+   ├── simulate_webhook  ──→ paymentWebhookHandler (Direct in-memory HMAC/verif-hash dispatch)
+   └── run_scenario      ──→ 1-Click Pipeline Presets (STOLEN-999-XX, FAIL-123-XX, ACTIVE-999-OK)
+```
+
+### A. Statutory Trifecta Probes
+- **FRSC NVIS Probe**: Dispatches live or sandboxed lookups for vehicle plates and driver's licenses. Returns registration status, make/model, chassis number, state of registration, and active theft flag alerts.
+- **LACVIS Roadworthiness Probe**: Evaluates computerized inspection parameters against statutory thresholds. Renders brake efficiency percentages (with threshold alerts against the 70% statutory baseline), exhaust emissions status, computerized test center IDs, and certificate validity dates.
+- **NIID Portal Probe**: Queries insurance policy coverage across underwriters. In passing scenarios, returns policy status, insured name, coverage window, and issues a simulated NAICOM digital e-sticker with QR verification endpoint.
+
+### B. Multi-Rail Webhook Simulator (Paystack & Flutterwave)
+- **Direct Dispatch Architecture**: Rather than relying on external loopback HTTP requests (which can be blocked or throttled by cloud proxies), the simulator generates real cryptographic signatures in-memory and invokes `paymentWebhookHandler` (`app/api/webhooks/payment/route.ts`) directly.
+- **Paystack Webhook Simulation**: Computes authentic HMAC-SHA512 signatures using `PAYSTACK_SECRET_KEY` (or demo secret fallback) and formats payloads with minor units (kobo).
+- **Flutterwave Webhook Simulation**: Injects the `verif-hash` header and formats payloads with major units (Naira).
+- **Signature Tampering Mode**: Operators can check "Simulate Invalid Signature" to verify that the webhook handler fails closed with HTTP 401 and rejects unauthenticated payment events.
+
+### C. 1-Click NITDA 2026 Competition Scenarios
+- **Scenario 1 (Stolen Vehicle Prevention)**: Probes `STOLEN-999-XX`. Demonstrates how FRSC theft alerts immediately halt underwriting in `VerifyNiidTool`, preventing fraudulent or stolen vehicle policy generation.
+- **Scenario 2 (Brake Efficiency Failure)**: Probes `FAIL-123-XX`. Demonstrates computerized LACVIS inspection failure (52% brake efficiency vs. 70% statutory minimum), blocking roadworthiness certification.
+- **Scenario 3 (Active NIID Policy Conflict)**: Probes `ACTIVE-999-OK`. Demonstrates duplicate insurance prevention on the NIID central registry when valid coverage already exists outside the 30-day statutory renewal window.
+
+---
+
+## 8. Extensibility to Future Verticals
 
 ActionOS was architected as an extensible engine. Adding new verticals (e.g., `ActionOS Health`, `ActionOS Civic`, `ActionOS Business`) requires:
 1. Defining new domain tools in `lib/actionos/tools/`
 2. Registering tools in `ToolRegistry`
 3. Adding the intent workflow in `ActionOSPlanner`
 No modifications to the core orchestrator, state machine, or audit ledger are required.
+
 
 

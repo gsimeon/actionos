@@ -20,6 +20,7 @@ import { StatusBadge } from "@/components/actionos/status-badge";
 import { formatNaira, formatDate } from "@/lib/utils";
 import type { Renewal, Policy, Customer } from "@/types/database";
 import { useRenewalsRealtime } from "@/lib/realtime";
+import { RegulatoryWebhookSimulator } from "@/components/dashboard/regulatory-webhook-simulator";
 
 export default function DashboardOverviewPage() {
   const [renewals, setRenewals] = useState<Renewal[]>([]);
@@ -323,6 +324,9 @@ export default function DashboardOverviewPage() {
           </div>
         </div>
       </div>
+
+      {/* Interactive Regulatory & Webhook Simulator Panel */}
+      <RegulatoryWebhookSimulator />
 
       {/* Integration Readiness Matrix (Judge & Auditor Transparency) */}
       <div className="rounded-3xl border border-slate-200 bg-white p-6 sm:p-8 shadow-sm space-y-6">

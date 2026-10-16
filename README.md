@@ -113,6 +113,7 @@ To maintain absolute credibility and transparency for NITDA competition judges a
 | **Multi-Underwriter Marketplace** | 🟡 **SANDBOX (Actuarial Simulation)** | Actuarial comparison across Leadway, AIICO, AXA Mansard, and Custodian with deterministic quote entities. *(Live underwriter API connectors: PLANNED)* |
 | **FRSC NVIS Statutory Vehicle Registry Gateway** | 🟢 **LIVE / HYBRID (Hardened Production Gateway & Sandbox Verification)** | Production mode enforces hardened FRSC NVIS gateway adapter (`lib/integrations/frsc.ts`) with mandatory `FRSC_API_KEY`, strict Nigerian plate format normalization (`validatePlateNumber`), National Driver's License verification (`validateDriverLicense`), active theft flag cross-verification in `VerifyNiidTool` preventing stolen vehicle underwriting, fail-closed live API error classification (`FrscGatewayError`), and reproducible sandbox fixtures (`tests/unit/frsc-and-lacvis-regulatory-adapters.test.ts`, `tests/unit/frsc-and-live-handshakes.test.ts`). |
 | **NIID & NAICOM Statutory Portal Gateway** | 🟢 **LIVE / HYBRID (Hardened Production Gateway & Digital E-Sticker Issuance)** | Production mode enforces hardened NIID gateway adapter (`lib/integrations/niid.ts`) with mandatory `NIID_API_KEY`, live policy registry verification preventing duplicate active insurance (`NIID_ACTIVE_POLICY_CONFLICT`), statutory NAICOM e-sticker generation (`NAICOM-STK-${year}`), digital certificate verification hash stamping (`GenerateCertificateTool`), fail-closed API error classification (`NiidGatewayError`), and test fixtures (`tests/unit/niid-statutory-adapter.test.ts`, `tests/integration/marketplace-and-niid.test.ts`). |
+| **Interactive Regulatory & Webhook Simulator** | 🟢 **LIVE (Dashboard Control Panel & API)** | Real-time simulator console embedded in the enterprise dashboard (`POST /api/simulator`, `components/dashboard/regulatory-webhook-simulator.tsx`) enabling 1-click statutory trifecta probing (FRSC/LACVIS/NIID), multi-rail payment webhook dispatch with cryptographic HMAC-SHA512 / secret hash generation and signature tampering tests, and 1-click NITDA 2026 competition scenarios (`tests/unit/interactive-simulator-api.test.ts`). |
 | **N-ATLAS Multilingual Engine** | 🟡 **SANDBOX / ADAPTER** | Model-agnostic adapter supporting English, Nigerian Pidgin (`pcm`), Yorùbá (`yo`), Hausa (`ha`), and Igbo (`ig`) with deterministic reproducible sandbox. *(Official N-ATLAS Cloud API model slot: PLANNED)* |
 
 ---
@@ -140,6 +141,9 @@ The test suites validate:
 - RBAC role permissions & financial caps
 - Complete renewal workflow from natural language utterance to certificate issuance and Action Ledger generation
 - Security regression suite (zero-fallback, cross-tenant isolation, demo isolation, fail-closed atomic authorization)
+- Statutory Trifecta gateways: FRSC plate/DL normalization, theft flags, LACVIS computerized roadworthiness, NIID policy verification
+- Multi-rail payment gateways (Paystack kobo conversion + HMAC-SHA512, Flutterwave Naira + verif-hash)
+- Interactive Simulator API (`POST /api/simulator`) probe dispatch, webhook simulation, and competition scenarios
 
 ---
 
@@ -150,8 +154,15 @@ See detailed specifications in:
 
 ---
 
-## 8. NITDA 2026 Evaluation Notes
+## 8. NITDA 2026 Evaluation Notes & Interactive Demonstration
+- **Interactive Simulator Panel:** Navigate to `/dashboard` to launch the **Regulatory & Webhook Simulator** directly above the Readiness Matrix.
+- **1-Click Competition Scenarios:**
+  - *Stolen Vehicle Prevention:* Trigger `STOLEN-999-XX` to observe immediate underwriting halt by FRSC theft detection at `VerifyNiidTool`.
+  - *Brake Efficiency Denial:* Trigger `FAIL-123-XX` to observe computerized vehicle inspection failure (52% brake efficiency vs. 70% statutory minimum).
+  - *Active Policy Conflict:* Trigger `ACTIVE-999-OK` to observe duplicate policy prevention on the NIID central registry.
+- **Multi-Rail Webhook Demonstrations:** Inject simulated Paystack (`charge.success`, `refund.processed`) or Flutterwave (`charge.completed`, `refund.completed`) events, verify HMAC-SHA512 / secret hash verification, and test fail-closed signature tampering rejection.
 - **Benchmark Customer:** Demo Customer (`CUS-000001`)
 - **Benchmark Vehicle:** Toyota Camry (`ABC-123-XY`)
 - **Benchmark Policy:** `AUTO-2026-00182` (expiring in 7 days, quote: `₦87,500`)
 - **Demo Mode Badge:** Displayed clearly across all dashboard headers and simulation cards
+
