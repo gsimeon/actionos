@@ -12,6 +12,7 @@ import { toolRegistry } from "@/lib/actionos/tool-registry";
 import { POST as renewLicenseEndpoint } from "@/app/api/vehicles/renew-license/route";
 import { DEMO_CONTEXT as CANONICAL_DEMO_AUTH } from "@/lib/security/auth-context";
 import { createWorkflowExecutionContext } from "@/lib/runtime/execution-context";
+import { verifier } from "@/lib/actionos/verifier";
 
 const DEMO_ORG = CANONICAL_DEMO_AUTH.organizationId;
 const DEMO_CUSTOMER = CANONICAL_DEMO_AUTH.customerId!;
@@ -363,6 +364,62 @@ describe("Vehicle License & Roadworthiness Vertical", () => {
       const body = await res.json();
       assert.equal(body.success, false);
       assert.equal(body.error.code, "VALIDATION_ERROR");
+    });
+  });
+
+  describe("ActionOSVerifier.verifyVehicleLicense", () => {
+    it("should independently verify vehicle license roll-forward and certificate issuance", async () => {
+      const tool = new RenewVehicleLicenseTool();
+      const toolResult = await tool.execute(
+        {
+          customerId: DEMO_CUSTOMER,
+          vehiclePlate: "ABC-123-XY",
+          includeRoadworthiness: true,
+        },
+        DEMO_CONTEXT
+      );
+
+      assert.equal(toolResult.success, true);
+
+      const verification = await verifier.verifyVehicleLicense("ABC-123-XY", 2027, DEMO_CONTEXT.auth);
+      assert.equal(verification.verified, true);
+      assert.equal(verification.passed, true);
+      assert.equal(verification.type, "vehicle_license");
+      assert.match(verification.details, /independently verified/i);
+    });
+
+    it("should fail verification for non-existent vehicle plate", async () => {
+      const verification = await verifier.verifyVehicleLicense("NON-EXISTENT-PLATE", 2027, DEMO_CONTEXT.auth);
+      assert.equal(verification.verified, false);
+      assert.equal(verification.passed, false);
+      assert.equal(verification.error, "VEHICLE_NOT_FOUND");
+    });
+
+    it("should fail verification when vehicle has no recorded statutory license expiry", async () => {
+      // Benchmark vehicle has no license expiry before renewal tool executes
+      const verification = await verifier.verifyVehicleLicense("ABC-123-XY", 2027, DEMO_CONTEXT.auth);
+      assert.equal(verification.verified, false);
+      assert.equal(verification.passed, false);
+      assert.equal(verification.error, "NO_LICENSE_EXPIRY");
+    });
+
+    it("should fail verification when expiry year has not rolled forward to expected year", async () => {
+      // Execute renewal to roll forward to 2027
+      const tool = new RenewVehicleLicenseTool();
+      await tool.execute(
+        {
+          customerId: DEMO_CUSTOMER,
+          vehiclePlate: "ABC-123-XY",
+          includeRoadworthiness: true,
+        },
+        DEMO_CONTEXT
+      );
+
+      // Verify against year 2035 (expected >= 2035)
+      const verification = await verifier.verifyVehicleLicense("ABC-123-XY", 2035, DEMO_CONTEXT.auth);
+      assert.equal(verification.verified, false);
+      assert.equal(verification.passed, false);
+      assert.equal(verification.error, "LICENSE_NOT_ROLLED_FORWARD");
     });
   });
 });

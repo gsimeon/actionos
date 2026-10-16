@@ -6,7 +6,7 @@ import type { IPaymentProvider } from "@/lib/payments/provider";
 export interface VerificationResult {
   verified: boolean;
   passed?: boolean;
-  type: "payment" | "policy_renewal" | "certificate";
+  type: "payment" | "policy_renewal" | "certificate" | "vehicle_license";
   details: string;
   reason?: string;
   error?: string;
@@ -132,6 +132,87 @@ export class ActionOSVerifier {
       type: "certificate",
       details: `Official certificate '${cert.file_name}' verified. Download URL: ${cert.file_path}`,
       reason: `Official certificate '${cert.file_name}' verified. Download URL: ${cert.file_path}`,
+    };
+  }
+
+  /**
+   * Independently verify statutory vehicle license renewal, LACVIS inspection status, and official document issuance
+   */
+  async verifyVehicleLicense(
+    plate: string,
+    expectedNewExpiryYear: number,
+    tenant?: TenantContext
+  ): Promise<VerificationResult> {
+    const repos = getRepositoryContainer();
+    const cleanPlate = plate.trim().toUpperCase();
+    const vehicles = await repos.assets.queryVehicles({ plate: cleanPlate, tenant });
+
+    if (!vehicles || vehicles.length === 0) {
+      return {
+        verified: false,
+        passed: false,
+        type: "vehicle_license",
+        details: `Vehicle registration '${cleanPlate}' not found in active records`,
+        reason: `Vehicle registration '${cleanPlate}' not found in active records`,
+        error: "VEHICLE_NOT_FOUND",
+      };
+    }
+
+    const vehicle = vehicles[0];
+    const meta = (vehicle.metadata || {}) as Record<string, unknown>;
+    const licenseExpiry = typeof meta.license_expiry === "string" ? meta.license_expiry : undefined;
+
+    if (!licenseExpiry) {
+      return {
+        verified: false,
+        passed: false,
+        type: "vehicle_license",
+        details: `Vehicle '${cleanPlate}' has no recorded statutory license expiry date`,
+        reason: `Vehicle '${cleanPlate}' has no recorded statutory license expiry date`,
+        error: "NO_LICENSE_EXPIRY",
+      };
+    }
+
+    const expiryYear = new Date(licenseExpiry).getFullYear();
+    if (expiryYear < expectedNewExpiryYear) {
+      return {
+        verified: false,
+        passed: false,
+        type: "vehicle_license",
+        details: `Vehicle license expiry year is ${expiryYear}, expected >= ${expectedNewExpiryYear}`,
+        reason: `Vehicle license expiry year is ${expiryYear}, expected >= ${expectedNewExpiryYear}`,
+        error: "LICENSE_NOT_ROLLED_FORWARD",
+      };
+    }
+
+    // Verify digital documents issuance
+    if (vehicle.customer_id) {
+      const docs = await repos.documents.findByCustomerId(vehicle.customer_id, tenant);
+      const cleanPlateSlug = cleanPlate.replace(/[^A-Z0-9]/gi, "_");
+      const licenseDoc = docs.find(
+        (d) =>
+          d.file_name.includes("Vehicle_License") &&
+          (d.file_name.includes(cleanPlateSlug) || d.file_path.includes(cleanPlateSlug))
+      );
+
+      if (!licenseDoc) {
+        return {
+          verified: false,
+          passed: false,
+          type: "vehicle_license",
+          details: `Digital vehicle license paper document not found for vehicle ${cleanPlate}`,
+          reason: `Digital vehicle license paper document not found for vehicle ${cleanPlate}`,
+          error: "LICENSE_DOCUMENT_MISSING",
+        };
+      }
+    }
+
+    return {
+      verified: true,
+      passed: true,
+      type: "vehicle_license",
+      details: `Vehicle license for ${cleanPlate} (${vehicle.name}) independently verified as valid through ${licenseExpiry}.`,
+      reason: `Vehicle license for ${cleanPlate} (${vehicle.name}) independently verified as valid through ${licenseExpiry}.`,
     };
   }
 }

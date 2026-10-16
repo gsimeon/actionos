@@ -1811,7 +1811,8 @@ export class ActionOSOrchestrator {
 
       const verifyRenewalResult = await this.verifier.verifyRenewal(
         policyNumber,
-        expectedYear
+        expectedYear,
+        tenantContext
       );
 
       await this.appendLedgerEvent(events, {
