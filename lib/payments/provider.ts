@@ -4,9 +4,9 @@
  * Provider Coverage Matrix:
  * - Paystack: Production-ready adapter (PaystackPaymentProvider). Selected in production mode,
  *   requires PAYSTACK_SECRET_KEY, and verifies out-of-band settlement via HMAC-SHA512 webhooks.
+ * - Flutterwave: Production-ready adapter (FlutterwavePaymentProvider). Supports multi-currency / NGN
+ *   settlement, requires FLUTTERWAVE_SECRET_KEY, and verifies out-of-band settlement via verif-hash webhooks.
  * - Mock Rail: Deterministic sandbox simulation driver (MockPaymentProvider) for offline demos and CI testing.
- * - Flutterwave: Integration roadmap (Planned). NOT production-ready until its adapter, settlement verification,
- *   and webhook signature verification paths are implemented and tested.
  */
 
 /**

@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 
 export function LiveHandshakeHub() {
-  const [activeTab, setActiveTab] = useState<"frsc" | "n_atlas" | "paystack" | "supabase">("frsc");
+  const [activeTab, setActiveTab] = useState<"frsc" | "n_atlas" | "paystack" | "flutterwave" | "supabase">("frsc");
 
   // FRSC State
   const [frscPlate, setFrscPlate] = useState("ABC-123-XY");
@@ -29,8 +29,9 @@ export function LiveHandshakeHub() {
   const [nAtlasResponse, setNAtlasResponse] = useState<Record<string, unknown> | null>(null);
   const [nAtlasLatency, setNAtlasLatency] = useState<number | null>(null);
 
-  // Paystack State
+  // Payment Rails State
   const [paystackCopied, setPaystackCopied] = useState(false);
+  const [flwCopied, setFlwCopied] = useState(false);
 
   // Supabase State
   const [dbLoading, setDbLoading] = useState(false);
@@ -134,7 +135,7 @@ export function LiveHandshakeHub() {
       </div>
 
       {/* Tabs */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
         <button
           type="button"
           onClick={() => setActiveTab("frsc")}
@@ -200,6 +201,27 @@ export function LiveHandshakeHub() {
 
         <button
           type="button"
+          onClick={() => setActiveTab("flutterwave")}
+          className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-2 ${
+            activeTab === "flutterwave"
+              ? "bg-emerald-50/70 border-emerald-300 ring-2 ring-emerald-400/20 shadow-xs"
+              : "bg-slate-50 hover:bg-slate-100 border-slate-200"
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <CreditCard className={`w-4 h-4 ${activeTab === "flutterwave" ? "text-amber-700" : "text-slate-500"}`} />
+            <span className="text-[10px] font-mono font-bold text-amber-800 bg-amber-100 px-1.5 py-0.5 rounded">
+              MULTI-RAIL
+            </span>
+          </div>
+          <div>
+            <div className="text-xs font-bold text-slate-900">4. Flutterwave Rail</div>
+            <div className="text-[10px] text-slate-500 mt-0.5">verif-hash &amp; Pan-Africa</div>
+          </div>
+        </button>
+
+        <button
+          type="button"
           onClick={() => setActiveTab("supabase")}
           className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-2 ${
             activeTab === "supabase"
@@ -214,7 +236,7 @@ export function LiveHandshakeHub() {
             </span>
           </div>
           <div>
-            <div className="text-xs font-bold text-slate-900">4. Supabase DB</div>
+            <div className="text-xs font-bold text-slate-900">5. Supabase DB</div>
             <div className="text-[10px] text-slate-500 mt-0.5">Realtime Publications</div>
           </div>
         </button>
@@ -414,7 +436,64 @@ export function LiveHandshakeHub() {
         </div>
       )}
 
-      {/* 4. Supabase DB & Realtime Panel */}
+      {/* 4. Flutterwave Rail Panel */}
+      {activeTab === "flutterwave" && (
+        <div className="space-y-4 animate-in fade-in duration-150">
+          <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-4 text-xs">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="font-bold text-slate-900">
+                  Flutterwave Gateway Rail Configuration
+                </span>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  verif-hash secret header verification, out-of-band settlement verification (/v3/transactions/verify_by_reference), and 4-state refund lifecycle.
+                </p>
+              </div>
+              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                ACTIVE
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              <div className="p-3 rounded-xl bg-white border border-slate-200 space-y-1">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">WEBHOOK ENDPOINT</span>
+                <div className="font-mono text-xs text-slate-900 font-bold truncate">
+                  /api/webhooks/payment
+                </div>
+                <span className="text-[10px] text-slate-500 block">Constant-time timingSafeEqual verif-hash validation</span>
+              </div>
+
+              <div className="p-3 rounded-xl bg-white border border-slate-200 space-y-1">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">SETTLEMENT CURRENCY</span>
+                <div className="font-mono text-xs text-emerald-700 font-bold">
+                  NGN &bull; Multi-Currency Pan-African Rails
+                </div>
+                <span className="text-[10px] text-slate-500 block">Card, Bank Transfer, USSD, Barter, Mobile Money</span>
+              </div>
+            </div>
+
+            <div className="p-3 rounded-xl bg-white border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="font-mono text-xs text-slate-600">
+                Webhook URL: <strong className="text-slate-900">https://your-domain.ng/api/webhooks/payment</strong>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText("https://your-domain.ng/api/webhooks/payment");
+                  setFlwCopied(true);
+                  setTimeout(() => setFlwCopied(false), 2000);
+                }}
+                className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs flex items-center gap-1.5 self-start sm:self-auto cursor-pointer"
+              >
+                {flwCopied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{flwCopied ? "Copied" : "Copy Endpoint"}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 5. Supabase DB & Realtime Panel */}
       {activeTab === "supabase" && (
         <div className="space-y-4 animate-in fade-in duration-150">
           <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-4 text-xs">

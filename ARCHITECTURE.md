@@ -100,38 +100,45 @@ If a request is retried, the system safely returns previously settled records wi
 
 ---
 
-## 5. Payment Hardening, Webhook Safety & Reconciliation
+## 5. Payment Hardening, Webhook Safety & Multi-Rail Gateway Architecture
 
-ActionOS implements strict defenses for payment and renewal orchestration:
+ActionOS implements strict, production-hardened defenses for multi-rail payment movement, webhook settlement, and distributed saga compensation across both Paystack and Flutterwave:
 
 ### A. Authoritative Refund State Modeling
-Paystack refund requests return an immediate acceptance response (`POST /refund`), which only indicates the request is queued. ActionOS accurately models four canonical refund lifecycle states:
+Payment gateway refund endpoints (Paystack `POST /refund` and Flutterwave `POST /v3/transactions/:id/refund`) return an immediate acceptance response which only indicates the refund request has been queued. ActionOS accurately models four canonical refund lifecycle states:
 - `refund_pending`: Request accepted by payment rail; awaiting bank settlement confirmation.
-- `refund_confirmed`: Authoritative settlement confirmed by Paystack `refund.processed` webhook or `verifyRefund` polling.
+- `refund_confirmed`: Authoritative settlement confirmed by Paystack `refund.processed` / Flutterwave `refund.completed` webhook or provider polling (`verifyRefund`).
 - `refund_failed`: Explicitly rejected by gateway or banking rail.
 - `refund_unknown`: Network timeout, HTTP 500+, or ambiguous provider response. Escalated for human-in-the-loop review.
+- **Zero Synthetic Fallbacks**: When initiating or verifying refunds, synthetic fallback identifiers are strictly rejected (`SYNTHETIC_REFUND_REFERENCE_REJECTED`); provider numeric IDs or authoritative references are resolved out-of-band.
 
-### B. Trusted Server-Side Payment Verification
-A policy renewal (`renew_policy`) will **never** commit unless the payment is verified:
+### B. Multi-Rail Gateway Support (Paystack & Flutterwave)
+The system abstracts payment operations via `IPaymentProvider` (`lib/payments/provider.ts`):
+- **Paystack (`lib/payments/paystack.ts`)**: Amounts in minor units (kobo, `amount / 100`), HMAC-SHA512 `x-paystack-signature` verification.
+- **Flutterwave (`lib/payments/flutterwave.ts`)**: Amounts in major units (Naira, `amount`), constant-time `verif-hash` signature verification via `crypto.timingSafeEqual`, transaction verification by alphanumeric `tx_ref` or numeric ID (`/v3/transactions/:id/verify`), and automated numeric transaction ID lookup prior to refund submission.
+- **Resolution**: `getPaymentProvider()` resolves the active provider via `PAYMENT_PROVIDER` environment variable, falling back gracefully to Paystack or throwing fail-closed in production if credentials are absent.
+
+### C. Trusted Server-Side Payment Verification
+A policy renewal (`renew_policy`) will **never** commit unless the payment is independently verified:
 - Settled transaction amount must match the persisted quote amount within 0.01 tolerance.
 - Settled currency must match the quote currency (e.g., `NGN`).
 - Reversing transactions (`transaction_type: "refund"`) are strictly rejected.
 - Tenant isolation is enforced: the transaction must belong to the active customer and organization.
 
-### C. Webhook Deduplication & Out-of-Order Safety
-- Webhooks are cryptographically validated using HMAC-SHA512 with timing-safe comparison.
-- Duplicate deliveries are acknowledged idempotently (`{ duplicate: true }`) without repeated side-effects.
-- Terminal `refunded` transactions can **never** be overwritten by delayed `charge.success` or `charge.failed` webhooks.
+### D. Multi-Rail Webhook Deduplication & Out-of-Order Safety
+- Webhooks are cryptographically validated using HMAC-SHA512 (Paystack) or constant-time secret hash matching (Flutterwave).
+- Provider-scoped deduplication (`uq_payment_webhook_events_provider_event` on `(provider, event_id)`) guarantees idempotent delivery (`{ duplicate: true }`) without repeated side-effects.
+- Terminal `refunded` transactions can **never** be overwritten by delayed `charge.success` or `charge.completed` webhooks.
 - Already `succeeded` transactions can **never** regress to `failed` or `pending` due to out-of-order delivery.
 
-### D. Post-Payment Database Failure Recovery
+### E. Post-Payment Database Failure Recovery
 If payment succeeds but a downstream database operation fails:
 - The orchestrator records the unresolved state (`unresolvedDbFailure: true`, `paymentSettled: true`, `reconciliation_required: true`, `reconciliationState: "database_failure_post_payment"`).
 - The recovery worker reconciles the session by completing the renewal safely using the existing settled payment reference, or falls back to compensating refund.
 - Customers are **never** blindly double-debited on retry.
 
-### E. Production vs. Demo Isolation
-- Production mode strictly requires `PAYSTACK_SECRET_KEY` and prohibits simulated mock provider execution.
+### F. Production vs. Demo Isolation
+- Production mode strictly requires `PAYSTACK_SECRET_KEY` (when using Paystack) or `FLUTTERWAVE_SECRET_KEY` (when using Flutterwave) and prohibits simulated mock provider execution.
 - Sensitive information (cards, BVN, NIN, authorization headers, Bearer tokens) is redacted from logs and error responses.
 
 ---

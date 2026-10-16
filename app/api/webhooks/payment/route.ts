@@ -2,10 +2,16 @@ import { NextResponse } from "next/server";
 import crypto from "node:crypto";
 import { getRepositoryContainer } from "@/lib/repositories";
 import { isProductionMode } from "@/lib/runtime/mode";
-import { getPaymentProvider } from "@/lib/payments";
+import {
+  getPaymentProvider,
+  verifyFlutterwaveWebhookSignature,
+  FlutterwavePaymentProvider,
+} from "@/lib/payments";
 import type { CanonicalRefundState } from "@/lib/payments/provider";
 import type { PaymentWebhookPayload } from "@/types/api";
 import type { Transaction, Quote } from "@/types/database";
+
+export { verifyFlutterwaveWebhookSignature };
 
 // In-memory deduplication cache for settled webhook events
 const processedWebhookMemoryCache = new Set<string>();
@@ -51,35 +57,74 @@ export async function POST(req: Request) {
   try {
     const rawBody = await req.text();
 
+    const flwSignature = req.headers.get("verif-hash");
+    const paystackSignature = req.headers.get("x-paystack-signature");
+    const isFlutterwave =
+      Boolean(flwSignature) ||
+      (!paystackSignature && process.env.PAYMENT_PROVIDER === "flutterwave");
+
     // 1. Authoritative Gateway Cryptographic Signature Verification in Production
     if (isProductionMode()) {
-      const secret = process.env.PAYSTACK_SECRET_KEY;
-      const signature = req.headers.get("x-paystack-signature");
+      if (isFlutterwave) {
+        const flwSecret =
+          process.env.FLUTTERWAVE_SECRET_HASH || process.env.FLUTTERWAVE_WEBHOOK_HASH;
 
-      if (!secret || !signature) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: {
-              code: "UNAUTHORIZED_WEBHOOK",
-              message: "Missing PAYSTACK_SECRET_KEY or x-paystack-signature header in production mode",
+        if (!flwSecret || !flwSignature) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: {
+                code: "UNAUTHORIZED_WEBHOOK",
+                message:
+                  "Missing FLUTTERWAVE_SECRET_HASH or verif-hash header in production mode",
+              },
             },
-          },
-          { status: 401 }
-        );
-      }
+            { status: 401 }
+          );
+        }
 
-      if (!verifyPaystackWebhookSignature(rawBody, signature, secret)) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: {
-              code: "INVALID_WEBHOOK_SIGNATURE",
-              message: "Authoritative gateway webhook signature verification failed",
+        if (!verifyFlutterwaveWebhookSignature(flwSignature, flwSecret)) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: {
+                code: "INVALID_WEBHOOK_SIGNATURE",
+                message:
+                  "Authoritative Flutterwave gateway webhook signature verification failed",
+              },
             },
-          },
-          { status: 401 }
-        );
+            { status: 401 }
+          );
+        }
+      } else {
+        const secret = process.env.PAYSTACK_SECRET_KEY;
+        const signature = paystackSignature;
+
+        if (!secret || !signature) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: {
+                code: "UNAUTHORIZED_WEBHOOK",
+                message: "Missing PAYSTACK_SECRET_KEY or x-paystack-signature header in production mode",
+              },
+            },
+            { status: 401 }
+          );
+        }
+
+        if (!verifyPaystackWebhookSignature(rawBody, signature, secret)) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: {
+                code: "INVALID_WEBHOOK_SIGNATURE",
+                message: "Authoritative gateway webhook signature verification failed",
+              },
+            },
+            { status: 401 }
+          );
+        }
       }
     }
 
@@ -106,9 +151,12 @@ export async function POST(req: Request) {
     // transaction financial status or triggering unneeded database lookups.
     const SUPPORTED_WEBHOOK_EVENTS = new Set([
       "charge.success",
+      "charge.completed",
       "charge.failed",
       "charge.declined",
       "refund.processed",
+      "refund.completed",
+      "refund.successful",
       "refund.pending",
       "refund.processing",
       "refund.failed",
@@ -127,16 +175,25 @@ export async function POST(req: Request) {
       });
     }
 
-    const isRefundWebhook = typeof payload.event === "string" && payload.event.startsWith("refund.");
+    const isRefundWebhook =
+      typeof payload.event === "string" &&
+      (payload.event.startsWith("refund.") || payload.event.includes("refund"));
     const payloadTxObj =
       payload.data.transaction && typeof payload.data.transaction === "object"
         ? (payload.data.transaction as Record<string, unknown>)
         : undefined;
+    const rawData = payload.data as unknown as Record<string, unknown>;
     const payloadTxRef =
-      (typeof payload.data.transaction_reference === "string" ? payload.data.transaction_reference.trim() : "") ||
-      (payloadTxObj && typeof payloadTxObj.reference === "string" ? payloadTxObj.reference.trim() : "");
+      (typeof payload.data.transaction_reference === "string"
+        ? payload.data.transaction_reference.trim()
+        : "") ||
+      (typeof rawData.tx_ref === "string" ? String(rawData.tx_ref).trim() : "") ||
+      (payloadTxObj && typeof payloadTxObj.reference === "string"
+        ? payloadTxObj.reference.trim()
+        : "");
     const payloadRef =
-      typeof payload.data.reference === "string" ? payload.data.reference.trim() : "";
+      (typeof payload.data.reference === "string" ? payload.data.reference.trim() : "") ||
+      (typeof rawData.tx_ref === "string" ? String(rawData.tx_ref).trim() : "");
 
     const ref = (isRefundWebhook && payloadTxRef) ? payloadTxRef : (payloadRef || payloadTxRef);
     if (!ref) {
@@ -145,6 +202,8 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
+
+    const providerName = isFlutterwave ? "flutterwave" : "paystack";
 
     // 2. Durable Idempotency & Deduplication Check (Provider Event ID + State Invariant)
     const providerEventId =
@@ -294,7 +353,7 @@ export async function POST(req: Request) {
       const eventRecordId = providerEventId || dedupeKey;
       if (repos.webhookEvents) {
         try {
-          const existingRecorded = await repos.webhookEvents.findByEventId("paystack", eventRecordId);
+          const existingRecorded = await repos.webhookEvents.findByEventId(providerName, eventRecordId);
           if (existingRecorded) {
             return respond(
               NextResponse.json({
@@ -361,16 +420,23 @@ export async function POST(req: Request) {
           ? (existingTx.metadata.expected_refund_amount as number)
           : undefined;
 
-      // 2. Extract webhook payload reported refund amount (converted from minor units / kobo to Naira)
+      // 2. Extract webhook payload reported refund amount (converted from minor units / kobo to Naira for Paystack; directly in Naira for Flutterwave)
+      const rawRefundField =
+        typeof (payload.data as Record<string, unknown>).amount_refunded === "number"
+          ? ((payload.data as Record<string, unknown>).amount_refunded as number)
+          : payload.data.amount;
+
       let webhookRefundAmount: number | undefined;
-      if (typeof payload.data.amount === "number" && !isNaN(payload.data.amount) && payload.data.amount > 0) {
-        if (isProductionMode()) {
-          webhookRefundAmount = payload.data.amount / 100;
+      if (typeof rawRefundField === "number" && !isNaN(rawRefundField) && rawRefundField > 0) {
+        if (isFlutterwave) {
+          webhookRefundAmount = rawRefundField;
+        } else if (isProductionMode()) {
+          webhookRefundAmount = rawRefundField / 100;
         } else {
           webhookRefundAmount =
-            payload.data.amount >= 100 && (payload.data.amount > existingTx.amount || payload.data.amount % 100 === 0)
-              ? payload.data.amount / 100
-              : payload.data.amount;
+            rawRefundField >= 100 && (rawRefundField > existingTx.amount || rawRefundField % 100 === 0)
+              ? rawRefundField / 100
+              : rawRefundField;
         }
       }
 
@@ -430,16 +496,28 @@ export async function POST(req: Request) {
               0
             );
 
-      if (payload.event === "charge.success") {
+      const isSuccessEvent =
+        payload.event === "charge.success" || payload.event === "charge.completed";
+      const isRefundProcessedEvent =
+        payload.event === "refund.processed" ||
+        payload.event === "refund.completed" ||
+        payload.event === "refund.successful";
+
+      if (isSuccessEvent) {
         // Validate that provider status does NOT contradict success event
-        if (rawStatus && rawStatus !== "success" && rawStatus !== "succeeded") {
+        if (
+          rawStatus &&
+          rawStatus !== "success" &&
+          rawStatus !== "succeeded" &&
+          rawStatus !== "successful"
+        ) {
           return respond(
             NextResponse.json(
               {
                 success: false,
                 error: {
                   code: "PROVIDER_STATUS_MISMATCH",
-                  message: `Webhook event 'charge.success' contradicts provider status '${payload.data.status}'. Refusing to confirm payment settlement.`,
+                  message: `Webhook event '${payload.event}' contradicts provider status '${payload.data.status}'. Refusing to confirm payment settlement.`,
                 },
               },
               { status: 422 }
@@ -449,7 +527,7 @@ export async function POST(req: Request) {
         txStatus = "succeeded";
       } else if (payload.event === "charge.failed" || payload.event === "charge.declined") {
         txStatus = "failed";
-      } else if (payload.event === "refund.processed") {
+      } else if (isRefundProcessedEvent) {
         // Initially set to 'refunded', will be adjusted if partial refund below
         txStatus = "refunded";
         refundLifecycleState = "refund_confirmed";
@@ -481,8 +559,8 @@ export async function POST(req: Request) {
         );
       }
 
-      // 5. Amount and Currency Integrity Verification on charge.success
-      if (payload.event === "charge.success") {
+      // 5. Amount and Currency Integrity Verification on charge.success / charge.completed
+      if (isSuccessEvent) {
         const rawAmount = typeof payload.data.amount === "number" ? payload.data.amount : undefined;
         if (rawAmount === undefined || isNaN(rawAmount)) {
           return respond(
@@ -491,7 +569,7 @@ export async function POST(req: Request) {
                 success: false,
                 error: {
                   code: "AMOUNT_REQUIRED",
-                  message: "Missing or invalid amount in charge.success payload",
+                  message: `Missing or invalid amount in ${payload.event} payload`,
                 },
               },
               { status: 422 }
@@ -502,19 +580,22 @@ export async function POST(req: Request) {
         const webhookCurrency = (payload.data.currency || "NGN").toUpperCase().trim();
 
         // Paystack delivers amounts in minor units (kobo, e.g. 8750000 for ₦87,500.00)
-        // In production, strictly enforce provider's documented minor units (kobo)
+        // Flutterwave delivers amounts in major units (Naira, e.g. 87500 for ₦87,500.00)
         const isKoboMatch = Math.abs(rawAmount / 100 - expectedAmount) <= 0.01;
         const isNairaMatch = Math.abs(rawAmount - expectedAmount) <= 0.01;
 
         if (isProductionMode()) {
-          if (!isKoboMatch) {
+          const isValidAmount = isFlutterwave ? isNairaMatch : isKoboMatch;
+          if (!isValidAmount) {
             return respond(
               NextResponse.json(
                 {
                   success: false,
                   error: {
                     code: "AMOUNT_MISMATCH",
-                    message: `Production webhook requires strict provider minor units (kobo). Received raw amount ${rawAmount} does not match expected transaction ${expectedAmount} NGN (${expectedAmount * 100} kobo).`,
+                    message: isFlutterwave
+                      ? `Production Flutterwave webhook requires exact major units (NGN). Received raw amount ${rawAmount} does not match expected transaction ${expectedAmount} NGN.`
+                      : `Production webhook requires strict provider minor units (kobo). Received raw amount ${rawAmount} does not match expected transaction ${expectedAmount} NGN (${expectedAmount * 100} kobo).`,
                   },
                 },
                 { status: 422 }
@@ -679,14 +760,17 @@ export async function POST(req: Request) {
           const isQuoteKoboMatch = Math.abs(rawAmount / 100 - linkedQuote.amount) <= 0.01;
           const isQuoteNairaMatch = Math.abs(rawAmount - linkedQuote.amount) <= 0.01;
           if (isProductionMode()) {
-            if (!isQuoteKoboMatch) {
+            const isQuoteValid = isFlutterwave ? isQuoteNairaMatch : isQuoteKoboMatch;
+            if (!isQuoteValid) {
               return respond(
                 NextResponse.json(
                   {
                     success: false,
                     error: {
                       code: "AMOUNT_MISMATCH",
-                      message: `Production webhook requires strict provider minor units (kobo). Received raw amount ${rawAmount} does not match persisted quote amount ${linkedQuote.amount} NGN (${linkedQuote.amount * 100} kobo).`,
+                      message: isFlutterwave
+                        ? `Production Flutterwave webhook requires exact major units (NGN). Received raw amount ${rawAmount} does not match persisted quote amount ${linkedQuote.amount} NGN.`
+                        : `Production webhook requires strict provider minor units (kobo). Received raw amount ${rawAmount} does not match persisted quote amount ${linkedQuote.amount} NGN (${linkedQuote.amount * 100} kobo).`,
                     },
                   },
                   { status: 422 }
@@ -737,7 +821,10 @@ export async function POST(req: Request) {
 
         if (shouldVerifyAuthoritatively) {
           try {
-            const provider = getPaymentProvider();
+            const provider =
+              isFlutterwave && process.env.FLUTTERWAVE_SECRET_KEY
+                ? new FlutterwavePaymentProvider(process.env.FLUTTERWAVE_SECRET_KEY)
+                : getPaymentProvider();
             const verification = await provider.verifyPayment(ref);
             if (verification.status !== "succeeded" && verification.status !== "confirmed") {
               return respond(
@@ -1375,7 +1462,7 @@ export async function POST(req: Request) {
             existingTx.id,
             txStatus,
             {
-              provider: "paystack",
+              provider: providerName,
               eventId: eventRecordId,
               eventType: payload.event,
               reference: ref,
@@ -1408,7 +1495,7 @@ export async function POST(req: Request) {
           });
           if (repos.webhookEvents) {
             const recordRes = await repos.webhookEvents.recordEvent({
-              provider: "paystack",
+              provider: providerName,
               eventId: eventRecordId,
               eventType: payload.event,
               reference: ref,
@@ -1426,7 +1513,7 @@ export async function POST(req: Request) {
               renewal_id: existingTx.renewal_id,
               amount: -Math.abs(effectiveRefundAmount),
               currency: (payload.data.currency || existingTx.currency || "NGN").toUpperCase().trim(),
-              provider: existingTx.provider || "paystack",
+              provider: existingTx.provider || providerName,
               reference: currentRefundIdentifier,
               status: refundLifecycleState === "refund_confirmed" ? "succeeded" : "pending",
               transaction_type: "refund",

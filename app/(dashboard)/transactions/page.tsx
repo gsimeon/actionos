@@ -169,7 +169,7 @@ export default function TransactionsPage() {
             </div>
             <div className="flex items-center gap-2 text-xs font-semibold text-emerald-800 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-200">
               <ShieldCheck className="w-4 h-4 text-emerald-600" />
-              <span>Paystack Rail Active</span>
+              <span>Multi-Rail (Paystack &amp; Flutterwave) Active</span>
             </div>
             <div className="flex items-center gap-2 text-xs font-semibold text-blue-800 bg-blue-50 px-3 py-1.5 rounded-xl border border-blue-200">
               <ShieldCheck className="w-4 h-4 text-blue-600" />
@@ -362,6 +362,10 @@ export default function TransactionsPage() {
                               ? "MVAA Licensing Gateway"
                               : t.provider === "paystack"
                               ? "Paystack Direct"
+                              : t.provider === "flutterwave"
+                              ? "Flutterwave Direct"
+                              : t.provider === "mock_flutterwave"
+                              ? "Flutterwave Sandbox"
                               : t.provider}
                           </span>
                         </div>
@@ -510,6 +514,10 @@ export default function TransactionsPage() {
                       ? "Paystack Sandbox"
                       : selectedTx.provider === "paystack"
                       ? "Paystack Direct"
+                      : selectedTx.provider === "flutterwave"
+                      ? "Flutterwave Direct"
+                      : selectedTx.provider === "mock_flutterwave"
+                      ? "Flutterwave Sandbox"
                       : selectedTx.provider}
                   </span>
                 </div>

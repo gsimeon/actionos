@@ -100,7 +100,7 @@ export default function DashboardOverviewPage() {
             ActionOS Renew Enterprise Operations
           </h1>
           <p className="text-xs sm:text-sm text-slate-600 mt-2 leading-relaxed">
-            Autonomous, guardrailed execution layer orchestrating vehicle insurance renewals, NAICOM document verification, and Paystack settlement.
+            Autonomous, guardrailed execution layer orchestrating vehicle insurance renewals, NAICOM document verification, and Paystack &amp; Flutterwave multi-rail settlement.
           </p>
         </div>
 
@@ -391,7 +391,7 @@ export default function DashboardOverviewPage() {
               </li>
               <li className="flex items-start gap-2">
                 <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
-                <span><strong>Payment Sandbox:</strong> Deterministic Paystack rail (Flutterwave roadmap) with webhook idempotency</span>
+                <span><strong>Multi-Rail Payment Gateway:</strong> Hardened Paystack &amp; Flutterwave adapters with webhook idempotency</span>
               </li>
               <li className="flex items-start gap-2">
                 <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
