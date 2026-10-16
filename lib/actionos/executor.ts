@@ -230,10 +230,17 @@ export class ActionOSExecutor {
         description = `Customer notified across ${result.data.notificationsSent} channels`;
       } else if (step.tool_name === "schedule_reminder") {
         description = `Scheduled reminders for 30, 14, 7, and 1 day before expiry`;
+      } else if (step.tool_name === "verify_vehicle_inspection") {
+        description = `LACVIS computerized inspection verified (${result.data.overallResult} - ${result.data.inspectionId})`;
+      } else if (step.tool_name === "renew_vehicle_license") {
+        description = `Vehicle license & roadworthiness issued (${result.data.mvaaLicenseNumber} / ₦${result.data.statutoryFee?.toLocaleString()})`;
       }
     } else if (!result.success) {
       description = `Failed: ${result.error?.message || "Execution error"}`;
     }
+
+    const resultData = result.data as Record<string, unknown> | undefined;
+    const txObj = resultData?.transaction as Record<string, unknown> | undefined;
 
     const ledgerEvent: ActionLedgerEvent = {
       id: `ev_${Date.now()}_${step.sequence}`,
@@ -245,7 +252,13 @@ export class ActionOSExecutor {
       actor: actorLabel,
       tool: step.tool_name,
       durationMs: executionTimeMs,
-      referenceId: (result.data?.reference as string) || (result.data?.documentNumber as string),
+      referenceId:
+        (resultData?.reference as string) ||
+        (resultData?.documentNumber as string) ||
+        (resultData?.mvaaLicenseNumber as string) ||
+        (resultData?.inspectionId as string) ||
+        (txObj?.reference as string),
+      metadata: resultData ? { ...resultData } : undefined,
     };
 
     return {

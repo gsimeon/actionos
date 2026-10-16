@@ -64,6 +64,8 @@ export class ActionOSPermissions {
       case "verify_niid_database":
       case "query_vehicle":
       case "register_vehicle":
+      case "verify_vehicle_inspection":
+      case "renew_vehicle_license":
         return { allowed: true, requiresApproval: false };
 
       case "refund_payment":

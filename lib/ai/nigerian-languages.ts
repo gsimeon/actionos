@@ -251,6 +251,111 @@ export function formatVehicleRegistrationGateMessage(
 }
 
 /**
+ * Generate localized confirmation message for autonomous vehicle license and roadworthiness renewal.
+ */
+export function formatVehicleLicenseRenewedMessage(
+  params: {
+    makeModel: string;
+    plate: string;
+    expiryDate: string;
+    mvaaLicenseNumber?: string;
+    roadworthinessNumber?: string;
+    amount?: number;
+    currency?: string;
+  },
+  lang?: string
+): string {
+  const language = normalizeNigerianLanguage(lang);
+  const formattedExpiry = formatDate(params.expiryDate);
+
+  switch (language) {
+    case "pcm":
+      return `Sharp sharp! Your vehicle license and roadworthiness for ${params.makeModel} (${params.plate}) don renew successfully! New expiry date na ${formattedExpiry}. Valid MVAA paper and Roadworthiness certificate don drop inside your ActionOS documents.`;
+
+    case "yo":
+      return `Aṣeyọri nla! A ti sọ iwe-aṣẹ ọkọ ati iwe-ẹri ijẹrisi ọkọ di ọtun fun ${params.makeModel} (${params.plate})! Ọjọ ipari tuntun jẹ ${formattedExpiry}. A ti gbe iwe-ẹri osise si ActionOS rẹ.`;
+
+    case "ha":
+      return `Barka! An sabunta lasisin mota da takardar duba lafiyar mota cikin nasara don ${params.makeModel} (${params.plate})! Sabuwar ranar karewa ita ce ${formattedExpiry}. An ajiye takardun hukuma a cikin ActionOS.`;
+
+    case "ig":
+      return `Nnọọ! Emeghela akwụkwọ ikike na nyocha nchekwa ụgbọ ala ọhụrụ maka ${params.makeModel} (${params.plate})! Ụbọchị mmechi ọhụrụ bụ ${formattedExpiry}. Echekwala akwụkwọ ikike gị na ActionOS.`;
+
+    case "en-NG":
+    default:
+      return `Vehicle license and roadworthiness inspection successfully renewed for ${params.makeModel} (${params.plate}). New validity expires on ${formattedExpiry}. Official MVAA license and Roadworthiness certificates generated in ActionOS.`;
+  }
+}
+
+/**
+ * Generate localized statutory inspection clearance message for computerized LACVIS/VIS inspection.
+ */
+export function formatRoadworthinessInspectionMessage(
+  params: {
+    plate: string;
+    inspectionId: string;
+    brakeEfficiency: string;
+    emissionStatus: string;
+    overallResult: string;
+  },
+  lang?: string
+): string {
+  const language = normalizeNigerianLanguage(lang);
+
+  switch (language) {
+    case "pcm":
+      return `Motor ${params.plate} don pass computerized roadworthiness inspection (ID: ${params.inspectionId}). Break na ${params.brakeEfficiency}, emission dey ${params.emissionStatus}. Overall check: ${params.overallResult}.`;
+
+    case "yo":
+      return `Ọkọ ${params.plate} ti kọja ayẹwo ijẹrisi kọmputa LACVIS (ID: ${params.inspectionId}). Agbara idaduro jẹ ${params.brakeEfficiency}, èéfín jẹ ${params.emissionStatus}. Abajade gbogbogbo: ${params.overallResult}.`;
+
+    case "ha":
+      return `Mota ${params.plate} ta wuce binciken na'ura mai kwakwalwa na LACVIS (ID: ${params.inspectionId}). Karfin birki shine ${params.brakeEfficiency}, hayaki shine ${params.emissionStatus}. Sakamakon gaba daya: ${params.overallResult}.`;
+
+    case "ig":
+      return `Ụgbọ ala ${params.plate} agafeela nyocha LACVIS site na kọmputa (ID: ${params.inspectionId}). Ịrụ ọrụ breeki bụ ${params.brakeEfficiency}, anwụrụ ọkụ bụ ${params.emissionStatus}. Nsonaazụ n'ozuzu: ${params.overallResult}.`;
+
+    case "en-NG":
+    default:
+      return `Vehicle ${params.plate} passed computerized roadworthiness inspection (ID: ${params.inspectionId}). Brake efficiency: ${params.brakeEfficiency}, emission status: ${params.emissionStatus}. Status: ${params.overallResult}.`;
+  }
+}
+
+/**
+ * Generate localized authorization prompt for statutory vehicle license and roadworthiness fee gate.
+ */
+export function formatVehicleLicenseGateMessage(
+  params: {
+    makeModel: string;
+    plate: string;
+    amount: number;
+    currency?: string;
+  },
+  lang?: string
+): string {
+  const language = normalizeNigerianLanguage(lang);
+  const formattedAmount = formatCurrency(params.amount, params.currency || "NGN");
+
+  switch (language) {
+    case "pcm":
+      return `Vehicle license and roadworthiness renewal for ${params.makeModel} (${params.plate}) don ready. Statutory fee plus inspection na ${formattedAmount}. You authorize make we complete renewal?`;
+
+    case "yo":
+      return `Isọdọtun iwe-aṣẹ ọkọ ati iwe-ẹri ijẹrisi fun ${params.makeModel} (${params.plate}) ti ṣetan. Owo osise ati ayẹwo jẹ ${formattedAmount}. Ṣe o fun wa ni aṣẹ lati pari isọdọtun rẹ?`;
+
+    case "ha":
+      return `Sabunta lasisin mota da duba lafiyar mota don ${params.makeModel} (${params.plate}) ya shirya. Kudin hukuma da duba mota shine ${formattedAmount}. Shin kun ba da izini don kammala sabuntawar?`;
+
+    case "ig":
+      return `Mmeghari ikike ụgbọ ala na nyocha maka ${params.makeModel} (${params.plate}) adịla njikere. Ego iwu na nyocha bụ ${formattedAmount}. Ị nyere ikike ka anyị mechaa mmeghari ahụ?`;
+
+    case "en-NG":
+    default:
+      return `Vehicle license and roadworthiness renewal ready for ${params.makeModel} (${params.plate}). Total statutory fees and inspection certification: ${formattedAmount}. Do you authorize renewal?`;
+  }
+}
+
+/**
  * Generate localized authorization prompt for insurance policy renewal.
  */
 export function formatRenewalGateMessage(

@@ -388,6 +388,12 @@ export class ActionOSOrchestrator {
       if (step.tool_name === "register_vehicle" && activeCustomer) {
         stepOverride.customerId = activeCustomer.id;
       }
+      if (step.tool_name === "verify_vehicle_inspection" && activeCustomer) {
+        stepOverride.customerId = activeCustomer.id;
+      }
+      if (step.tool_name === "renew_vehicle_license" && activeCustomer) {
+        stepOverride.customerId = activeCustomer.id;
+      }
 
       const { result, ledgerEvent } = await this.executor.executeStep(
         step,
@@ -445,6 +451,22 @@ export class ActionOSOrchestrator {
         };
         if (regRes?.localizedMessage) {
           responseMessage = regRes.localizedMessage;
+        }
+      } else if (step.tool_name === "verify_vehicle_inspection") {
+        const inspRes = result.data as {
+          verified: boolean;
+          localizedMessage?: string;
+        };
+        if (inspRes?.localizedMessage) {
+          responseMessage = inspRes.localizedMessage;
+        }
+      } else if (step.tool_name === "renew_vehicle_license") {
+        const renewRes = result.data as {
+          renewed: boolean;
+          localizedMessage?: string;
+        };
+        if (renewRes?.localizedMessage) {
+          responseMessage = renewRes.localizedMessage;
         }
       }
     }

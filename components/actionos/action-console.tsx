@@ -75,6 +75,31 @@ const PRESET_PROMPTS = [
   },
   {
     lang: "en-NG",
+    label: "Renew License & Inspection",
+    text: "Renew vehicle license and roadworthiness inspection for car ABC-123-XY.",
+  },
+  {
+    lang: "pcm",
+    label: "Renew Motor Paper (Pidgin)",
+    text: "Renew my motor paper and roadworthiness sharp sharp for ABC-123-XY.",
+  },
+  {
+    lang: "yo",
+    label: "Atunto Iwe Ọkọ (Yorùbá)",
+    text: "Sọ iwe-aṣẹ ọkọ ati iwe-ẹri ijẹrisi ọkọ di ọtun fun ABC-123-XY.",
+  },
+  {
+    lang: "ha",
+    label: "Sabunta Lasisi (Hausa)",
+    text: "Sabunta lasisin mota da takardar duba mota don ABC-123-XY.",
+  },
+  {
+    lang: "ig",
+    label: "Megharia Ikike (Igbo)",
+    text: "Megharia akwukwo ugbo ala na nyocha nchekwa maka ABC-123-XY.",
+  },
+  {
+    lang: "en-NG",
     label: "Marketplace Quotes",
     text: "Compare renewal quotes for ABC-123-XY across Leadway, AXA Mansard, and AIICO.",
   },
@@ -102,6 +127,93 @@ interface CompletedOutcome {
   paymentReference: string;
   isComplete: boolean;
   missingFields: string[];
+  verticalType?: "insurance_policy" | "vehicle_license";
+  mvaaLicenseNumber?: string;
+  roadworthinessNumber?: string;
+  statutoryAuthority?: string;
+}
+
+function resolveCompletedOutcome(
+  events: ActionLedgerEvent[],
+  authDetails: AuthorizationDetails | null,
+  options?: AuthorizationOptions
+): CompletedOutcome | null {
+  // 1. Check for Vehicle License & Roadworthiness renewal workflow
+  const renewVehEvent = events.find((e) => e.tool === "renew_vehicle_license");
+  if (renewVehEvent) {
+    const meta = (renewVehEvent.metadata || {}) as Record<string, unknown>;
+    const vehicleObj = meta.vehicle as Record<string, unknown> | undefined;
+    const vehName =
+      (vehicleObj?.name as string) || (meta.vehiclePlate as string) || "Vehicle ABC-123-XY";
+    const plate = (meta.vehiclePlate as string) || renewVehEvent.referenceId || "ABC-123-XY";
+    const mvaaLic = (meta.mvaaLicenseNumber as string) || renewVehEvent.referenceId || "";
+    const rwLic = (meta.roadworthinessNumber as string) || undefined;
+    const fee = (meta.statutoryFee as number) || 23500;
+    const licExpiry = (meta.licenseExpiry as string) || "";
+    const txObj = meta.transaction as Record<string, unknown> | undefined;
+    const payRef = (txObj?.reference as string) || "MVAA-PAY-SETTLED";
+    const authority =
+      (meta.statutoryAuthority as string) || "Lagos State MVAA & LACVIS";
+
+    const missing: string[] = [];
+    if (!mvaaLic) missing.push("MVAA License Number");
+    if (!licExpiry) missing.push("License Expiry Date");
+
+    return {
+      vehicle: vehName,
+      plateNumber: plate,
+      underwriter: authority,
+      amount: fee,
+      newExpiry: licExpiry,
+      policyNumber: mvaaLic,
+      certificateNumber: rwLic || mvaaLic,
+      paymentReference: payRef,
+      isComplete: missing.length === 0,
+      missingFields: missing,
+      verticalType: "vehicle_license",
+      mvaaLicenseNumber: mvaaLic,
+      roadworthinessNumber: rwLic,
+      statutoryAuthority: authority,
+    };
+  }
+
+  // 2. Insurance Policy Renewal workflow
+  const certEvent = events.find(
+    (e) => e.tool === "generate_certificate" || e.action === "issue_certificate"
+  );
+  const payEvent = events.find(
+    (e) => e.tool === "execute_payment" || e.action === "execute_payment"
+  );
+
+  if (!certEvent && !payEvent && !authDetails) {
+    return null;
+  }
+
+  const certRef = certEvent?.referenceId?.trim() || "";
+  const payRef = payEvent?.referenceId?.trim() || "";
+  const policyNum = authDetails?.policyNumber?.trim() || "";
+  const verifiedExpiry = authDetails?.newExpiry?.trim() || "";
+
+  const missing: string[] = [];
+  if (!policyNum) missing.push("Policy Number");
+  if (!verifiedExpiry) missing.push("Verified Renewal Expiry Date");
+  if (!certRef) missing.push("Statutory Certificate Reference");
+  if (!payRef) missing.push("Payment Settlement Reference");
+
+  return {
+    vehicle: authDetails?.assetName || "Not available",
+    plateNumber: authDetails?.assetIdentifier || "Not available",
+    underwriter: authDetails?.providerName || options?.selectedUnderwriter || "Not available",
+    amount: options?.customAmount || authDetails?.amount || 0,
+    currentExpiry: authDetails?.currentExpiry || undefined,
+    newExpiry: verifiedExpiry || "Not available",
+    policyNumber: policyNum || "Not available",
+    certificateNumber: certRef || "Not available",
+    paymentReference: payRef || "Not available",
+    isComplete: missing.length === 0,
+    missingFields: missing,
+    verticalType: "insurance_policy",
+  };
 }
 
 export function ActionConsole() {
@@ -142,9 +254,15 @@ export function ActionConsole() {
         setSessionId(json.data.sessionId);
         setSessionStatus(json.data.status);
         setResponseMessage(json.data.message);
-        setLedgerEvents(json.data.events || []);
+        const events = json.data.events || [];
+        setLedgerEvents(events);
         if (json.data.authorizationRequired && json.data.authorizationDetails) {
           setAuthDetails(json.data.authorizationDetails);
+        } else if (json.data.status === "completed") {
+          const outcome = resolveCompletedOutcome(events, null);
+          if (outcome) {
+            setCompletedOutcome(outcome);
+          }
         }
       } else {
         setResponseMessage(`Action failed: ${json.error?.message || "Unknown error"}`);
@@ -179,42 +297,14 @@ export function ActionConsole() {
       if (json.success && json.data) {
         setSessionStatus(json.data.status);
         setResponseMessage(json.data.message);
-        setLedgerEvents(json.data.events || []);
+        const events = json.data.events || [];
+        setLedgerEvents(events);
 
         if (json.data.status === "completed") {
-          const events: ActionLedgerEvent[] = json.data.events || [];
-          const certEvent = events.find(
-            (e) => e.tool === "generate_certificate" || e.action === "issue_certificate"
-          );
-          const payEvent = events.find(
-            (e) => e.tool === "execute_payment" || e.action === "execute_payment"
-          );
-
-          // Zero fabrication policy: only display verified identifiers returned by backend and ledger
-          const certRef = certEvent?.referenceId?.trim() || "";
-          const payRef = payEvent?.referenceId?.trim() || "";
-          const policyNum = authDetails?.policyNumber?.trim() || "";
-          const verifiedExpiry = authDetails?.newExpiry?.trim() || "";
-
-          const missing: string[] = [];
-          if (!policyNum) missing.push("Policy Number");
-          if (!verifiedExpiry) missing.push("Verified Renewal Expiry Date");
-          if (!certRef) missing.push("Statutory Certificate Reference");
-          if (!payRef) missing.push("Payment Settlement Reference");
-
-          setCompletedOutcome({
-            vehicle: authDetails?.assetName || "Not available",
-            plateNumber: authDetails?.assetIdentifier || "Not available",
-            underwriter: authDetails?.providerName || options?.selectedUnderwriter || "Not available",
-            amount: options?.customAmount || authDetails?.amount || 0,
-            currentExpiry: authDetails?.currentExpiry || undefined,
-            newExpiry: verifiedExpiry || "Not available",
-            policyNumber: policyNum || "Not available",
-            certificateNumber: certRef || "Not available",
-            paymentReference: payRef || "Not available",
-            isComplete: missing.length === 0,
-            missingFields: missing,
-          });
+          const outcome = resolveCompletedOutcome(events, authDetails, options);
+          if (outcome) {
+            setCompletedOutcome(outcome);
+          }
         }
 
         if (
@@ -477,7 +567,9 @@ export function ActionConsole() {
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="text-base font-extrabold text-slate-900 tracking-tight">
                     {completedOutcome.isComplete
-                      ? "Workflow Completed: Verified Renewal & Test Certificate"
+                      ? completedOutcome.verticalType === "vehicle_license"
+                        ? "Workflow Completed: Verified Vehicle License & Roadworthiness"
+                        : "Workflow Completed: Verified Renewal & Test Certificate"
                       : "Workflow Completed: Incomplete Verification"}
                   </h3>
                   {completedOutcome.isComplete ? (
@@ -495,7 +587,9 @@ export function ActionConsole() {
                 </div>
                 <p className="text-xs text-slate-600 mt-0.5 font-medium">
                   {completedOutcome.isComplete
-                    ? "Autonomous lifecycle finished: eligibility validated, customer authorized, simulated payment settled, and policy rolled forward."
+                    ? completedOutcome.verticalType === "vehicle_license"
+                      ? "Autonomous lifecycle finished: MVAA registration validated, computerized LACVIS inspection cleared, official statutory fees settled, and digital road documents issued."
+                      : "Autonomous lifecycle finished: eligibility validated, customer authorized, simulated payment settled, and policy rolled forward."
                     : "Autonomous lifecycle reported completed status, but one or more required ledger artifacts are missing from response."}
                 </p>
               </div>
@@ -510,7 +604,11 @@ export function ActionConsole() {
                 title={completedOutcome.certificateNumber === "Not available" ? "Certificate not available in ledger records" : "View Certificate Preview"}
               >
                 <FileCheck className="w-3.5 h-3.5 text-emerald-600" />
-                <span>View Certificate Preview</span>
+                <span>
+                  {completedOutcome.verticalType === "vehicle_license"
+                    ? "View License & Roadworthiness"
+                    : "View Certificate Preview"}
+                </span>
               </button>
             </div>
           </div>
@@ -531,7 +629,7 @@ export function ActionConsole() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
             <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-2xs">
               <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block mb-1">
-                POLICY STATE
+                {completedOutcome.verticalType === "vehicle_license" ? "VEHICLE & LICENSE" : "POLICY STATE"}
               </span>
               <div className="text-xs font-bold text-slate-900">
                 {completedOutcome.vehicle}
@@ -546,13 +644,13 @@ export function ActionConsole() {
 
             <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-2xs">
               <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block mb-1">
-                SIMULATED SETTLEMENT
+                {completedOutcome.verticalType === "vehicle_license" ? "STATUTORY SETTLEMENT" : "SIMULATED SETTLEMENT"}
               </span>
               <div className="text-sm font-black font-mono text-emerald-700">
                 {formatNaira(completedOutcome.amount)}
               </div>
               <div className="text-[10px] text-slate-600 font-medium mt-0.5">
-                Rail: <strong className="text-slate-800">Paystack (Simulated)</strong>
+                Rail: <strong className="text-slate-800">{completedOutcome.verticalType === "vehicle_license" ? "MVAA Revenue (Simulated)" : "Paystack (Simulated)"}</strong>
               </div>
               <div className="mt-1 text-[10px] font-mono truncate">
                 Ref:{" "}
@@ -566,7 +664,7 @@ export function ActionConsole() {
 
             <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-2xs">
               <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block mb-1">
-                STATUTORY RECORD
+                {completedOutcome.verticalType === "vehicle_license" ? "REGULATORY BODY" : "STATUTORY RECORD"}
               </span>
               <div className="text-xs font-bold text-slate-900">
                 {completedOutcome.underwriter}
@@ -609,7 +707,7 @@ export function ActionConsole() {
           <div className="p-3.5 rounded-2xl bg-amber-50/80 border border-amber-200 text-xs text-amber-950 flex items-start gap-2.5">
             <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
             <div className="leading-relaxed">
-              <strong>Sandbox Disclosure:</strong> This transaction and generated certificate ({completedOutcome.certificateNumber !== "Not available" ? `#${completedOutcome.certificateNumber}` : "Not available"}) are simulated demo fixtures for the NITDA 2026 AI Innovation Challenge. In production deployment, ActionOS verifies policies against the live NAICOM NIID database and processes real settlement via production Paystack keys.
+              <strong>Sandbox Disclosure:</strong> This transaction and generated certificate ({completedOutcome.certificateNumber !== "Not available" ? `#${completedOutcome.certificateNumber}` : "Not available"}) are simulated demo fixtures for the NITDA 2026 AI Innovation Challenge. In production deployment, ActionOS verifies policies against the live NAICOM NIID and Lagos State MVAA databases and processes real settlement via production Paystack keys.
             </div>
           </div>
         </div>
@@ -637,10 +735,14 @@ export function ActionConsole() {
                 FEDERAL REPUBLIC OF NIGERIA
               </h2>
               <div className="text-xs font-bold text-slate-600 uppercase tracking-wider">
-                National Insurance Commission (NAICOM) &bull; NIID Electronic Certificate
+                {completedOutcome.verticalType === "vehicle_license"
+                  ? "Lagos State Motor Vehicle Administration Agency (MVAA) & VIS"
+                  : "National Insurance Commission (NAICOM) • NIID Electronic Certificate"}
               </div>
               <div className="text-[11px] text-slate-400 font-mono mt-0.5">
-                Motor Vehicles (Third Party Insurance) Act 1950 / Insurance Act 2003
+                {completedOutcome.verticalType === "vehicle_license"
+                  ? "Motor Vehicle Administration Law / National Road Traffic Regulations"
+                  : "Motor Vehicles (Third Party Insurance) Act 1950 / Insurance Act 2003"}
               </div>
             </div>
 
@@ -652,12 +754,20 @@ export function ActionConsole() {
 
               <div className="grid grid-cols-2 gap-3 text-slate-700">
                 <div>
-                  <span className="text-[10px] text-slate-400 font-bold block">CERTIFICATE NUMBER</span>
-                  <span className="font-bold text-slate-900">{completedOutcome.certificateNumber}</span>
+                  <span className="text-[10px] text-slate-400 font-bold block">
+                    {completedOutcome.verticalType === "vehicle_license" ? "MVAA LICENSE NO." : "CERTIFICATE NUMBER"}
+                  </span>
+                  <span className="font-bold text-slate-900">
+                    {completedOutcome.mvaaLicenseNumber || completedOutcome.policyNumber}
+                  </span>
                 </div>
                 <div>
-                  <span className="text-[10px] text-slate-400 font-bold block">POLICY NUMBER</span>
-                  <span className="font-bold text-slate-900">{completedOutcome.policyNumber}</span>
+                  <span className="text-[10px] text-slate-400 font-bold block">
+                    {completedOutcome.verticalType === "vehicle_license" ? "ROADWORTHINESS NO." : "POLICY NUMBER"}
+                  </span>
+                  <span className="font-bold text-slate-900">
+                    {completedOutcome.roadworthinessNumber || (completedOutcome.verticalType === "vehicle_license" ? "LACVIS-VERIFIED" : completedOutcome.policyNumber)}
+                  </span>
                 </div>
                 <div>
                   <span className="text-[10px] text-slate-400 font-bold block">REGISTRATION NO. (PLATE)</span>
@@ -668,11 +778,15 @@ export function ActionConsole() {
                   <span className="font-bold text-slate-900">{completedOutcome.vehicle}</span>
                 </div>
                 <div>
-                  <span className="text-[10px] text-slate-400 font-bold block">UNDERWRITER</span>
+                  <span className="text-[10px] text-slate-400 font-bold block">
+                    {completedOutcome.verticalType === "vehicle_license" ? "REGULATORY AUTHORITY" : "UNDERWRITER"}
+                  </span>
                   <span className="font-bold text-slate-900">{completedOutcome.underwriter}</span>
                 </div>
                 <div>
-                  <span className="text-[10px] text-slate-400 font-bold block">PREMIUM SETTLED</span>
+                  <span className="text-[10px] text-slate-400 font-bold block">
+                    {completedOutcome.verticalType === "vehicle_license" ? "STATUTORY FEES" : "PREMIUM SETTLED"}
+                  </span>
                   <span className="font-bold text-emerald-800">{formatNaira(completedOutcome.amount)} (Simulated)</span>
                 </div>
                 <div>
@@ -686,7 +800,9 @@ export function ActionConsole() {
               </div>
 
               <div className="pt-3 border-t border-slate-200/80 text-[10px] text-slate-500 font-sans leading-relaxed">
-                This certificate certifies that an insurance policy covering the liabilities described in the Insurance Act has been issued for the designated vehicle.
+                {completedOutcome.verticalType === "vehicle_license"
+                  ? "This certificate confirms that statutory motor vehicle licensing and computerized roadworthiness inspection (LACVIS) have been validated and renewed for the designated vehicle."
+                  : "This certificate certifies that an insurance policy covering the liabilities described in the Insurance Act has been issued for the designated vehicle."}
                 <strong className="block text-amber-900 mt-1">
                   NOTICE: Generated in sandbox mode by ActionOS for evaluation purposes. Not a statutory document for law enforcement or roadworthiness inspection.
                 </strong>

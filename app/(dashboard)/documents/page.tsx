@@ -20,7 +20,7 @@ import type { Document } from "@/types/database";
 
 const TYPE_TABS = [
   { id: "all", label: "All Documents" },
-  { id: "certificate", label: "Insurance Certificates" },
+  { id: "certificate", label: "Certificates & Road Licenses" },
   { id: "policy_document", label: "Policy Schedules" },
   { id: "receipt", label: "Payment Receipts" },
 ];
@@ -237,7 +237,13 @@ export default function DocumentsPage() {
                         </span>
                         {isCert && (
                           <span className="font-mono text-[10px] bg-emerald-50 text-emerald-800 px-2 py-0.5 rounded border border-emerald-200 font-bold">
-                            {isSimulated ? "SIMULATED CERTIFICATE" : "VERIFIED NAICOM"}
+                            {doc.file_name.includes("Vehicle_License")
+                              ? "STATUTORY MVAA LICENSE"
+                              : doc.file_name.includes("Roadworthiness")
+                              ? "LACVIS ROADWORTHINESS"
+                              : isSimulated
+                              ? "SIMULATED CERTIFICATE"
+                              : "VERIFIED NAICOM"}
                           </span>
                         )}
                         <span className="text-[10px] bg-slate-200 text-slate-700 px-2 py-0.5 rounded uppercase font-semibold">
@@ -300,13 +306,25 @@ export default function DocumentsPage() {
               {/* Certificate Header */}
               <div className="text-center border-b border-emerald-200 pb-5 mb-6">
                 <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-300 text-[10px] font-black uppercase tracking-widest mb-2">
-                  FEDERAL REPUBLIC OF NIGERIA &bull; NAICOM REGISTERED
+                  {selectedDoc.file_name.includes("Vehicle_License")
+                    ? "FEDERAL REPUBLIC OF NIGERIA • LAGOS STATE MVAA"
+                    : selectedDoc.file_name.includes("Roadworthiness")
+                    ? "LAGOS STATE COMPUTERIZED VEHICLE INSPECTION (LACVIS)"
+                    : "FEDERAL REPUBLIC OF NIGERIA • NAICOM REGISTERED"}
                 </div>
                 <h2 className="text-xl sm:text-2xl font-black tracking-tight text-slate-900 uppercase">
-                  Vehicle Insurance Certificate
+                  {selectedDoc.file_name.includes("Vehicle_License")
+                    ? "Official Motor Vehicle License"
+                    : selectedDoc.file_name.includes("Roadworthiness")
+                    ? "Roadworthiness Certificate of Compliance"
+                    : "Vehicle Insurance Certificate"}
                 </h2>
                 <div className="text-xs text-slate-500 mt-1">
-                  Issued under the Motor Vehicles (Third Party Insurance) Act
+                  {selectedDoc.file_name.includes("Vehicle_License")
+                    ? "Issued under Lagos State Motor Vehicle Administration Agency Law"
+                    : selectedDoc.file_name.includes("Roadworthiness")
+                    ? "Issued under Lagos State Vehicle Inspection Service Regulations"
+                    : "Issued under the Motor Vehicles (Third Party Insurance) Act"}
                 </div>
               </div>
 

@@ -120,6 +120,43 @@ export class DeterministicDemoAIProvider implements NAtlasProvider {
         (raw.includes("lelee") && (raw.includes("ụgbọ") || raw.includes("ugbo") || raw.includes("data")))
       );
 
+    const isVehicleLicenseRenewal =
+      (raw.includes("vehicle license") ||
+        raw.includes("motor license") ||
+        raw.includes("car license") ||
+        raw.includes("roadworthiness") ||
+        raw.includes("road worthiness") ||
+        raw.includes("motor paper") ||
+        raw.includes("car paper") ||
+        raw.includes("vehicle paper") ||
+        (raw.includes("lasisi") && (raw.includes("mota") || raw.includes("ọkọ") || raw.includes("oko"))) ||
+        raw.includes("iwe-aṣẹ ọkọ") ||
+        raw.includes("iwe ase oko") ||
+        raw.includes("iwe ọkọ") ||
+        raw.includes("iwe oko") ||
+        raw.includes("takardar mota") ||
+        raw.includes("lasisin mota") ||
+        raw.includes("ikike ụgbọ ala") ||
+        raw.includes("ikike ugbo ala") ||
+        raw.includes("akwụkwọ ụgbọ ala") ||
+        raw.includes("akwukwo ugbo ala") ||
+        raw.includes("akwukwo nyocha")) &&
+      (raw.includes("renew") ||
+        raw.includes("re-new") ||
+        raw.includes("expire") ||
+        raw.includes("atunto") ||
+        raw.includes("sọ di ọtun") ||
+        raw.includes("so di otun") ||
+        raw.includes("di ọtun") ||
+        raw.includes("di otun") ||
+        raw.includes("sabunta") ||
+        raw.includes("megharia") ||
+        raw.includes("dị ọhụrụ") ||
+        raw.includes("di ohuru") ||
+        raw.includes("sharp sharp") ||
+        raw.includes("inspection") ||
+        raw.includes("paper"));
+
     const isRenew =
       raw.includes("renew") ||
       raw.includes("re-new") ||
@@ -160,8 +197,11 @@ export class DeterministicDemoAIProvider implements NAtlasProvider {
     let intent = "unknown";
     let confidence = 0.5;
 
-    // Specific intent resolution priority: renewals and quotes have precedence over general vehicle queries
-    if (isRenew) {
+    // Specific intent resolution priority: vehicle license renewal, policy renewals and quotes
+    if (isVehicleLicenseRenewal) {
+      intent = "renew_vehicle_license";
+      confidence = 0.98;
+    } else if (isRenew) {
       intent = "renew_policy";
       confidence = 0.98;
     } else if (isRegisterVehicle && (raw.includes("motor") || raw.includes("car") || raw.includes("vehicle") || raw.includes("oko") || raw.includes("ọkọ") || raw.includes("mota") || raw.includes("ụgbọ ala") || raw.includes("ugbo ala") || extractedPlate || extractedVin)) {

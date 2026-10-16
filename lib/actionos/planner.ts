@@ -235,6 +235,61 @@ export class ActionOSPlanner {
         break;
       }
 
+      case "renew_vehicle_license": {
+        goal = "Autonomous vehicle license renewal and LACVIS computerized roadworthiness certification";
+        riskLevel = "medium";
+        rawSteps.push(
+          {
+            action_type: "customer_lookup",
+            description: "Verify customer record and active tenant context",
+            tool_name: "get_customer",
+            requires_confirmation: false,
+            input: { customerId },
+          },
+          {
+            action_type: "vehicle_lookup",
+            description: "Query vehicle database for target vehicle asset",
+            tool_name: "query_vehicle",
+            requires_confirmation: false,
+            input: {
+              vehiclePlate: understanding.entities.vehiclePlate as string,
+              vin: understanding.entities.vin as string,
+              chassisNumber: understanding.entities.chassisNumber as string,
+              customerId,
+              language: understanding.entities.detectedLanguage as string,
+            },
+          },
+          {
+            action_type: "inspection_verification",
+            description: "Verify LACVIS computerized roadworthiness test clearance and MVAA registry",
+            tool_name: "verify_vehicle_inspection",
+            requires_confirmation: false,
+            input: {
+              vehiclePlate: understanding.entities.vehiclePlate as string,
+              chassisNumber: understanding.entities.chassisNumber as string,
+              vin: understanding.entities.vin as string,
+              language: understanding.entities.detectedLanguage as string,
+            },
+          },
+          {
+            action_type: "license_and_roadworthiness_renewal",
+            description: "Execute vehicle license renewal, LACVIS roadworthiness certification, and fee settlement",
+            tool_name: "renew_vehicle_license",
+            requires_confirmation: false,
+            input: {
+              customerId,
+              vehiclePlate: understanding.entities.vehiclePlate as string,
+              vin: understanding.entities.vin as string,
+              chassisNumber: understanding.entities.chassisNumber as string,
+              includeRoadworthiness: true,
+              licenseDurationMonths: 12,
+              language: understanding.entities.detectedLanguage as string,
+            },
+          }
+        );
+        break;
+      }
+
       default: {
         goal = "Inspect customer policy details";
         riskLevel = "low";

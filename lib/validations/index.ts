@@ -81,3 +81,15 @@ export const createVehicleSchema = z.object({
   engineNumber: z.string().optional(),
   language: z.string().default("en-NG"),
 });
+
+export const renewVehicleLicenseSchema = z.object({
+  customerId: z.string().optional(),
+  vehiclePlate: z.string().optional(),
+  vin: z.string().optional(),
+  chassisNumber: z.string().optional(),
+  licenseDurationMonths: z.coerce.number().int().min(6).max(24).default(12),
+  includeRoadworthiness: z.boolean().default(true),
+  paymentReference: z.string().optional(),
+  expectedAmount: z.coerce.number().positive().optional(),
+  language: z.string().default("en-NG"),
+});
