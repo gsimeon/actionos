@@ -341,5 +341,62 @@ describe("Supabase Schema, Migration Replayability & Type Alignment Validation",
       "finalize_atomic_refund_settlement must be revoked from anon and public"
     );
   });
+
+  it("should verify 20261016020000_harden_rpc_execution_grants revokes execution from authenticated role and grants strictly to service_role", () => {
+    const hardenMigrationFile = path.join(migrationsDir, "20261016020000_harden_rpc_execution_grants.sql");
+    assert.ok(fs.existsSync(hardenMigrationFile), "Hardened RPC execution grants migration must exist");
+    const sql = fs.readFileSync(hardenMigrationFile, "utf-8");
+
+    // 1. settle_payment_webhook
+    assert.ok(
+      /REVOKE EXECUTE ON FUNCTION public\.settle_payment_webhook[\s\S]*?FROM authenticated, anon, public/i.test(sql),
+      "settle_payment_webhook must be revoked from authenticated, anon, public"
+    );
+    assert.ok(
+      /GRANT EXECUTE ON FUNCTION public\.settle_payment_webhook[\s\S]*?TO service_role/i.test(sql),
+      "settle_payment_webhook must be granted exclusively to service_role"
+    );
+
+    // 2. reserve_refund_balance
+    assert.ok(
+      /REVOKE EXECUTE ON FUNCTION public\.reserve_refund_balance[\s\S]*?FROM authenticated, anon, public/i.test(sql),
+      "reserve_refund_balance must be revoked from authenticated, anon, public"
+    );
+    assert.ok(
+      /GRANT EXECUTE ON FUNCTION public\.reserve_refund_balance[\s\S]*?TO service_role/i.test(sql),
+      "reserve_refund_balance must be granted exclusively to service_role"
+    );
+
+    // 3. release_refund_reservation
+    assert.ok(
+      /REVOKE EXECUTE ON FUNCTION public\.release_refund_reservation[\s\S]*?FROM authenticated, anon, public/i.test(sql),
+      "release_refund_reservation must be revoked from authenticated, anon, public"
+    );
+    assert.ok(
+      /GRANT EXECUTE ON FUNCTION public\.release_refund_reservation[\s\S]*?TO service_role/i.test(sql),
+      "release_refund_reservation must be granted exclusively to service_role"
+    );
+
+    // 4. finalize_atomic_refund_settlement
+    assert.ok(
+      /REVOKE EXECUTE ON FUNCTION public\.finalize_atomic_refund_settlement[\s\S]*?FROM authenticated, anon, public/i.test(sql),
+      "finalize_atomic_refund_settlement must be revoked from authenticated, anon, public"
+    );
+    assert.ok(
+      /GRANT EXECUTE ON FUNCTION public\.finalize_atomic_refund_settlement[\s\S]*?TO service_role/i.test(sql),
+      "finalize_atomic_refund_settlement must be granted exclusively to service_role"
+    );
+
+    // 5. claim_and_accept_quote
+    assert.ok(
+      /REVOKE EXECUTE ON FUNCTION public\.claim_and_accept_quote[\s\S]*?FROM authenticated, anon, public/i.test(sql),
+      "claim_and_accept_quote must be revoked from authenticated, anon, public"
+    );
+    assert.ok(
+      /GRANT EXECUTE ON FUNCTION public\.claim_and_accept_quote[\s\S]*?TO service_role/i.test(sql),
+      "claim_and_accept_quote must be granted exclusively to service_role"
+    );
+  });
 });
+
 

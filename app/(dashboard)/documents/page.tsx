@@ -14,6 +14,7 @@ import {
   CheckCircle2,
   FileCheck,
   Award,
+  AlertTriangle,
 } from "lucide-react";
 import { formatDateTime } from "@/lib/utils";
 import type { Document } from "@/types/database";
@@ -296,8 +297,23 @@ export default function DocumentsPage() {
               <X className="w-5 h-5" />
             </button>
 
+            {/* Sandbox Disclosure Notice */}
+            <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 flex items-start gap-2.5">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <strong className="font-bold">Sandbox Test Fixture:</strong> This certificate is a simulated demonstration fixture for the NITDA 2026 AI Innovation Challenge. In production deployment, ActionOS connects directly to the live NAICOM NIID API and Lagos State MVAA database for statutory registration.
+              </div>
+            </div>
+
             {/* Certificate Document Frame */}
-            <div className="border-4 border-double border-emerald-600/30 p-6 sm:p-8 rounded-2xl bg-gradient-to-b from-emerald-50/30 via-white to-slate-50 text-slate-900 shadow-inner relative">
+            <div className="border-4 border-double border-emerald-600/30 p-6 sm:p-8 rounded-2xl bg-gradient-to-b from-emerald-50/30 via-white to-slate-50 text-slate-900 shadow-inner relative overflow-hidden">
+              {/* Simulated Watermark Background */}
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-[0.06] select-none rotate-[-30deg]">
+                <span className="text-4xl sm:text-6xl font-black text-slate-900 tracking-widest uppercase border-4 border-slate-900 p-4 text-center">
+                  SIMULATED TEST FIXTURE<br />NON-STATUTORY RECORD
+                </span>
+              </div>
+
               {/* Seal watermark */}
               <div className="absolute right-6 top-6 opacity-5 pointer-events-none">
                 <ShieldCheck className="w-40 h-40 text-emerald-600" />
@@ -321,10 +337,15 @@ export default function DocumentsPage() {
                 </h2>
                 <div className="text-xs text-slate-500 mt-1">
                   {selectedDoc.file_name.includes("Vehicle_License")
-                    ? "Issued under Lagos State Motor Vehicle Administration Agency Law"
+                    ? "Issued under Lagos State Motor Vehicle Administration Agency Law (Simulation)"
                     : selectedDoc.file_name.includes("Roadworthiness")
-                    ? "Issued under Lagos State Vehicle Inspection Service Regulations"
-                    : "Issued under the Motor Vehicles (Third Party Insurance) Act"}
+                    ? "Issued under Lagos State Vehicle Inspection Service Regulations (Simulation)"
+                    : "Issued under the Motor Vehicles (Third Party Insurance) Act (Simulation)"}
+                </div>
+                <div className="mt-2">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                    NON-STATUTORY TEST FIXTURE (SANDBOX)
+                  </span>
                 </div>
               </div>
 

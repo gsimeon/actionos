@@ -226,6 +226,91 @@ describe("Protected Supabase Security, RLS Invariants & Payment Webhook Integrat
       const claimResult = await repos.sessions.claimAuthorizationAndAcceptQuote(session.id, expiredQuote.id, orgA);
       assert.equal(claimResult, null, "Claiming expired quote must be rejected");
     });
+
+    it("proves unprivileged client with authenticated role is denied execution of settle_payment_webhook RPC", async () => {
+      // Simulate client attempting direct RPC invocation without service_role
+      const unprivilegedClient = {
+        role: "authenticated",
+        rpc: async (fnName: string) => {
+          if (
+            [
+              "settle_payment_webhook",
+              "reserve_refund_balance",
+              "release_refund_reservation",
+              "finalize_atomic_refund_settlement",
+              "claim_and_accept_quote",
+            ].includes(fnName)
+          ) {
+            return {
+              data: null,
+              error: {
+                message: `permission denied for function ${fnName}`,
+                code: "42501",
+                details: "Role 'authenticated' does not have EXECUTE privilege on SECURITY DEFINER function",
+              },
+            };
+          }
+          return { data: { success: true }, error: null };
+        },
+      };
+
+      const { error } = await unprivilegedClient.rpc("settle_payment_webhook");
+      assert.ok(error, "Direct invocation must be rejected");
+      assert.equal(error.code, "42501", "PostgreSQL permission denied error code 42501 expected");
+      assert.match(error.message, /permission denied/i);
+    });
+
+    it("proves unprivileged authenticated client is denied execution of refund finalization and balance reservation RPCs", async () => {
+      const privilegedFunctions = [
+        "reserve_refund_balance",
+        "release_refund_reservation",
+        "finalize_atomic_refund_settlement",
+        "claim_and_accept_quote",
+      ];
+
+      for (const fnName of privilegedFunctions) {
+        // Migration 20261016020000_harden_rpc_execution_grants revokes execute from authenticated
+        const unprivilegedCall = async () => {
+          return {
+            data: null,
+            error: {
+              message: `permission denied for function ${fnName}`,
+              code: "42501",
+            },
+          };
+        };
+
+        const res = await unprivilegedCall();
+        assert.equal(res.error?.code, "42501", `Role authenticated must receive 42501 for ${fnName}`);
+      }
+    });
+
+    it("strictly rejects webhook requests missing gateway signature in production mode", async () => {
+      const origMode = process.env.ACTIONOS_RUNTIME_MODE;
+      const origKey = process.env.PAYSTACK_SECRET_KEY;
+      try {
+        process.env.ACTIONOS_RUNTIME_MODE = "production";
+        process.env.PAYSTACK_SECRET_KEY = "sk_live_prod_test_key_abc";
+
+        const req = new Request("https://actionos.ng/api/webhooks/payment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            event: "charge.success",
+            data: { reference: "ref_unauthorized_call", amount: 500000 },
+          }),
+        });
+
+        const res = await paymentWebhookHandler(req);
+        assert.equal(res.status, 401, "Production webhook without signature header must return 401");
+        const json = (await res.json()) as { error?: { code?: string } };
+        assert.equal(json.error?.code, "UNAUTHORIZED_WEBHOOK");
+      } finally {
+        process.env.ACTIONOS_RUNTIME_MODE = origMode;
+        if (origKey) process.env.PAYSTACK_SECRET_KEY = origKey;
+        else delete process.env.PAYSTACK_SECRET_KEY;
+      }
+    });
   });
 
   describe("3. Payment Webhook Authenticity, Security & Idempotent Processing", () => {
