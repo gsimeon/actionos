@@ -6,6 +6,7 @@ import { getRepositoryContainer } from "@/lib/repositories";
 export interface EligibilityInput {
   policyId?: string;
   policy?: Policy;
+  referenceDate?: string | Date;
 }
 
 export interface EligibilityOutput {
@@ -60,11 +61,15 @@ export class CheckRenewalEligibilityTool implements IActionOSTool<EligibilityInp
       };
     }
 
+    const defaultRef = context.isSimulated
+      ? new Date("2026-10-07T00:00:00Z")
+      : new Date();
+    const refDate = input.referenceDate ? new Date(input.referenceDate) : defaultRef;
+
     const guardrails = new ActionOSGuardrails();
-    const check = guardrails.validateRenewalEligibility(policy, new Date("2026-10-07T00:00:00Z"));
+    const check = guardrails.validateRenewalEligibility(policy, refDate);
 
     const expiryDate = new Date(policy.expiry_date);
-    const refDate = new Date("2026-10-07T00:00:00Z");
     const diffTime = expiryDate.getTime() - refDate.getTime();
     const daysUntilExpiry = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 

@@ -5,7 +5,7 @@ import { getRepositoryContainer } from "@/lib/repositories";
 export interface GenerateCertInput {
   customerId: string;
   policyNumber: string;
-  previousExpiry: string;
+  previousExpiry?: string;
   newExpiry: string;
   amount: number;
 }

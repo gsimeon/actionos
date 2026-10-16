@@ -22,6 +22,19 @@ describe("ActionOSPermissions", () => {
       toolName: "verify_niid",
     });
     assert.equal(niidRes.allowed, true);
+
+    const vehLicRes = ActionOSPermissions.checkPermission({
+      role: "customer",
+      toolName: "renew_vehicle_license",
+      amount: 23500,
+    });
+    assert.equal(vehLicRes.allowed, true);
+
+    const inspRes = ActionOSPermissions.checkPermission({
+      role: "customer",
+      toolName: "verify_vehicle_inspection",
+    });
+    assert.equal(inspRes.allowed, true);
   });
 
   it("should require approval when customer exceeds 500k limit", () => {
