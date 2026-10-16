@@ -143,11 +143,33 @@ If payment succeeds but a downstream database operation fails:
 
 ---
 
-## 6. Extensibility to Future Verticals
+## 6. Statutory Regulatory Gateway Architecture (FRSC & LACVIS)
+
+ActionOS interfaces directly with Nigerian statutory registries to verify vehicular integrity, driver authenticity, and computerized roadworthiness:
+
+### A. Federal Road Safety Corps (FRSC NVIS & Driver's License Registry)
+- **Adapter**: `lib/integrations/frsc.ts` (`FrscGatewayClient`)
+- **Plate Normalization & Strict Validation**: Normalizes various Nigerian plate string permutations (e.g., `abc 123 xy` &rarr; `ABC-123-XY`) using state-aware regex (`/^[A-Z]{2,3}-\d{2,3}-[A-Z]{2}$/`). Rejects malformed plates with `FRSC_INVALID_PLATE_FORMAT`.
+- **Driver's License Format Validation**: Validates Nigerian Driver's License format (`NIGERIAN_DL_REGEX`, `/^[A-Z]{2,3}-?\d{4,8}-?[A-Z0-9]{2,4}$/i`) while preserving user-formatted string representations.
+- **Fail-Closed Production Security**: In production mode (`isProductionMode()`), missing `FRSC_API_KEY` immediately throws `FRSC_CONFIGURATION_ERROR`. Upstream HTTP 5xx, timeouts, or network errors throw `FRSC_UPSTREAM_ERROR`, strictly prohibiting silent benchmark fallbacks.
+- **Theft Detection & Fraud Prevention**: Cross-verifies vehicle status against FRSC theft registry records. `VerifyNiidTool` checks `frscResult.theftFlag`; if active, policy underwriting and verification fail immediately.
+- **Sandbox Test Fixtures**: Deterministic sandbox fixtures for development and testing (`ABC-123-XY` passing benchmark, `STOLEN-999-XX` stolen vehicle flag, `NOT-404-NF` unregistered plate).
+
+### B. Lagos Computerised Vehicle Inspection Service (LACVIS Roadworthiness)
+- **Adapter**: `lib/integrations/lacvis.ts` (`LacvisGatewayClient`)
+- **Computerized Inspection Standards**: Evaluates test parameters against statutory thresholds (Brake efficiency: 84% passing vs. 70% statutory minimum; emissions standards; suspension; steering; lighting).
+- **Statutory Clearance & Certificate Generation**: Computes computerized clearance status, recording test center ID, certificate number, test date, and expiry date.
+- **Fail-Closed Security**: In production mode, missing `LACVIS_API_KEY` throws `LACVIS_CONFIGURATION_ERROR`. Live API errors are typed and classified via `LacvisGatewayError`.
+- **Tool Integration**: `VerifyVehicleInspectionTool` invokes `lacvisGateway.verifyInspection` to confirm inspection compliance before statutory vehicle license renewal.
+
+---
+
+## 7. Extensibility to Future Verticals
 
 ActionOS was architected as an extensible engine. Adding new verticals (e.g., `ActionOS Health`, `ActionOS Civic`, `ActionOS Business`) requires:
 1. Defining new domain tools in `lib/actionos/tools/`
 2. Registering tools in `ToolRegistry`
 3. Adding the intent workflow in `ActionOSPlanner`
 No modifications to the core orchestrator, state machine, or audit ledger are required.
+
 

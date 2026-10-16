@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { IActionOSTool, ToolResult, WorkflowExecutionContext } from "@/types/actionos";
+import { frscGateway } from "@/lib/integrations/frsc";
 
 export interface VerifyNiidInput {
   vehiclePlate?: string;
@@ -27,7 +28,7 @@ export class VerifyNiidTool implements IActionOSTool<VerifyNiidInput, NiidVerifi
   public readonly name = "verify_niid_database";
   public readonly description = "Verify vehicle registration against Nigerian Insurance Industry Database (NIID) and FRSC";
   public readonly category = "regulatory";
-  public readonly version = "1.0.0";
+  public readonly version = "1.1.0";
   public readonly riskLevel = "low" as const;
   public readonly requiresConfirmation = false;
 
@@ -64,17 +65,40 @@ export class VerifyNiidTool implements IActionOSTool<VerifyNiidInput, NiidVerifi
       ? "DEMO SIMULATION: Pre-clearance verified against local sandbox data. Does not query live NAICOM/NIID servers."
       : "STATUTORY VERIFICATION: Verified against official Nigerian Insurance Industry Database (NIID).";
 
+    let frscRegistered = true;
+    let theftFlag = false;
+    let engineNumber = `ENGINE-${digest.slice(0, 6)}`;
+
+    try {
+      const frsc = await frscGateway.verifyPlate(plate);
+      frscRegistered = frsc.found;
+      theftFlag = frsc.theftFlag;
+      if (frsc.engineNumber) {
+        engineNumber = frsc.engineNumber;
+      }
+    } catch (err: unknown) {
+      if (!isSimulated) {
+        return {
+          success: false,
+          error: {
+            code: "FRSC_VERIFICATION_FAILED",
+            message: err instanceof Error ? err.message : "FRSC verification failed",
+          },
+        };
+      }
+    }
+
     return {
       success: true,
       data: {
-        verified: true,
+        verified: !theftFlag && frscRegistered,
         vehiclePlate: plate,
         chassisNumber: chassis,
-        engineNumber: `ENGINE-${digest.slice(0, 6)}`,
+        engineNumber,
         niidRecordFound: true,
         activeExistingPolicy: false, // Eligible for renewal
-        frscRegistered: true,
-        theftFlag: false,
+        frscRegistered,
+        theftFlag,
         preclearanceToken,
         timestamp: new Date().toISOString(),
         isSimulated,

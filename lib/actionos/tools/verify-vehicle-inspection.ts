@@ -1,10 +1,10 @@
-import crypto from "node:crypto";
 import type { IActionOSTool, ToolResult, WorkflowExecutionContext } from "@/types/actionos";
 import {
   normalizeNigerianLanguage,
   formatRoadworthinessInspectionMessage,
   type SupportedNigerianLanguage,
 } from "@/lib/ai/nigerian-languages";
+import { lacvisGateway, LacvisGatewayError } from "@/lib/integrations/lacvis";
 
 export interface VerifyInspectionInput {
   vehiclePlate?: string;
@@ -42,7 +42,7 @@ export class VerifyVehicleInspectionTool
   public readonly description =
     "Verify vehicle statutory MVAA registry status and LACVIS computerized roadworthiness test clearance";
   public readonly category = "regulatory";
-  public readonly version = "1.0.0";
+  public readonly version = "1.1.0";
   public readonly riskLevel = "low" as const;
   public readonly requiresConfirmation = false;
 
@@ -57,78 +57,71 @@ export class VerifyVehicleInspectionTool
     input: VerifyInspectionInput,
     context: WorkflowExecutionContext
   ): Promise<ToolResult<VerifyInspectionOutput>> {
-    const isSimulated = Boolean(context.isSimulated || context.auth.isDemo);
     const plate = (input.vehiclePlate || "ABC-123-XY").trim().toUpperCase();
     const chassis = (input.chassisNumber || input.vin || "DEMO-VIN-000001").trim().toUpperCase();
     const targetLang = normalizeNigerianLanguage(input.language || context.language);
 
-    // Deterministic hash based on plate, chassis, and organization
-    const digest = crypto
-      .createHash("sha256")
-      .update(`${plate}:${chassis}:${context.auth.organizationId}`)
-      .digest("hex")
-      .slice(0, 8)
-      .toUpperCase();
+    try {
+      const inspection = await lacvisGateway.verifyInspection(plate, chassis);
+      const brakeEfficiency = `${inspection.brakeEfficiencyPct}% (Min statutory threshold 70%)`;
+      const emissionStatus =
+        inspection.emissionStatus === "PASSED"
+          ? `COMPLIANT (CO: ${inspection.emissionCoPct}%, HC: ${inspection.emissionHcPpm}ppm)`
+          : `NON-COMPLIANT (CO: ${inspection.emissionCoPct}%, HC: ${inspection.emissionHcPpm}ppm)`;
+      const overallResult = inspection.overallResult;
 
-    const year = new Date().getFullYear();
-    const inspectionId = isSimulated
-      ? `LACVIS-SIM-${year}-${digest}`
-      : `LACVIS-STATUTORY-${year}-${digest}`;
+      const localizedMessage = formatRoadworthinessInspectionMessage(
+        {
+          plate,
+          inspectionId: inspection.inspectionId,
+          brakeEfficiency,
+          emissionStatus,
+          overallResult,
+        },
+        targetLang
+      );
 
-    const now = new Date();
-    const nextYear = new Date(now);
-    nextYear.setFullYear(now.getFullYear() + 1);
-
-    const brakeEfficiency = "84% (Min statutory threshold 70%)";
-    const emissionStatus = "COMPLIANT (CO: 0.42%, HC: 110ppm)";
-    const overallResult = "PASSED";
-
-    const inspectionCenter = isSimulated
-      ? "LACVIS Ojodu-Berger Computerized Inspection Center (Simulated Sandbox)"
-      : "LACVIS Computerized Vehicle Inspection Center, Lagos State";
-
-    const certifiedAuthority = isSimulated
-      ? "ActionOS Regulatory Simulation Sandbox (Non-Statutory LACVIS Test Registry)"
-      : "Lagos Computerized Vehicle Inspection Service (LACVIS) / Vehicle Inspection Service (VIS)";
-
-    const statutoryNotice = isSimulated
-      ? "DEMO SIMULATION: Roadworthiness inspection pre-clearance verified against sandbox vehicle testing profiles."
-      : "STATUTORY VERIFICATION: Certified in compliance with Lagos State Road Traffic Law (VIS Inspection Clearance).";
-
-    const localizedMessage = formatRoadworthinessInspectionMessage(
-      {
-        plate,
-        inspectionId,
-        brakeEfficiency,
-        emissionStatus,
-        overallResult,
-      },
-      targetLang
-    );
-
-    return {
-      success: true,
-      data: {
-        verified: true,
-        vehiclePlate: plate,
-        chassisNumber: chassis,
-        inspectionId,
-        mvaaRegistryStatus: "ACTIVE",
-        visualInspection: "PASSED",
-        brakeEfficiency,
-        emissionStatus,
-        lightingAndElectrical: "PASSED",
-        steeringSuspension: "PASSED",
-        overallResult,
-        inspectionDate: now.toISOString(),
-        expiryDate: nextYear.toISOString(),
-        inspectionCenter,
-        certifiedAuthority,
-        isSimulated,
-        statutoryNotice,
-        localizedMessage,
-        language: targetLang,
-      },
-    };
+      return {
+        success: true,
+        data: {
+          verified: overallResult === "PASSED",
+          vehiclePlate: plate,
+          chassisNumber: chassis,
+          inspectionId: inspection.inspectionId,
+          mvaaRegistryStatus: "ACTIVE",
+          visualInspection: inspection.visualInspection,
+          brakeEfficiency,
+          emissionStatus,
+          lightingAndElectrical: inspection.lightingAndElectrical,
+          steeringSuspension: inspection.steeringSuspension,
+          overallResult,
+          inspectionDate: inspection.inspectionDate,
+          expiryDate: inspection.expiryDate,
+          inspectionCenter: inspection.centerName,
+          certifiedAuthority: inspection.certifiedAuthority,
+          isSimulated: inspection.isSimulated,
+          statutoryNotice: inspection.statutoryNotice,
+          localizedMessage,
+          language: targetLang,
+        },
+      };
+    } catch (err: unknown) {
+      if (err instanceof LacvisGatewayError) {
+        return {
+          success: false,
+          error: {
+            code: err.code,
+            message: err.message,
+          },
+        };
+      }
+      return {
+        success: false,
+        error: {
+          code: "INSPECTION_FAILED",
+          message: err instanceof Error ? err.message : "Vehicle inspection query failed",
+        },
+      };
+    }
   }
 }
