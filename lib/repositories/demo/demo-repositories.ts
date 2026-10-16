@@ -726,11 +726,30 @@ export class DemoActionStepRepository implements IActionStepRepository {
 export class DemoTransactionRepository implements ITransactionRepository {
   constructor(private webhookRepo?: IWebhookEventRepository) {}
 
-  async findAll(options?: { status?: string; customerId?: string; limit?: number; tenant?: TenantContext }): Promise<Transaction[]> {
+  async findAll(options?: {
+    status?: string;
+    customerId?: string;
+    provider?: string;
+    transactionType?: string;
+    limit?: number;
+    tenant?: TenantContext;
+  }): Promise<Transaction[]> {
     const store = getStore();
     let txs = store.transactions.filter((t) => {
       if (options?.status && options.status !== "all" && t.status !== options.status) return false;
       if (options?.customerId && t.customer_id !== options.customerId) return false;
+      if (options?.provider && options.provider !== "all") {
+        const prov = options.provider.toLowerCase();
+        const tProv = (t.provider || "").toLowerCase();
+        if (prov === "paystack") {
+          if (tProv !== "paystack" && tProv !== "mock_paystack") return false;
+        } else if (prov === "flutterwave") {
+          if (tProv !== "flutterwave" && tProv !== "mock_flutterwave") return false;
+        } else if (tProv !== prov) {
+          return false;
+        }
+      }
+      if (options?.transactionType && options.transactionType !== "all" && t.transaction_type !== options.transactionType) return false;
       if (options?.tenant?.customerId && t.customer_id !== options.tenant.customerId) return false;
       if (options?.tenant?.organizationId) {
         const cust = store.customers.find((c) => c.id === t.customer_id);

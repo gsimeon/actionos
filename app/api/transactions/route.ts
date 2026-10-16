@@ -27,12 +27,16 @@ export async function GET(req: Request) {
     const url = new URL(req.url);
     const status = url.searchParams.get("status") || undefined;
     const customerId = url.searchParams.get("customerId") || undefined;
+    const provider = url.searchParams.get("provider") || undefined;
+    const transactionType = url.searchParams.get("type") || url.searchParams.get("transactionType") || undefined;
     const limitParam = url.searchParams.get("limit");
     const limit = limitParam ? parseInt(limitParam, 10) : undefined;
 
     const transactions = await repos.transactions.findAll({
       status,
       customerId,
+      provider,
+      transactionType,
       limit: Number.isFinite(limit) ? limit : undefined,
       tenant,
     });

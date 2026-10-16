@@ -111,7 +111,14 @@ export interface IActionStepRepository {
 }
 
 export interface ITransactionRepository {
-  findAll(options?: { status?: string; customerId?: string; limit?: number; tenant?: TenantContext }): Promise<Transaction[]>;
+  findAll(options?: {
+    status?: string;
+    customerId?: string;
+    provider?: string;
+    transactionType?: string;
+    limit?: number;
+    tenant?: TenantContext;
+  }): Promise<Transaction[]>;
   findById(id: string, tenant?: TenantContext): Promise<Transaction | null>;
   create(data: Partial<Transaction> & { customer_id: string; amount: number; reference: string }, tenant?: TenantContext): Promise<Transaction>;
   findByReference(reference: string, tenant?: TenantContext): Promise<Transaction | null>;

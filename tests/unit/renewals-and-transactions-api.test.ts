@@ -260,5 +260,76 @@ describe("Renewals & Multi-Rail Transactions REST API Suite", () => {
         assert.equal(t.customer_id, CUSTOMER_TENANT.customerId);
       }
     });
+
+    it("should return transactions filtered by payment rail provider (flutterwave)", async () => {
+      const repos = getRepositoryContainer();
+      await repos.transactions.create(
+        {
+          customer_id: CUSTOMER_TENANT.customerId,
+          amount: 87500,
+          currency: "NGN",
+          provider: "flutterwave",
+          reference: "FLW-TEST-RAIL-001",
+          status: "succeeded",
+          transaction_type: "renewal_premium",
+        },
+        CUSTOMER_TENANT
+      );
+
+      const req = new Request("http://localhost:3000/api/transactions?provider=flutterwave", {
+        headers: {
+          "x-organization-id": CUSTOMER_TENANT.organizationId,
+          "x-customer-id": CUSTOMER_TENANT.customerId,
+          "x-role": CUSTOMER_TENANT.role,
+        },
+      });
+
+      const res = await getTransactions(req);
+      assert.equal(res.status, 200);
+      const json = await res.json();
+      assert.equal(json.success, true);
+      assert.ok(json.data.length >= 1);
+      const flwTx = json.data.find((t: { reference: string }) => t.reference === "FLW-TEST-RAIL-001");
+      assert.ok(flwTx, "Flutterwave transaction must be present when filtered by provider=flutterwave");
+      for (const t of json.data) {
+        assert.ok(
+          t.provider.toLowerCase().includes("flutterwave"),
+          `Expected provider to match flutterwave, got ${t.provider}`
+        );
+      }
+    });
+
+    it("should return transactions filtered by transaction_type (fee and refund)", async () => {
+      const repos = getRepositoryContainer();
+      await repos.transactions.create(
+        {
+          customer_id: CUSTOMER_TENANT.customerId,
+          amount: -15000,
+          currency: "NGN",
+          provider: "mock_paystack",
+          reference: "PAYSTACK-REFUND-FILTER-001",
+          status: "refunded",
+          transaction_type: "refund",
+        },
+        CUSTOMER_TENANT
+      );
+
+      const req = new Request("http://localhost:3000/api/transactions?type=refund", {
+        headers: {
+          "x-organization-id": CUSTOMER_TENANT.organizationId,
+          "x-customer-id": CUSTOMER_TENANT.customerId,
+          "x-role": CUSTOMER_TENANT.role,
+        },
+      });
+
+      const res = await getTransactions(req);
+      assert.equal(res.status, 200);
+      const json = await res.json();
+      assert.equal(json.success, true);
+      assert.ok(json.data.length >= 1);
+      for (const t of json.data) {
+        assert.equal(t.transaction_type, "refund");
+      }
+    });
   });
 });

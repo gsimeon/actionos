@@ -1078,7 +1078,14 @@ export class SupabaseActionStepRepository implements IActionStepRepository {
 export class SupabaseTransactionRepository implements ITransactionRepository {
   private client = getSupabaseClient();
 
-  async findAll(options?: { status?: string; customerId?: string; limit?: number; tenant?: TenantContext }): Promise<Transaction[]> {
+  async findAll(options?: {
+    status?: string;
+    customerId?: string;
+    provider?: string;
+    transactionType?: string;
+    limit?: number;
+    tenant?: TenantContext;
+  }): Promise<Transaction[]> {
     let query = this.client
       .from("transactions")
       .select("*, customer:customers!inner(*)");
@@ -1088,6 +1095,12 @@ export class SupabaseTransactionRepository implements ITransactionRepository {
     }
     if (options?.customerId) {
       query = query.eq("customer_id", options.customerId);
+    }
+    if (options?.provider && options.provider !== "all") {
+      query = query.eq("provider", options.provider);
+    }
+    if (options?.transactionType && options.transactionType !== "all") {
+      query = query.eq("transaction_type", options.transactionType);
     }
     if (options?.tenant?.organizationId) {
       query = query.eq("customer.organization_id", options.tenant.organizationId);
