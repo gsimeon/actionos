@@ -1,6 +1,6 @@
-import crypto from "node:crypto";
 import type { IActionOSTool, ToolResult, WorkflowExecutionContext } from "@/types/actionos";
-import { frscGateway } from "@/lib/integrations/frsc";
+import { frscGateway, normalizePlateNumber } from "@/lib/integrations/frsc";
+import { niidGateway, NiidGatewayError, type NiidPolicyVerificationResult } from "@/lib/integrations/niid";
 
 export interface VerifyNiidInput {
   vehiclePlate?: string;
@@ -15,8 +15,12 @@ export interface NiidVerificationOutput {
   engineNumber: string;
   niidRecordFound: boolean;
   activeExistingPolicy: boolean;
+  underwriterName?: string;
+  policyNumber?: string;
   frscRegistered: boolean;
   theftFlag: boolean;
+  eStickerNumber?: string;
+  naicomPolicyUid?: string;
   preclearanceToken: string;
   timestamp: string;
   isSimulated: boolean;
@@ -28,7 +32,7 @@ export class VerifyNiidTool implements IActionOSTool<VerifyNiidInput, NiidVerifi
   public readonly name = "verify_niid_database";
   public readonly description = "Verify vehicle registration against Nigerian Insurance Industry Database (NIID) and FRSC";
   public readonly category = "regulatory";
-  public readonly version = "1.1.0";
+  public readonly version = "1.2.0";
   public readonly riskLevel = "low" as const;
   public readonly requiresConfirmation = false;
 
@@ -41,33 +45,33 @@ export class VerifyNiidTool implements IActionOSTool<VerifyNiidInput, NiidVerifi
 
   async execute(input: VerifyNiidInput, context: WorkflowExecutionContext): Promise<ToolResult<NiidVerificationOutput>> {
     const isSimulated = Boolean(context.isSimulated || context.auth.isDemo);
-    const plate = (input.vehiclePlate || "ABC-123-XY").trim().toUpperCase();
+    const rawPlate = (input.vehiclePlate || "ABC-123-XY").trim();
+    const plate = normalizePlateNumber(rawPlate);
     const chassis = (input.chassisNumber || "DEMO-VIN-000001").trim().toUpperCase();
 
-    // Deterministic preclearance token without Math.random() fabrication
-    const digest = crypto
-      .createHash("sha256")
-      .update(`${plate}:${chassis}:${context.auth.organizationId}`)
-      .digest("hex")
-      .slice(0, 8)
-      .toUpperCase();
-
-    const year = new Date().getFullYear();
-    const preclearanceToken = isSimulated
-      ? `NIID-SANDBOX-${year}-${digest}`
-      : `NIID-STATUTORY-${year}-${digest}`;
-
-    const registryAuthority = isSimulated
-      ? "ActionOS Regulatory Simulation Sandbox (Non-Statutory NIID Test Registry)"
-      : "Nigerian Insurance Industry Database (NIID) Central Portal";
-
-    const statutoryNotice = isSimulated
-      ? "DEMO SIMULATION: Pre-clearance verified against local sandbox data. Does not query live NAICOM/NIID servers."
-      : "STATUTORY VERIFICATION: Verified against official Nigerian Insurance Industry Database (NIID).";
+    let niidResult: NiidPolicyVerificationResult;
+    try {
+      niidResult = await niidGateway.verifyPolicy({
+        plateNumber: plate,
+        chassisNumber: chassis,
+        policyNumber: input.policyNumber,
+      });
+    } catch (err: unknown) {
+      if (!isSimulated) {
+        return {
+          success: false,
+          error: {
+            code: err instanceof NiidGatewayError ? err.code : "NIID_VERIFICATION_FAILED",
+            message: err instanceof Error ? err.message : "NIID policy lookup failed",
+          },
+        };
+      }
+      throw err;
+    }
 
     let frscRegistered = true;
     let theftFlag = false;
-    let engineNumber = `ENGINE-${digest.slice(0, 6)}`;
+    let engineNumber = niidResult.engineNumber || "ENGINE-000001";
 
     try {
       const frsc = await frscGateway.verifyPlate(plate);
@@ -88,22 +92,29 @@ export class VerifyNiidTool implements IActionOSTool<VerifyNiidInput, NiidVerifi
       }
     }
 
+    // Vehicle is verified if not flagged stolen, recognized by FRSC, and without blocking active policy conflicts
+    const isVerified = !theftFlag && frscRegistered && (!niidResult.activePolicy || (niidResult.daysUntilExpiry ?? 0) <= 30);
+
     return {
       success: true,
       data: {
-        verified: !theftFlag && frscRegistered,
+        verified: isVerified,
         vehiclePlate: plate,
         chassisNumber: chassis,
         engineNumber,
-        niidRecordFound: true,
-        activeExistingPolicy: false, // Eligible for renewal
+        niidRecordFound: niidResult.found,
+        activeExistingPolicy: niidResult.activePolicy,
+        underwriterName: niidResult.underwriterName,
+        policyNumber: niidResult.policyNumber,
         frscRegistered,
         theftFlag,
-        preclearanceToken,
-        timestamp: new Date().toISOString(),
-        isSimulated,
-        registryAuthority,
-        statutoryNotice,
+        eStickerNumber: niidResult.eStickerNumber,
+        naicomPolicyUid: niidResult.naicomPolicyUid,
+        preclearanceToken: niidResult.preclearanceToken,
+        timestamp: niidResult.timestamp,
+        isSimulated: niidResult.isSimulated,
+        registryAuthority: niidResult.registryAuthority,
+        statutoryNotice: niidResult.statutoryNotice,
       },
     };
   }

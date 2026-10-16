@@ -162,6 +162,14 @@ ActionOS interfaces directly with Nigerian statutory registries to verify vehicu
 - **Fail-Closed Security**: In production mode, missing `LACVIS_API_KEY` throws `LACVIS_CONFIGURATION_ERROR`. Live API errors are typed and classified via `LacvisGatewayError`.
 - **Tool Integration**: `VerifyVehicleInspectionTool` invokes `lacvisGateway.verifyInspection` to confirm inspection compliance before statutory vehicle license renewal.
 
+### C. Nigerian Insurance Industry Database (NIID & NAICOM Central Portal)
+- **Adapter**: `lib/integrations/niid.ts` (`NiidGatewayClient`)
+- **Active Policy Registry Verification**: Looks up existing insurance coverage across licensed underwriters. Blocks duplicate insurance renewals when active coverage exceeds the 30-day renewal threshold (`NIID_ACTIVE_POLICY_CONFLICT`).
+- **Statutory E-Sticker Issuance**: Generates official NAICOM e-stickers (`NAICOM-STK-${year}-${hex}`) and unique NAICOM policy UIDs with QR verification endpoints (`https://niid.nigeriainsurers.org/verify`).
+- **Cryptographic Hash Stamping**: Stamps digital certificates with SHA-256 verification hashes binding policy number, plate, chassis number, and premium paid.
+- **Fail-Closed Production Security**: In production mode, missing `NIID_API_KEY` throws `NIID_CONFIGURATION_ERROR`. Network failures throw `NIID_NETWORK_ERROR`, prohibiting synthetic fallbacks in production.
+- **Tool Integrations**: `VerifyNiidTool` queries `niidGateway.verifyPolicy` alongside FRSC theft checks; `GenerateCertificateTool` registers certificates on NIID and returns e-sticker credentials.
+
 ---
 
 ## 7. Extensibility to Future Verticals

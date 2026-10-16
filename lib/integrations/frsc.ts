@@ -101,7 +101,8 @@ export function validatePlateNumber(plate: string): {
     normalized.startsWith("STOLEN-") ||
     normalized === "NOT-404-NF" ||
     normalized.startsWith("NOT-FOUND") ||
-    normalized.startsWith("FAIL-")
+    normalized.startsWith("FAIL-") ||
+    normalized.startsWith("ACTIVE-")
   ) {
     return { valid: true, normalized };
   }
