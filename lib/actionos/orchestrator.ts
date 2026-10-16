@@ -783,6 +783,34 @@ export class ActionOSOrchestrator {
     session.status = "verifying";
     await repos.sessions.updateStatus(sessionId, "verifying");
 
+    if (understanding.intent === "renew_vehicle_license") {
+      const plate = (understanding.entities.vehiclePlate as string) || "ABC-123-XY";
+      const expectedYear = new Date().getFullYear() + 1;
+      const verifyLicenseResult = await this.verifier.verifyVehicleLicense(
+        plate,
+        expectedYear,
+        tenantContext
+      );
+
+      await this.appendLedgerEvent(events, {
+        id: `ev_${Date.now()}_ver_license`,
+        sessionId,
+        timestamp: new Date().toISOString(),
+        action: "independent_verification",
+        description: verifyLicenseResult.passed
+          ? verifyLicenseResult.details
+          : `Vehicle license verification check: ${verifyLicenseResult.reason || verifyLicenseResult.details}`,
+        status: verifyLicenseResult.passed ? "verified" : "failed",
+        actor: "Policy Guardrail",
+        metadata: {
+          plate,
+          verificationType: "vehicle_license",
+          passed: verifyLicenseResult.passed,
+          error: verifyLicenseResult.error,
+        },
+      });
+    }
+
     sm.transition("completed", "Workflow completed without external confirmation");
     session.status = "completed";
     await repos.sessions.updateStatus(sessionId, "completed", new Date().toISOString());

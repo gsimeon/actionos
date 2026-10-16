@@ -301,9 +301,10 @@ describe("Vehicle License & Roadworthiness Vertical", () => {
       // Verify that ledger events were hash-chained
       const repos = getRepositoryContainer();
       const events = await repos.ledger.getEventsBySessionId(result.sessionId, DEMO_CONTEXT.auth);
-      assert.ok(events.length >= 4);
+      assert.ok(events.length >= 5);
       assert.ok(events.some((e) => e.tool === "renew_vehicle_license"));
       assert.ok(events.some((e) => e.tool === "verify_vehicle_inspection"));
+      assert.ok(events.some((e) => e.action === "independent_verification" && e.status === "verified"));
     });
   });
 
