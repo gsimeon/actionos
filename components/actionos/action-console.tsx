@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   Send,
   Sparkles,
@@ -218,8 +219,20 @@ function resolveCompletedOutcome(
 }
 
 export function ActionConsole() {
-  const [inputText, setInputText] = useState("My car insurance expires next week. Check it and renew it for me.");
-  const [selectedLanguage, setSelectedLanguage] = useState("en-NG");
+  const searchParams = useSearchParams();
+  const initialPolicy = searchParams?.get("policy");
+  const initialPlate = searchParams?.get("plate");
+  const initialLang = searchParams?.get("language") || searchParams?.get("lang") || "en-NG";
+  const initialPrompt =
+    searchParams?.get("prompt") ||
+    (initialPolicy
+      ? `Renew policy ${initialPolicy} for my vehicle.`
+      : initialPlate
+      ? `Check and renew vehicle license and roadworthiness for ${initialPlate}.`
+      : "My car insurance expires next week. Check it and renew it for me.");
+
+  const [inputText, setInputText] = useState(initialPrompt);
+  const [selectedLanguage, setSelectedLanguage] = useState(initialLang);
   const [isLoading, setIsLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionStatus, setSessionStatus] = useState<ActionSessionStatus | null>(null);

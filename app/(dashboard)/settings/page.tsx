@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import { Shield, Bot, Save, Check } from "lucide-react";
 import { CsvImporter } from "@/components/csv-importer";
+import { LiveHandshakeHub } from "@/components/dashboard/live-handshake-hub";
 
 export default function SettingsPage() {
   const [maxAmount, setMaxAmount] = useState(1000000);
@@ -135,6 +136,9 @@ export default function SettingsPage() {
           </div>
         </div>
       </div>
+
+      {/* Live Handshake & Integration Hub */}
+      <LiveHandshakeHub />
 
       {/* CSV Batch Importer */}
       <CsvImporter />

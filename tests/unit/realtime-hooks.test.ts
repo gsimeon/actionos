@@ -8,5 +8,6 @@ describe("ActionOS Supabase Realtime Suite", () => {
     assert.equal(typeof realtime.useLedgerRealtime, "function");
     assert.equal(typeof realtime.useRenewalsRealtime, "function");
     assert.equal(typeof realtime.useNotificationsRealtime, "function");
+    assert.equal(typeof realtime.useTransactionsRealtime, "function");
   });
 });

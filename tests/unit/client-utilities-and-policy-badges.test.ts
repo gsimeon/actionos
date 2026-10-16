@@ -63,7 +63,7 @@ describe("Client Utilities, Policy Badges & Supabase Client Safety", () => {
       const mockCookieStore = {
         getAll: () => [],
         set: () => {},
-      } as any;
+      } as unknown as Parameters<typeof createServerClient>[0];
       const client = createServerClient(mockCookieStore);
       assert.ok(client, "Server client must be created");
       assert.ok(typeof client.from === "function", "Server client must have .from method");

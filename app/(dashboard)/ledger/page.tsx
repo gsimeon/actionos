@@ -13,6 +13,7 @@ import {
   Layers,
 } from "lucide-react";
 import type { ActionLedgerEvent } from "@/types/actionos";
+import { useLedgerRealtime } from "@/lib/realtime";
 
 const BENCHMARK_EVENTS: ActionLedgerEvent[] = [
   {
@@ -256,6 +257,16 @@ function ActionLedgerContent() {
     }, 8000);
     return () => clearInterval(interval);
   }, [autoRefresh, fetchLedger]);
+
+  useLedgerRealtime({
+    sessionId: urlSessionId,
+    onNewEvent: (event) => {
+      setLiveEvents((prev) => {
+        if (prev.some((e) => e.id === event.id)) return prev;
+        return [event, ...prev];
+      });
+    },
+  });
 
   const displayedEvents =
     activeMode === "benchmark" || (activeMode === "live" && liveEvents.length === 0 && !loading)

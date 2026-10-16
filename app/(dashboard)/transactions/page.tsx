@@ -19,6 +19,7 @@ import {
 import { StatusBadge } from "@/components/actionos/status-badge";
 import { formatNaira, formatDateTime } from "@/lib/utils";
 import type { Transaction } from "@/types/database";
+import { useTransactionsRealtime } from "@/lib/realtime";
 
 const STATUS_TABS = [
   { id: "all", label: "All Transactions" },
@@ -36,6 +37,23 @@ export default function TransactionsPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  useTransactionsRealtime({
+    onTransactionChange: (transaction, eventType) => {
+      setTransactions((prev) => {
+        if (eventType === "INSERT") {
+          return [transaction, ...prev.filter((t) => t.id !== transaction.id)];
+        }
+        if (eventType === "UPDATE") {
+          return prev.map((t) => (t.id === transaction.id ? transaction : t));
+        }
+        if (eventType === "DELETE") {
+          return prev.filter((t) => t.id !== transaction.id);
+        }
+        return prev;
+      });
+    },
+  });
 
   const fetchTransactions = async () => {
     setLoading(true);
@@ -145,6 +163,10 @@ export default function TransactionsPage() {
             <RotateCcw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
           </button>
           <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-800 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-200">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <span>CDC Realtime Active</span>
+            </div>
             <div className="flex items-center gap-2 text-xs font-semibold text-emerald-800 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-200">
               <ShieldCheck className="w-4 h-4 text-emerald-600" />
               <span>Paystack Rail Active</span>

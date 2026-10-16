@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { isDemoMode } from "@/lib/runtime/mode";
 
 export interface FrscPlateVerificationResult {
   plate: string;

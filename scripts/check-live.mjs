@@ -28,7 +28,7 @@ async function check() {
 
   for (const table of tables) {
     try {
-      const { data, error, count } = await supabase.from(table).select("*", { count: "exact", head: true });
+      const { error, count } = await supabase.from(table).select("*", { count: "exact", head: true });
       if (error) {
         console.log(`❌ Table '${table}': ${error.message} (code: ${error.code})`);
       } else {

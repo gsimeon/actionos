@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { Suspense } from "react";
 import Link from "next/link";
 import {
   ShieldCheck,
@@ -213,7 +213,9 @@ export default function HomePage() {
           </p>
         </div>
 
-        <ActionConsole />
+        <Suspense fallback={<div className="h-64 animate-pulse bg-slate-100 rounded-3xl border border-slate-200" />}>
+          <ActionConsole />
+        </Suspense>
       </section>
 
       {/* 6 Core Pillars Section matching Section 38 */}

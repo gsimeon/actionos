@@ -19,12 +19,30 @@ import { StatCard } from "@/components/dashboard/stat-card";
 import { StatusBadge } from "@/components/actionos/status-badge";
 import { formatNaira, formatDate } from "@/lib/utils";
 import type { Renewal, Policy, Customer } from "@/types/database";
+import { useRenewalsRealtime } from "@/lib/realtime";
 
 export default function DashboardOverviewPage() {
   const [renewals, setRenewals] = useState<Renewal[]>([]);
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
+
+  useRenewalsRealtime({
+    onRenewalChange: (renewal, eventType) => {
+      setRenewals((prev) => {
+        if (eventType === "INSERT") {
+          return [renewal, ...prev.filter((r) => r.id !== renewal.id)];
+        }
+        if (eventType === "UPDATE") {
+          return prev.map((r) => (r.id === renewal.id ? renewal : r));
+        }
+        if (eventType === "DELETE") {
+          return prev.filter((r) => r.id !== renewal.id);
+        }
+        return prev;
+      });
+    },
+  });
 
   useEffect(() => {
     async function loadData() {

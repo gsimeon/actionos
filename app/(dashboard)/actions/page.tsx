@@ -1,4 +1,4 @@
-import React from "react";
+import React, { Suspense } from "react";
 import { ActionConsole } from "@/components/actionos/action-console";
 
 export default function ActionsPage() {
@@ -13,7 +13,9 @@ export default function ActionsPage() {
         </p>
       </div>
 
-      <ActionConsole />
+      <Suspense fallback={<div className="h-64 animate-pulse bg-slate-100 rounded-3xl border border-slate-200" />}>
+        <ActionConsole />
+      </Suspense>
     </div>
   );
 }
