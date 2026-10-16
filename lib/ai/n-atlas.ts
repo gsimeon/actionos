@@ -1,6 +1,6 @@
 import type { NAtlasProvider, NAtlasUnderstanding } from "@/types/actionos";
 import { isDemoMode } from "@/lib/runtime/mode";
-
+import { normalizeNigerianText, formatClarificationMessage } from "./nigerian-languages";
 export * from "./nigerian-languages";
 
 export interface NAtlasInput {
@@ -18,7 +18,9 @@ export class DeterministicDemoAIProvider implements NAtlasProvider {
   public readonly name = "Demo AI Adapter (Multilingual Nigeria)";
 
   async understand(input: NAtlasInput): Promise<NAtlasUnderstanding> {
-    const raw = (input.text || "").toLowerCase().trim();
+    const origRaw = (input.text || "").trim();
+    const raw = normalizeNigerianText(origRaw);
+
     // Entity extraction patterns
     let extractedPlate: string | undefined;
     let extractedPolicy: string | undefined;
@@ -44,7 +46,7 @@ export class DeterministicDemoAIProvider implements NAtlasProvider {
     }
 
     // Engine match: e.g. DEMO-ENGINE-000001 or explicit prefix
-    const explicitEngine = raw.match(/(?:(?:engine|injin|ẹnjini|enjini)(?:\s*(?:number|no|#))?[:\s]+)([a-z0-9\-]{5,24})/i);
+    const explicitEngine = raw.match(/(?:(?:engine|injin|enjini)(?:\s*(?:number|no|#))?[:\s]+)([a-z0-9\-]{5,24})/i);
     const demoEngine = raw.match(/\b(demo-engine-[0-9]{6})\b/i);
     if (explicitEngine) {
       extractedEngine = explicitEngine[1].toUpperCase();
@@ -64,24 +66,60 @@ export class DeterministicDemoAIProvider implements NAtlasProvider {
       : "en-NG";
 
     if (detectedLang === "en-NG") {
-      if (raw.includes("wan") || raw.includes("sharp sharp") || raw.includes("sharply") || raw.includes("wetin") || raw.includes("dey ") || raw.includes("abeg") || raw.includes("motor")) {
+      if (raw.includes("wan") || raw.includes("sharp sharp") || raw.includes("wetin") || raw.includes("dey ") || raw.includes("abeg") || raw.includes("motor")) {
         detectedLang = "pcm";
-      } else if (raw.includes("ọkọ") || raw.includes("oko") || raw.includes("forukọsilẹ") || raw.includes("forukosile") || raw.includes("atunto") || raw.includes("ṣayẹwo") || raw.includes("sayewo")) {
+      } else if (raw.includes("oko") || raw.includes("forukosile") || raw.includes("atunto") || raw.includes("sayewo") || raw.includes("iseduro")) {
         detectedLang = "yo";
-      } else if (raw.includes("mota") || raw.includes("rijista") || raw.includes("rajista") || raw.includes("duba") || raw.includes("sabunta") || raw.includes("ina so")) {
+      } else if (raw.includes("mota") || raw.includes("rijista") || raw.includes("rajista") || raw.includes("duba") || raw.includes("sabunta") || raw.includes("ina so") || raw.includes("inshora")) {
         detectedLang = "ha";
-      } else if (raw.includes("ụgbọ ala") || raw.includes("ugbo ala") || raw.includes("debanye") || raw.includes("lelee") || raw.includes("di ohuru") || raw.includes("dị ọhụrụ")) {
+      } else if (raw.includes("ugbo ala") || raw.includes("debanye") || raw.includes("lelee") || raw.includes("di ohuru") || raw.includes("mkpuchi") || raw.includes("achoro m")) {
         detectedLang = "ig";
       }
+    }
+
+    // 1. Ambiguity & Vague Query Detection
+    // When a user provides only greetings, vague requests for help, or an unkeyed "renew" command
+    // without specifying vehicle or policy details, prompt for clarification instead of guessing.
+    const stripped = origRaw.toLowerCase().replace(/[^\w\s]/g, " ").trim();
+    const greetingWords = new Set([
+      "hello", "hi", "hey", "good", "morning", "afternoon", "evening", "day",
+      "how", "far", "kedu", "bawo", "ni", "sannu", "da", "rana", "asuba",
+      "help", "me", "i", "need", "what", "can", "you", "do", "actionos", "please", "abeg"
+    ]);
+    const tokens = stripped.split(/\s+/).filter(Boolean);
+    const isGreetingOrVague =
+      tokens.length > 0 &&
+      tokens.every((t) => greetingWords.has(t)) &&
+      !extractedPlate &&
+      !extractedPolicy &&
+      !extractedVin;
+
+    const isVagueRenewalOnly =
+      /^(?:(?:abeg\s+)?i\s+wan(?:\s+to)?\s+renew|i\s+want\s+to\s+renew|renew|reneww|renw|atunto|so\s+di\s+otun|sabunta|meghari|megharia|imeghari|mo\s+fe\s+so\s+di\s+otun|ina\s+so\s+in\s+sabunta|achoro\s+m\s+imeghari)[?!.]*$/i.test(raw) &&
+      !extractedPlate &&
+      !extractedPolicy &&
+      !extractedVin;
+
+    if (isGreetingOrVague || isVagueRenewalOnly) {
+      return {
+        intent: "clarification_required",
+        confidence: 0.5,
+        entities: {
+          needsClarification: true,
+          clarificationQuestion: formatClarificationMessage(detectedLang),
+          detectedLanguage: detectedLang,
+          _aiProvider: this.name,
+          _isLiveAI: false,
+        },
+        normalizedText: origRaw || "Clarification required",
+      };
     }
 
     // Multilingual & Pidgin Intent Detection
     const isRegisterVehicle =
       raw.includes("register") ||
       raw.includes("registration") ||
-      raw.includes("forukọsilẹ") || // Yoruba
-      raw.includes("forukosile") ||
-      raw.includes("iforukọsilẹ") ||
+      raw.includes("forukosile") || // Yoruba (normalized)
       raw.includes("iforukosile") ||
       raw.includes("rijista") || // Hausa
       raw.includes("rajista") ||
@@ -103,21 +141,17 @@ export class DeterministicDemoAIProvider implements NAtlasProvider {
         raw.includes("find motor") ||
         raw.includes("look my motor") ||
         raw.includes("look my car") ||
-        raw.includes("ṣayẹwo ọkọ") || // Yoruba
-        raw.includes("sayewo oko") ||
-        raw.includes("wo data ọkọ") ||
-        raw.includes("wa ọkọ") ||
+        raw.includes("sayewo oko") || // Yoruba (normalized)
+        raw.includes("wo data oko") ||
+        raw.includes("wa oko") ||
         raw.includes("duba mota") || // Hausa
-        raw.includes("duba motata") ||
         raw.includes("bincika mota") ||
-        raw.includes("bincika motata") ||
         raw.includes("nemi mota") ||
-        (raw.includes("duba") && (raw.includes("mota") || raw.includes("bayanai") || raw.includes("ma'adanar"))) ||
-        raw.includes("lelee ụgbọ ala") || // Igbo
-        raw.includes("lelee ugbo ala") ||
-        raw.includes("chọọ ụgbọ ala") ||
-        raw.includes("chọpụta moto") ||
-        (raw.includes("lelee") && (raw.includes("ụgbọ") || raw.includes("ugbo") || raw.includes("data")))
+        (raw.includes("duba") && (raw.includes("mota") || raw.includes("bayanai") || raw.includes("ma'adanar") || raw.includes("maadanar"))) ||
+        raw.includes("lelee ugbo ala") || // Igbo (normalized)
+        raw.includes("choo ugbo ala") ||
+        raw.includes("choputa moto") ||
+        (raw.includes("lelee") && (raw.includes("ugbo") || raw.includes("data")))
       );
 
     const isVehicleLicenseRenewal =
@@ -129,29 +163,22 @@ export class DeterministicDemoAIProvider implements NAtlasProvider {
         raw.includes("motor paper") ||
         raw.includes("car paper") ||
         raw.includes("vehicle paper") ||
-        (raw.includes("lasisi") && (raw.includes("mota") || raw.includes("ọkọ") || raw.includes("oko"))) ||
-        raw.includes("iwe-aṣẹ ọkọ") ||
+        (raw.includes("lasisi") && (raw.includes("mota") || raw.includes("oko"))) ||
+        raw.includes("iwe-ase oko") ||
         raw.includes("iwe ase oko") ||
-        raw.includes("iwe ọkọ") ||
         raw.includes("iwe oko") ||
         raw.includes("takardar mota") ||
         raw.includes("lasisin mota") ||
-        raw.includes("ikike ụgbọ ala") ||
         raw.includes("ikike ugbo ala") ||
-        raw.includes("akwụkwọ ụgbọ ala") ||
         raw.includes("akwukwo ugbo ala") ||
         raw.includes("akwukwo nyocha")) &&
       (raw.includes("renew") ||
-        raw.includes("re-new") ||
         raw.includes("expire") ||
         raw.includes("atunto") ||
-        raw.includes("sọ di ọtun") ||
         raw.includes("so di otun") ||
-        raw.includes("di ọtun") ||
         raw.includes("di otun") ||
         raw.includes("sabunta") ||
-        raw.includes("megharia") ||
-        raw.includes("dị ọhụrụ") ||
+        raw.includes("meghari") ||
         raw.includes("di ohuru") ||
         raw.includes("sharp sharp") ||
         raw.includes("inspection") ||
@@ -161,9 +188,8 @@ export class DeterministicDemoAIProvider implements NAtlasProvider {
       raw.includes("insurance") ||
       raw.includes("inshora") ||
       raw.includes("inshorar") ||
-      raw.includes("iṣeduro") ||
-      raw.includes("iseduro") ||
-      raw.includes("mkpuchi") ||
+      raw.includes("iseduro") || // Yoruba normalized
+      raw.includes("mkpuchi") || // Igbo
       raw.includes("policy") ||
       raw.includes("third party") ||
       raw.includes("third-party") ||
@@ -172,18 +198,14 @@ export class DeterministicDemoAIProvider implements NAtlasProvider {
 
     const isRenew =
       raw.includes("renew") ||
-      raw.includes("re-new") ||
       raw.includes("expire") ||
       raw.includes("wan expire") ||
       raw.includes("atunto") || // Yoruba
-      raw.includes("sọ di ọtun") ||
       raw.includes("so di otun") ||
-      raw.includes("sọ d'ọtun") ||
-      raw.includes("di ọtun") ||
+      raw.includes("so d'otun") ||
       raw.includes("di otun") ||
       raw.includes("sabunta") || // Hausa
       raw.includes("meghari") || // Igbo (imeghari / megharia)
-      raw.includes("dị ọhụrụ") ||
       raw.includes("di ohuru");
 
     const isQuote =
@@ -227,7 +249,7 @@ export class DeterministicDemoAIProvider implements NAtlasProvider {
     } else if (isRenew) {
       intent = "renew_policy";
       confidence = 0.98;
-    } else if (isRegisterVehicle && (raw.includes("motor") || raw.includes("car") || raw.includes("vehicle") || raw.includes("oko") || raw.includes("ọkọ") || raw.includes("mota") || raw.includes("ụgbọ ala") || raw.includes("ugbo ala") || extractedPlate || extractedVin)) {
+    } else if (isRegisterVehicle && (raw.includes("motor") || raw.includes("car") || raw.includes("vehicle") || raw.includes("oko") || raw.includes("mota") || raw.includes("ugbo ala") || extractedPlate || extractedVin)) {
       intent = "register_vehicle";
       confidence = 0.97;
     } else if (isVehicleQuery) {
@@ -251,7 +273,7 @@ export class DeterministicDemoAIProvider implements NAtlasProvider {
     }
 
     // Build human-readable normalized text preserving Nigerian context
-    let normalized = input.text || "Voice audio input received";
+    let normalized = origRaw || "Voice audio input received";
     if (detectedLang.includes("pcm")) {
       normalized = `[Nigerian Pidgin] ${normalized}`;
     } else if (detectedLang.includes("yo")) {
@@ -262,17 +284,33 @@ export class DeterministicDemoAIProvider implements NAtlasProvider {
       normalized = `[Igbo] ${normalized}`;
     }
 
+    // Truthful entity resolution:
+    // Do NOT fabricate demo policy AUTO-2026-00182 if user supplied a specific different vehicle plate!
+    const resolvedVehiclePlate =
+      extractedPlate ||
+      (intent === "renew_policy" || intent === "renew_vehicle_license"
+        ? "ABC-123-XY"
+        : undefined);
+
+    const resolvedPolicyNumber =
+      extractedPolicy ||
+      (intent === "renew_policy" && (!extractedPlate || extractedPlate === "ABC-123-XY")
+        ? "AUTO-2026-00182"
+        : undefined);
+
     return {
       intent,
       confidence,
       entities: {
-        vehiclePlate: extractedPlate || (intent === "query_vehicle" || intent === "register_vehicle" ? undefined : "ABC-123-XY"),
-        policyNumber: extractedPolicy || (intent === "renew_policy" ? "AUTO-2026-00182" : undefined),
+        vehiclePlate: resolvedVehiclePlate,
+        policyNumber: resolvedPolicyNumber,
         vin: extractedVin,
         chassisNumber: extractedVin,
         engineNumber: extractedEngine,
         detectedLanguage: detectedLang,
         urgency: raw.includes("quick") || raw.includes("sharp") ? "high" : "normal",
+        _aiProvider: this.name,
+        _isLiveAI: false,
       },
       normalizedText: normalized,
     };
@@ -356,6 +394,8 @@ export class HttpNAtlasAdapter implements INAtlasAdapter {
               detectedLanguage: parsed.language || input.language,
               suggestedAction: parsed.suggestedAction,
               _nAtlasLive: true,
+              _aiProvider: this.name,
+              _isLiveAI: true,
             },
             normalizedText: input.text || "",
           };
@@ -372,6 +412,8 @@ export class HttpNAtlasAdapter implements INAtlasAdapter {
       entities: {
         ...result.entities,
         _nAtlasFallback: true,
+        _aiProvider: this.name,
+        _isLiveAI: false,
       },
     };
   }

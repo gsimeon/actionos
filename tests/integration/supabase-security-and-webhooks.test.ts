@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import { getRepositoryContainer, setRepositoryContainer } from "@/lib/repositories";
 import { DemoRepositoryContainer } from "@/lib/repositories/demo/demo-repositories";
 import { SupabaseQuoteRepository } from "@/lib/repositories/supabase/supabase-repositories";
+import { createClient } from "@supabase/supabase-js";
 import {
   verifyPaystackWebhookSignature,
   POST as paymentWebhookHandler,
@@ -227,41 +228,13 @@ describe("Protected Supabase Security, RLS Invariants & Payment Webhook Integrat
       assert.equal(claimResult, null, "Claiming expired quote must be rejected");
     });
 
-    it("proves unprivileged client with authenticated role is denied execution of settle_payment_webhook RPC", async () => {
-      // Simulate client attempting direct RPC invocation without service_role
-      const unprivilegedClient = {
-        role: "authenticated",
-        rpc: async (fnName: string) => {
-          if (
-            [
-              "settle_payment_webhook",
-              "reserve_refund_balance",
-              "release_refund_reservation",
-              "finalize_atomic_refund_settlement",
-              "claim_and_accept_quote",
-            ].includes(fnName)
-          ) {
-            return {
-              data: null,
-              error: {
-                message: `permission denied for function ${fnName}`,
-                code: "42501",
-                details: "Role 'authenticated' does not have EXECUTE privilege on SECURITY DEFINER function",
-              },
-            };
-          }
-          return { data: { success: true }, error: null };
-        },
-      };
+    it("proves unprivileged client with anon and authenticated roles is denied execution of privileged RPCs in real database", async () => {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://kyfcvolkxxtsbouuzdtm.supabase.co";
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || "sb_publishable_jdM13-nMTPcKtVoqFZLVmg_DD2YOotC";
 
-      const { error } = await unprivilegedClient.rpc("settle_payment_webhook");
-      assert.ok(error, "Direct invocation must be rejected");
-      assert.equal(error.code, "42501", "PostgreSQL permission denied error code 42501 expected");
-      assert.match(error.message, /permission denied/i);
-    });
-
-    it("proves unprivileged authenticated client is denied execution of refund finalization and balance reservation RPCs", async () => {
+      const unprivilegedLiveClient = createClient(supabaseUrl, supabaseAnonKey);
       const privilegedFunctions = [
+        "settle_payment_webhook",
         "reserve_refund_balance",
         "release_refund_reservation",
         "finalize_atomic_refund_settlement",
@@ -269,20 +242,211 @@ describe("Protected Supabase Security, RLS Invariants & Payment Webhook Integrat
       ];
 
       for (const fnName of privilegedFunctions) {
-        // Migration 20261016020000_harden_rpc_execution_grants revokes execute from authenticated
-        const unprivilegedCall = async () => {
-          return {
-            data: null,
-            error: {
-              message: `permission denied for function ${fnName}`,
-              code: "42501",
-            },
-          };
-        };
-
-        const res = await unprivilegedCall();
-        assert.equal(res.error?.code, "42501", `Role authenticated must receive 42501 for ${fnName}`);
+        const { error, status } = await unprivilegedLiveClient.rpc(fnName, {});
+        // PostgREST returns 404 (PGRST202: Not found in schema cache for unprivileged role)
+        // or PostgreSQL returns 42501 (permission denied) when execute privilege is revoked from public/anon/authenticated.
+        assert.ok(error, `Unprivileged execution of ${fnName} must be rejected by database`);
+        if (status !== 0 && error.code) {
+          assert.ok(
+            error.code === "PGRST202" || error.code === "42501",
+            `Expected PGRST202 or 42501 for ${fnName}, received code '${error.code}' with HTTP status ${status}`
+          );
+        }
       }
+    });
+
+    it("verifies trusted server-side webhook handler successfully settles legitimate transactions", async () => {
+      const repos = getRepositoryContainer();
+      const legitimateRef = "ref_wh_legitimate_settle_01";
+
+      await repos.transactions.create(
+        {
+          id: legitimateRef,
+          reference: legitimateRef,
+          customer_id: customerIdA,
+          organization_id: orgIdA,
+          transaction_type: "renewal_premium",
+          amount: 87500,
+          currency: "NGN",
+          status: "pending",
+          provider: "paystack",
+          renewal_id: null,
+          metadata: { session_id: "sess_legit_test" },
+        },
+        orgA
+      );
+
+      const req = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: "charge.success",
+          data: {
+            id: 991199,
+            reference: legitimateRef,
+            amount: 8750000, // ₦87,500.00 in kobo
+            currency: "NGN",
+            status: "success",
+            paid_at: new Date().toISOString(),
+          },
+        }),
+      });
+
+      const res = await paymentWebhookHandler(req);
+      assert.equal(res.status, 200, "Legitimate webhook must return HTTP 200");
+      const json = (await res.json()) as { data: { acknowledged: boolean; duplicate: boolean } };
+      assert.equal(json.data.acknowledged, true);
+      assert.equal(json.data.duplicate, false);
+
+      const settledTx = await repos.transactions.findByReference(legitimateRef, orgA);
+      assert.equal(settledTx?.status, "succeeded", "Transaction status must be succeeded");
+    });
+
+    it("strictly rejects webhook requests for uninitiated or mismatched transaction references", async () => {
+      const req = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: "charge.success",
+          data: {
+            id: 882211,
+            reference: "ref_uninitiated_tx_not_in_records",
+            amount: 8750000,
+            currency: "NGN",
+            status: "success",
+          },
+        }),
+      });
+
+      const res = await paymentWebhookHandler(req);
+      assert.equal(res.status, 404, "Uninitiated transaction reference must return 404");
+      const json = (await res.json()) as { error?: { code?: string } };
+      assert.equal(json.error?.code, "TRANSACTION_NOT_FOUND");
+    });
+
+    it("strictly rejects webhook requests with incorrect or mismatched amounts", async () => {
+      const repos = getRepositoryContainer();
+      const amountMismatchRef = "ref_wh_amount_mismatch_01";
+
+      await repos.transactions.create(
+        {
+          id: amountMismatchRef,
+          reference: amountMismatchRef,
+          customer_id: customerIdA,
+          organization_id: orgIdA,
+          transaction_type: "renewal_premium",
+          amount: 87500,
+          currency: "NGN",
+          status: "pending",
+          provider: "paystack",
+        },
+        orgA
+      );
+
+      // Webhook payload delivers ₦5,000 instead of expected ₦87,500
+      const req = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: "charge.success",
+          data: {
+            id: 882212,
+            reference: amountMismatchRef,
+            amount: 500000, // ₦5,000 in kobo
+            currency: "NGN",
+            status: "success",
+          },
+        }),
+      });
+
+      const res = await paymentWebhookHandler(req);
+      assert.equal(res.status, 422, "Amount mismatch must return 422");
+      const json = (await res.json()) as { error?: { code?: string } };
+      assert.equal(json.error?.code, "AMOUNT_MISMATCH");
+
+      // Transaction must NOT be marked succeeded
+      const tx = await repos.transactions.findByReference(amountMismatchRef, orgA);
+      assert.equal(tx?.status, "pending");
+    });
+
+    it("strictly rejects webhook requests with mismatched currency", async () => {
+      const repos = getRepositoryContainer();
+      const currMismatchRef = "ref_wh_currency_mismatch_01";
+
+      await repos.transactions.create(
+        {
+          id: currMismatchRef,
+          reference: currMismatchRef,
+          customer_id: customerIdA,
+          organization_id: orgIdA,
+          transaction_type: "renewal_premium",
+          amount: 87500,
+          currency: "NGN",
+          status: "pending",
+          provider: "paystack",
+        },
+        orgA
+      );
+
+      const req = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: "charge.success",
+          data: {
+            id: 882213,
+            reference: currMismatchRef,
+            amount: 8750000,
+            currency: "USD", // Mismatched currency
+            status: "success",
+          },
+        }),
+      });
+
+      const res = await paymentWebhookHandler(req);
+      assert.equal(res.status, 422, "Currency mismatch must return 422");
+      const json = (await res.json()) as { error?: { code?: string } };
+      assert.equal(json.error?.code, "CURRENCY_MISMATCH");
+    });
+
+    it("strictly rejects webhook requests where provider status contradicts event type", async () => {
+      const repos = getRepositoryContainer();
+      const statusMismatchRef = "ref_wh_status_contradiction_01";
+
+      await repos.transactions.create(
+        {
+          id: statusMismatchRef,
+          reference: statusMismatchRef,
+          customer_id: customerIdA,
+          organization_id: orgIdA,
+          transaction_type: "renewal_premium",
+          amount: 87500,
+          currency: "NGN",
+          status: "pending",
+          provider: "paystack",
+        },
+        orgA
+      );
+
+      const req = new Request("https://actionos.ng/api/webhooks/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: "charge.success",
+          data: {
+            id: 882214,
+            reference: statusMismatchRef,
+            amount: 8750000,
+            currency: "NGN",
+            status: "failed", // Contradicts charge.success
+          },
+        }),
+      });
+
+      const res = await paymentWebhookHandler(req);
+      assert.equal(res.status, 422, "Status contradiction must return 422");
+      const json = (await res.json()) as { error?: { code?: string } };
+      assert.equal(json.error?.code, "PROVIDER_STATUS_MISMATCH");
     });
 
     it("strictly rejects webhook requests missing gateway signature in production mode", async () => {

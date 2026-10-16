@@ -396,6 +396,20 @@ describe("Supabase Schema, Migration Replayability & Type Alignment Validation",
       /GRANT EXECUTE ON FUNCTION public\.claim_and_accept_quote[\s\S]*?TO service_role/i.test(sql),
       "claim_and_accept_quote must be granted exclusively to service_role"
     );
+
+    // 6. Signature Reconciliation & Resiliency: Purge legacy 8-param overload and dynamic catalog introspection
+    assert.ok(
+      /DROP FUNCTION IF EXISTS public\.settle_payment_webhook\s*\(\s*UUID,\s*VARCHAR,\s*JSONB,\s*VARCHAR,\s*VARCHAR,\s*VARCHAR,\s*VARCHAR,\s*JSONB\s*\)/i.test(sql),
+      "Migration must explicitly drop deprecated 8-param legacy settle_payment_webhook overload"
+    );
+    assert.ok(
+      /pg_proc/i.test(sql) && /pg_get_function_identity_arguments/i.test(sql),
+      "Migration must include dynamic catalog introspection to safely harden any existing overloads"
+    );
+    assert.ok(
+      /WHEN undefined_function THEN/i.test(sql),
+      "Migration must include safe exception handling for canonical signatures"
+    );
   });
 });
 

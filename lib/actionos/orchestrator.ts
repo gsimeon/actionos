@@ -18,6 +18,7 @@ import type {
 import {
   formatRenewalGateMessage,
   formatLocalizedActionMessage,
+  formatClarificationMessage,
 } from "@/lib/ai/nigerian-languages";
 import type {
   ActionLedgerEvent,
@@ -315,6 +316,39 @@ export class ActionOSOrchestrator {
       actor: "N-ATLAS AI",
       metadata: { entities: redactSensitiveObject(understanding.entities) },
     });
+
+    // 1b. Disambiguation Gate: If user input is ambiguous or missing critical context,
+    // prompt for clarification rather than executing wrong or unrequested action plans.
+    if (understanding.intent === "clarification_required" || understanding.entities?.needsClarification) {
+      const clarificationMsg =
+        (understanding.entities?.clarificationQuestion as string) ||
+        formatClarificationMessage(input.language);
+
+      sm.transition("completed", "Clarification requested from user for ambiguous intent");
+      session.status = "completed";
+      await repos.sessions.updateStatus(sessionId, "completed");
+
+      await this.appendLedgerEvent(events, {
+        id: `ev_${Date.now()}_clarify`,
+        sessionId,
+        timestamp: new Date().toISOString(),
+        action: "clarification_requested",
+        description: clarificationMsg,
+        status: "verified",
+        actor: "N-ATLAS AI",
+      });
+
+      return {
+        sessionId,
+        status: "completed",
+        intent: "clarification_required",
+        confidence: understanding.confidence,
+        message: clarificationMsg,
+        authorizationRequired: false,
+        authorizationDetails: null,
+        events,
+      };
+    }
 
     // 2. Move to PLANNING
     sm.transition("planning", "Generating structured deterministic action plan");

@@ -1,11 +1,17 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { DeterministicDemoAIProvider } from "@/lib/ai/n-atlas";
+import {
+  DeterministicDemoAIProvider,
+  HttpNAtlasAdapter,
+  OfficialNAtlasProvider,
+} from "@/lib/ai/n-atlas";
 import {
   detectNigerianLanguageFromText,
   formatVehicleFoundMessage,
   formatVehicleNotFoundMessage,
   formatVehicleRegisteredMessage,
+  normalizeNigerianText,
+  formatClarificationMessage,
 } from "@/lib/ai/nigerian-languages";
 import { QueryVehicleTool } from "@/lib/actionos/tools/query-vehicle";
 import { RegisterVehicleTool } from "@/lib/actionos/tools/register-vehicle";
@@ -191,6 +197,194 @@ describe("Nigerian Multilingual Understanding & Vehicle Database Querying", () =
       assert.equal(res.intent, "renew_policy");
       assert.equal(res.entities.vehiclePlate, "ABC-123-XY");
       assert.equal(res.entities.detectedLanguage, "ig");
+    });
+  });
+
+  describe("Robust Multilingual AI Edge Cases & Truthful Disambiguation", () => {
+    it("should handle accented and unaccented Yorùbá spellings identically", async () => {
+      const accented = await nAtlas.understand({
+        text: "Mo fẹ sọ iṣeduro ọkọ mi di ọtun fun ABC-123-XY.",
+        language: "yo",
+      });
+      const unaccented = await nAtlas.understand({
+        text: "Mo fe so iseduro oko mi di otun fun ABC-123-XY.",
+        language: "yo",
+      });
+
+      assert.equal(accented.intent, "renew_policy");
+      assert.equal(unaccented.intent, "renew_policy");
+      assert.equal(accented.entities.vehiclePlate, "ABC-123-XY");
+      assert.equal(unaccented.entities.vehiclePlate, "ABC-123-XY");
+      assert.equal(accented.entities.detectedLanguage, "yo");
+      assert.equal(unaccented.entities.detectedLanguage, "yo");
+
+      const queryAccented = await nAtlas.understand({
+        text: "Ṣayẹwo ọkọ ayọkẹlẹ mi ABC-123-XY",
+        language: "yo",
+      });
+      const queryUnaccented = await nAtlas.understand({
+        text: "Sayewo oko ayokele mi ABC-123-XY",
+        language: "yo",
+      });
+      assert.equal(queryAccented.intent, "query_vehicle");
+      assert.equal(queryUnaccented.intent, "query_vehicle");
+      assert.equal(queryAccented.entities.vehiclePlate, "ABC-123-XY");
+      assert.equal(queryUnaccented.entities.vehiclePlate, "ABC-123-XY");
+    });
+
+    it("should handle accented and unaccented Igbo spellings identically", async () => {
+      const accented = await nAtlas.understand({
+        text: "Achọrọ m imeghari mkpuchi ụgbọ ala m maka ABC-123-XY.",
+        language: "ig",
+      });
+      const unaccented = await nAtlas.understand({
+        text: "Achoro m imeghari mkpuchi ugbo ala m maka ABC-123-XY.",
+        language: "ig",
+      });
+
+      assert.equal(accented.intent, "renew_policy");
+      assert.equal(unaccented.intent, "renew_policy");
+      assert.equal(accented.entities.vehiclePlate, "ABC-123-XY");
+      assert.equal(unaccented.entities.vehiclePlate, "ABC-123-XY");
+      assert.equal(accented.entities.detectedLanguage, "ig");
+      assert.equal(unaccented.entities.detectedLanguage, "ig");
+    });
+
+    it("should handle code-switching between English and Nigerian languages", async () => {
+      // English + Yorùbá + Pidgin
+      const cs1 = await nAtlas.understand({
+        text: "I want to renew iṣeduro for my car ABC-123-XY sharp sharp",
+        language: "en-NG",
+      });
+      assert.equal(cs1.intent, "renew_policy");
+      assert.equal(cs1.entities.vehiclePlate, "ABC-123-XY");
+      assert.equal(cs1.entities.urgency, "high");
+
+      // Pidgin + English
+      const cs2 = await nAtlas.understand({
+        text: "Abeg check my motor ABC-123-XY inside database",
+        language: "pcm",
+      });
+      assert.equal(cs2.intent, "query_vehicle");
+      assert.equal(cs2.entities.vehiclePlate, "ABC-123-XY");
+
+      // English + Hausa (Query)
+      const cs3 = await nAtlas.understand({
+        text: "Please duba inshorar motata ABC-123-XY",
+        language: "en-NG",
+      });
+      assert.equal(cs3.intent, "query_vehicle");
+      assert.equal(cs3.entities.vehiclePlate, "ABC-123-XY");
+
+      // English + Hausa (Renew)
+      const cs4 = await nAtlas.understand({
+        text: "Please sabunta inshorar motata ABC-123-XY",
+        language: "en-NG",
+      });
+      assert.equal(cs4.intent, "renew_policy");
+      assert.equal(cs4.entities.vehiclePlate, "ABC-123-XY");
+    });
+
+    it("should collapse informal phrasing and speech-transcription typos", async () => {
+      const typoResult = await nAtlas.understand({
+        text: "Abeg I wan reneww my mota insurans for ABC-123-XY shrp shrp",
+        language: "pcm",
+      });
+
+      assert.equal(typoResult.intent, "renew_policy");
+      assert.equal(typoResult.entities.vehiclePlate, "ABC-123-XY");
+      assert.equal(typoResult.entities.urgency, "high");
+      assert.equal(typoResult.entities.detectedLanguage, "pcm");
+
+      const queryTypo = await nAtlas.understand({
+        text: "Check my mota ABC-123-XY sharplyy inside vehicle database",
+        language: "pcm",
+      });
+      assert.equal(queryTypo.intent, "query_vehicle");
+      assert.equal(queryTypo.entities.vehiclePlate, "ABC-123-XY");
+      assert.equal(queryTypo.entities.urgency, "high");
+    });
+
+    it("should require clarification for ambiguous greetings or vague requests", async () => {
+      const greeting = await nAtlas.understand({
+        text: "Hello, good afternoon",
+        language: "en-NG",
+      });
+      assert.equal(greeting.intent, "clarification_required");
+      assert.equal(greeting.entities.needsClarification, true);
+      assert.equal(greeting.confidence, 0.5);
+      assert.ok(typeof greeting.entities.clarificationQuestion === "string");
+      assert.ok((greeting.entities.clarificationQuestion as string).includes("ActionOS:"));
+
+      const howFar = await nAtlas.understand({
+        text: "How far, I need help",
+        language: "pcm",
+      });
+      assert.equal(howFar.intent, "clarification_required");
+      assert.equal(howFar.entities.needsClarification, true);
+
+      const vagueRenewEn = await nAtlas.understand({
+        text: "I want to renew",
+        language: "en-NG",
+      });
+      assert.equal(vagueRenewEn.intent, "clarification_required");
+      assert.equal(vagueRenewEn.entities.needsClarification, true);
+
+      const vagueRenewPcm = await nAtlas.understand({
+        text: "I wan renew",
+        language: "pcm",
+      });
+      assert.equal(vagueRenewPcm.intent, "clarification_required");
+      assert.equal(vagueRenewPcm.entities.needsClarification, true);
+      assert.ok((vagueRenewPcm.entities.clarificationQuestion as string).includes("You wan renew your motor insurance"));
+    });
+
+    it("should NOT fabricate demo policy number when an unknown/different vehicle plate is provided", async () => {
+      const res = await nAtlas.understand({
+        text: "Renew insurance for motor XYZ-999-ZZ",
+        language: "en-NG",
+      });
+
+      assert.equal(res.intent, "renew_policy");
+      assert.equal(res.entities.vehiclePlate, "XYZ-999-ZZ");
+      // Must not fabricate AUTO-2026-00182 for arbitrary non-demo vehicle
+      assert.equal(res.entities.policyNumber, undefined, "Must not fabricate demo policy for unknown plate");
+    });
+
+    it("should distinguish deterministic demo adapter from live N-ATLAS provider metadata", async () => {
+      const demoRes = await nAtlas.understand({
+        text: "Renew insurance for motor ABC-123-XY",
+        language: "en-NG",
+      });
+
+      assert.equal(demoRes.entities._isLiveAI, false);
+      assert.equal(demoRes.entities._aiProvider, "Demo AI Adapter (Multilingual Nigeria)");
+
+      const liveAdapter = new HttpNAtlasAdapter("https://api.n-atlas.ng/v1", "");
+      assert.equal(liveAdapter.name, "Live N-ATLAS Foundation Model (NITDA / NCAIR)");
+
+      // Without key, liveAdapter falls back cleanly to benchmark engine with transparent metadata
+      const fallbackRes = await liveAdapter.understand({
+        text: "Renew insurance for motor ABC-123-XY",
+        language: "en-NG",
+      });
+      assert.equal(fallbackRes.entities._isLiveAI, false);
+      assert.equal(fallbackRes.intent, "renew_policy");
+    });
+
+    it("should export normalizeNigerianText and formatClarificationMessage helper utilities", () => {
+      const normYoruba = normalizeNigerianText("Ọkọ ayọkẹlẹ");
+      assert.equal(normYoruba, "oko ayokele");
+
+      const normPidgin = normalizeNigerianText("reneww shrp shrp");
+      assert.equal(normPidgin, "renew sharp sharp");
+
+      const clarificationYo = formatClarificationMessage("yo");
+      assert.ok(clarificationYo.includes("ActionOS:"));
+      assert.ok(clarificationYo.includes("iṣeduro"));
+
+      const provider = new OfficialNAtlasProvider();
+      assert.equal(provider.name, "Official N-ATLAS Integration Boundary");
     });
   });
 

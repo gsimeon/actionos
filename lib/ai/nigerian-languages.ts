@@ -458,3 +458,65 @@ export function formatLocalizedActionMessage(
       return `Action error: ${detail || "Unable to complete action"}.`;
   }
 }
+
+/**
+ * Normalizes Nigerian text by removing tone marks/diacritics, collapsing whitespace,
+ * and harmonizing informal speech transcription typos (e.g. "shrp shrp", "insurans", "reneww").
+ */
+export function normalizeNigerianText(text: string): string {
+  if (!text) return "";
+  let norm = text.toLowerCase().trim();
+
+  // Normalize Unicode diacritics & Nigerian tone marks
+  norm = norm
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // Strip combining diacritical marks
+    .replace(/[ọọ́ọ̀]/g, "o")
+    .replace(/[ẹẹ́ẹ̀]/g, "e")
+    .replace(/[ṣ]/g, "s")
+    .replace(/[ụụ́ụ̀]/g, "u")
+    .replace(/[ịị́ị̀]/g, "i")
+    .replace(/[ƙ]/g, "k")
+    .replace(/[ɓ]/g, "b")
+    .replace(/[ɗ]/g, "d");
+
+  // Harmonize common informal speech transcription typos
+  norm = norm
+    .replace(/\bshrp\s*shrp\b/g, "sharp sharp")
+    .replace(/\bsharplyy?\b/g, "sharp sharp")
+    .replace(/\b(reneww|renw|re-new)\b/g, "renew")
+    .replace(/\b(expird|expiringg)\b/g, "expire")
+    .replace(/\b(insurans|insrance|inshorance)\b/g, "insurance")
+    .replace(/\b(motata|motar)\b/g, "mota")
+    .replace(/\b(ugboala)\b/g, "ugbo ala")
+    .replace(/\b(ayokele)\b/g, "ayokele");
+
+  return norm;
+}
+
+/**
+ * Generate localized clarification question when customer input is ambiguous
+ * (e.g. general greeting, ambiguous intent, or missing vehicle/policy identifiers).
+ */
+export function formatClarificationMessage(lang?: string): string {
+  const language = normalizeNigerianLanguage(lang);
+
+  switch (language) {
+    case "pcm":
+      return "ActionOS: You wan renew your motor insurance, or you wan renew your vehicle license and roadworthiness paper? Abeg drop your motor plate number or policy number make we help you sharp sharp.";
+
+    case "yo":
+      return "ActionOS: Ṣe ẹ fẹ sọ iṣeduro ọkọ yín di ọtun, tabi lasisi ọkọ ati iwe ayẹwo? Ẹ jọ̀wọ́ sọ nọ́mbà pílẹ́ẹ̀tì ọkọ tàbí nọ́mbà iṣeduro yín lati bẹrẹ.";
+
+    case "ha":
+      return "ActionOS: Kuna so ku sabunta inshorar motar ku ne, ko kuma lasisin mota da takardar duba lafiyar mota? Da fatan za a ba da lambar motarku ko lambar inshora don ci gaba.";
+
+    case "ig":
+      return "ActionOS: Ị chọrọ imeghari mkpuchi ụgbọ ala gị, ka ị chọrọ imeghari akwụkwọ ikike ụgbọ ala na nyocha gị? Biko nye anyị nọmba ụgbọ ala gị ma ọ bụ nọmba mkpuchi gị ka anyị nwee ike ịga n'ihu.";
+
+    case "en-NG":
+    default:
+      return "ActionOS: Would you like to renew your third-party motor insurance policy, or renew your vehicle license & roadworthiness certificate? Please provide your vehicle registration plate or policy number to proceed.";
+  }
+}
+
