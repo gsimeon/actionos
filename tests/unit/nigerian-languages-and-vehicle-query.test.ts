@@ -135,6 +135,63 @@ describe("Nigerian Multilingual Understanding & Vehicle Database Querying", () =
       const detected = detectNigerianLanguageFromText("Biko lelee ụgbọ ala m ugbu a");
       assert.equal(detected, "ig");
     });
+
+    it("should detect vehicle insurance renewal in English benchmark prompt", async () => {
+      const res = await nAtlas.understand({
+        text: "My car insurance expires next week. Check it and renew it for me.",
+        language: "en-NG",
+      });
+
+      assert.equal(res.intent, "renew_policy");
+      assert.equal(res.entities.vehiclePlate, "ABC-123-XY");
+      assert.equal(res.entities.policyNumber, "AUTO-2026-00182");
+      assert.ok(res.confidence >= 0.95);
+    });
+
+    it("should detect vehicle insurance renewal in Nigerian Pidgin", async () => {
+      const res = await nAtlas.understand({
+        text: "Abeg I wan renew my motor insurance for ABC-123-XY sharp sharp.",
+        language: "pcm",
+      });
+
+      assert.equal(res.intent, "renew_policy");
+      assert.equal(res.entities.vehiclePlate, "ABC-123-XY");
+      assert.equal(res.entities.detectedLanguage, "pcm");
+      assert.equal(res.entities.urgency, "high");
+    });
+
+    it("should detect vehicle insurance renewal in Yorùbá", async () => {
+      const res = await nAtlas.understand({
+        text: "Mo fẹ sọ iṣeduro ọkọ mi di ọtun fun ABC-123-XY.",
+        language: "yo",
+      });
+
+      assert.equal(res.intent, "renew_policy");
+      assert.equal(res.entities.vehiclePlate, "ABC-123-XY");
+      assert.equal(res.entities.detectedLanguage, "yo");
+    });
+
+    it("should detect vehicle insurance renewal in Hausa", async () => {
+      const res = await nAtlas.understand({
+        text: "Ina so in sabunta inshorar motata don ABC-123-XY.",
+        language: "ha",
+      });
+
+      assert.equal(res.intent, "renew_policy");
+      assert.equal(res.entities.vehiclePlate, "ABC-123-XY");
+      assert.equal(res.entities.detectedLanguage, "ha");
+    });
+
+    it("should detect vehicle insurance renewal in Igbo", async () => {
+      const res = await nAtlas.understand({
+        text: "Achọrọ m imeghari mkpuchi ụgbọ ala m maka ABC-123-XY.",
+        language: "ig",
+      });
+
+      assert.equal(res.intent, "renew_policy");
+      assert.equal(res.entities.vehiclePlate, "ABC-123-XY");
+      assert.equal(res.entities.detectedLanguage, "ig");
+    });
   });
 
   describe("Multilingual Response Formatting", () => {

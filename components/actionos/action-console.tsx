@@ -31,6 +31,26 @@ const PRESET_PROMPTS = [
     text: "My car insurance expires next week. Check it and renew it for me.",
   },
   {
+    lang: "pcm",
+    label: "Renew Insurance (Pidgin)",
+    text: "Abeg I wan renew my motor insurance for ABC-123-XY sharp sharp.",
+  },
+  {
+    lang: "yo",
+    label: "Sọ Iṣeduro Di Ọtun (Yorùbá)",
+    text: "Mo fẹ sọ iṣeduro ọkọ mi di ọtun fun ABC-123-XY.",
+  },
+  {
+    lang: "ha",
+    label: "Sabunta Inshora (Hausa)",
+    text: "Ina so in sabunta inshorar motata don ABC-123-XY.",
+  },
+  {
+    lang: "ig",
+    label: "Megharia Mkpuchi (Igbo)",
+    text: "Achọrọ m imeghari mkpuchi ụgbọ ala m maka ABC-123-XY.",
+  },
+  {
     lang: "en-NG",
     label: "Query Vehicle (English)",
     text: "Query vehicle database for car ABC-123-XY and verify registration status.",

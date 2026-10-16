@@ -58,6 +58,8 @@ export function detectNigerianLanguageFromText(text: string): SupportedNigerianL
     raw.includes("ina so") ||
     raw.includes("kudi") ||
     raw.includes("takarda") ||
+    raw.includes("inshora") ||
+    raw.includes("inshorar") ||
     raw.includes("ma'ajiya") ||
     raw.includes("ma'adanar")
   ) {
@@ -68,6 +70,12 @@ export function detectNigerianLanguageFromText(text: string): SupportedNigerianL
   if (
     raw.includes("ọkọ") ||
     raw.includes("oko") ||
+    raw.includes("iṣeduro") ||
+    raw.includes("iseduro") ||
+    raw.includes("sọ di ọtun") ||
+    raw.includes("so di otun") ||
+    raw.includes("di ọtun") ||
+    raw.includes("di otun") ||
     raw.includes("ṣayẹwo") ||
     raw.includes("sayewo") ||
     raw.includes("forukọsilẹ") ||
@@ -89,6 +97,8 @@ export function detectNigerianLanguageFromText(text: string): SupportedNigerianL
   if (
     raw.includes("ụgbọ ala") ||
     raw.includes("ugbo ala") ||
+    raw.includes("mkpuchi") ||
+    raw.includes("megharia") ||
     raw.includes("lelee") ||
     raw.includes("debanye") ||
     raw.includes("dị ọhụrụ") ||

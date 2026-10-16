@@ -157,14 +157,33 @@ export class DeterministicDemoAIProvider implements NAtlasProvider {
         raw.includes("inspection") ||
         raw.includes("paper"));
 
+    const isExplicitInsurance =
+      raw.includes("insurance") ||
+      raw.includes("inshora") ||
+      raw.includes("inshorar") ||
+      raw.includes("iṣeduro") ||
+      raw.includes("iseduro") ||
+      raw.includes("mkpuchi") ||
+      raw.includes("policy") ||
+      raw.includes("third party") ||
+      raw.includes("third-party") ||
+      raw.includes("comprehensive") ||
+      raw.includes("auto-");
+
     const isRenew =
       raw.includes("renew") ||
       raw.includes("re-new") ||
       raw.includes("expire") ||
       raw.includes("wan expire") ||
       raw.includes("atunto") || // Yoruba
+      raw.includes("sọ di ọtun") ||
+      raw.includes("so di otun") ||
+      raw.includes("sọ d'ọtun") ||
+      raw.includes("di ọtun") ||
+      raw.includes("di otun") ||
       raw.includes("sabunta") || // Hausa
-      raw.includes("dị ọhụrụ") || // Igbo
+      raw.includes("meghari") || // Igbo (imeghari / megharia)
+      raw.includes("dị ọhụrụ") ||
       raw.includes("di ohuru");
 
     const isQuote =
@@ -197,8 +216,12 @@ export class DeterministicDemoAIProvider implements NAtlasProvider {
     let intent = "unknown";
     let confidence = 0.5;
 
-    // Specific intent resolution priority: vehicle license renewal, policy renewals and quotes
-    if (isVehicleLicenseRenewal) {
+    // Specific intent resolution priority:
+    // When explicit insurance keywords are present with renewal verbs, prioritize policy renewal
+    if (isExplicitInsurance && isRenew) {
+      intent = "renew_policy";
+      confidence = 0.99;
+    } else if (isVehicleLicenseRenewal) {
       intent = "renew_vehicle_license";
       confidence = 0.98;
     } else if (isRenew) {
