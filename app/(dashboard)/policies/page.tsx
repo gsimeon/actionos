@@ -15,8 +15,9 @@ const FILTER_TABS = [
   { id: "expired", label: "Expired" },
 ];
 
-export function getExpiryBadge(expiryDate: string) {
-  const diffTime = new Date(expiryDate).getTime() - new Date("2026-10-07").getTime();
+export function getExpiryBadge(expiryDate: string, referenceDate?: Date | string) {
+  const ref = referenceDate ? new Date(referenceDate) : new Date();
+  const diffTime = new Date(expiryDate).getTime() - ref.getTime();
   const days = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
   if (days <= 0) {
