@@ -235,7 +235,7 @@ describe("ActionOS Reliability Gate v2: Verifier & Invariant Testing Suite", () 
       assert.equal(result.category, "rls_empty_filter");
     });
 
-    it("accepts explicit permission denial (42501 / PGRST205) as proof of isolation", () => {
+    it("accepts explicit PostgreSQL permission denial (42501) as proof of isolation", () => {
       const result = classifyRlsDenial(
         {
           data: null,
@@ -248,6 +248,82 @@ describe("ActionOS Reliability Gate v2: Verifier & Invariant Testing Suite", () 
       assert.equal(result.isIsolated, true);
       assert.equal(result.isCriticalLeak, false);
       assert.equal(result.category, "permission_denied");
+    });
+
+    it("accepts PostgREST PGRST301 (JWT forbidden) as proof of isolation", () => {
+      const result = classifyRlsDenial(
+        {
+          data: null,
+          error: { code: "PGRST301", message: "JWT credentials forbidden" },
+          status: 401,
+        },
+        "policies"
+      );
+
+      assert.equal(result.isIsolated, true);
+      assert.equal(result.isCriticalLeak, false);
+      assert.equal(result.category, "permission_denied");
+    });
+
+    it("strictly rejects PostgREST PGRST205 (missing relation) as proof of RLS isolation", () => {
+      const result = classifyRlsDenial(
+        {
+          data: null,
+          error: { code: "PGRST205", message: "relation 'policies' not found in schema cache" },
+          status: 404,
+        },
+        "policies"
+      );
+
+      assert.equal(result.isIsolated, false);
+      assert.equal(result.isCriticalLeak, false);
+      assert.equal(result.category, "relation_missing");
+      assert.match(result.reason, /Relation 'policies' not found in PostgREST schema cache/);
+    });
+
+    it("strictly rejects PostgreSQL 42P01 (undefined table) as proof of RLS isolation", () => {
+      const result = classifyRlsDenial(
+        {
+          data: null,
+          error: { code: "42P01", message: "relation 'customers' does not exist" },
+          status: 404,
+        },
+        "customers"
+      );
+
+      assert.equal(result.isIsolated, false);
+      assert.equal(result.isCriticalLeak, false);
+      assert.equal(result.category, "relation_missing");
+    });
+
+    it("strictly rejects server 500 crashes as proof of RLS isolation", () => {
+      const result = classifyRlsDenial(
+        {
+          data: null,
+          error: { code: "XX000", message: "connection timeout / internal error" },
+          status: 500,
+        },
+        "action_sessions"
+      );
+
+      assert.equal(result.isIsolated, false);
+      assert.equal(result.isCriticalLeak, false);
+      assert.equal(result.category, "server_error");
+    });
+
+    it("strictly rejects unexpected HTTP 400 errors as proof of RLS isolation", () => {
+      const result = classifyRlsDenial(
+        {
+          data: null,
+          error: { code: "22P02", message: "invalid text representation" },
+          status: 400,
+        },
+        "transactions"
+      );
+
+      assert.equal(result.isIsolated, false);
+      assert.equal(result.isCriticalLeak, false);
+      assert.equal(result.category, "unexpected_error");
     });
 
     it("rejects network exceptions during RLS checks as failures", () => {
@@ -332,6 +408,8 @@ describe("ActionOS Reliability Gate v2: Verifier & Invariant Testing Suite", () 
       assert.equal(result.report.mode, "offline");
       assert.equal(result.report.liveVerified, false);
       assert.equal(result.report.targetUrl, "offline");
+      assert.equal(result.report.summary.failed, 0);
+      assert.ok(result.report.summary.skipped > 0, "Offline mode should explicitly count skipped live checks");
     });
 
     it("generates markdown summary correctly formatted for GitHub Actions", () => {
