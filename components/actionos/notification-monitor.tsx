@@ -27,6 +27,7 @@ export interface NotificationPreview {
 }
 
 const BENCHMARK_NOTIFICATIONS: NotificationPreview[] = [
+  // WhatsApp
   {
     channel: "whatsapp",
     recipient: "+234 801 111 1111 (Demo Customer)",
@@ -36,6 +37,23 @@ const BENCHMARK_NOTIFICATIONS: NotificationPreview[] = [
     status: "delivered",
   },
   {
+    channel: "whatsapp",
+    recipient: "+234 801 111 1111 (Demo Customer)",
+    title: "ActionOS Health — NHIA HMO Enrollee Card",
+    body: "Health Alert: Your Hygeia HMO (Platinum) healthcare policy has been renewed through 24 Oct 2027. Your primary HCP Lagoon Hospitals, Victoria Island is active. Digital Card: HMO-PLAT-2026-00812.",
+    timestamp: "12 mins ago",
+    status: "delivered",
+  },
+  {
+    channel: "whatsapp",
+    recipient: "+234 801 111 1111 (Demo Customer)",
+    title: "ActionOS Licensing — FRSC Driving Permit",
+    body: "FRSC Notice: Your Driver's License has been renewed for 5 years! Temporary permit FRSC-TMP-2026-91823 issued. Biometric appointment reserved at FRSC Ojodu Berger Command on Wednesday, 22 Oct 2026 (09:00 - 11:30 AM).",
+    timestamp: "25 mins ago",
+    status: "delivered",
+  },
+  // SMS
+  {
     channel: "sms",
     recipient: "+234 801 111 1111",
     title: "ActionOS Statutory SMS",
@@ -43,6 +61,23 @@ const BENCHMARK_NOTIFICATIONS: NotificationPreview[] = [
     timestamp: "1 min ago",
     status: "delivered",
   },
+  {
+    channel: "sms",
+    recipient: "+234 801 111 1111",
+    title: "MVAA Road License SMS",
+    body: "ActionOS: Lagos MVAA Road License renewed for ABC-123-XY. LACVIS Computerized Inspection Passed (84% brake efficiency). Valid thru 2027.",
+    timestamp: "18 mins ago",
+    status: "delivered",
+  },
+  {
+    channel: "sms",
+    recipient: "+234 801 111 1111",
+    title: "NHIA Health SMS",
+    body: "ActionOS: NHIA HMO cover active. ID: NHIA-00829104. Provider: Hygeia HMO. Hospital: Lagoon Hospital VI. Premium NGN 145,000 settled.",
+    timestamp: "32 mins ago",
+    status: "delivered",
+  },
+  // Email
   {
     channel: "email",
     recipient: "customer@actionos.ng",
@@ -52,11 +87,36 @@ const BENCHMARK_NOTIFICATIONS: NotificationPreview[] = [
     status: "delivered",
   },
   {
+    channel: "email",
+    recipient: "customer@actionos.ng",
+    title: "FRSC National Driver's License Renewal & Biometric Appointment",
+    body: "Dear Demo Customer,\n\nYour application for a 5-Year National Driver's License renewal has been approved by the Federal Road Safety Corps (FRSC).\n\n• License Number: FRSC-LA-2024-009182\n• Temporary Permit: FRSC-TMP-2026-91823 (attached)\n• Appointment: Wednesday, 22 Oct 2026 (09:00 - 11:30 AM)\n• Center: FRSC Ojodu Berger Sector Command\n\nPlease arrive with your printed temporary permit and valid national identity document.",
+    timestamp: "28 mins ago",
+    status: "delivered",
+  },
+  // In-App
+  {
     channel: "in_app",
     recipient: "In-App Notification Feed",
-    title: "Policy Successfully Renewed",
+    title: "Motor Policy Successfully Renewed",
     body: "Toyota Camry ABC-123-XY renewed with Leadway Assurance. Coverage active until 14 Oct 2027.",
     timestamp: "2 mins ago",
+    status: "delivered",
+  },
+  {
+    channel: "in_app",
+    recipient: "In-App Notification Feed",
+    title: "Health HMO Card Generated",
+    body: "NHIA Digital Card issued for Hygeia HMO Platinum cover. Primary facility Lagoon Hospital assigned.",
+    timestamp: "15 mins ago",
+    status: "delivered",
+  },
+  {
+    channel: "in_app",
+    recipient: "In-App Notification Feed",
+    title: "Driver's License Permit Ready",
+    body: "Temporary driving permit FRSC-TMP-2026-91823 issued. Biometric capture scheduled at Ojodu Command.",
+    timestamp: "30 mins ago",
     status: "delivered",
   },
 ];
