@@ -36,12 +36,17 @@ export async function GET(
 
     const policies = await repos.policies.findByCustomerId(id, tenant);
     const documents = await repos.documents.findByCustomerId(id, tenant);
+    const vehicles = await repos.assets.findByCustomerId(id, tenant);
+    const allRenewals = await repos.renewals.findAll({ tenant });
+    const renewals = allRenewals.filter((r) => r.customer_id === id);
 
     return NextResponse.json({
       success: true,
       data: {
         customer,
+        vehicles,
         policies,
+        renewals,
         documents,
       },
     });
