@@ -11,16 +11,32 @@ import {
   Zap,
   Copy,
   Check,
+  Gauge,
+  HeartPulse,
 } from "lucide-react";
 
 export function LiveHandshakeHub() {
-  const [activeTab, setActiveTab] = useState<"frsc" | "n_atlas" | "paystack" | "flutterwave" | "supabase">("frsc");
+  const [activeTab, setActiveTab] = useState<
+    "frsc" | "lacvis" | "nhia" | "n_atlas" | "paystack" | "flutterwave" | "supabase"
+  >("frsc");
 
   // FRSC State
   const [frscPlate, setFrscPlate] = useState("ABC-123-XY");
   const [frscLoading, setFrscLoading] = useState(false);
   const [frscResponse, setFrscResponse] = useState<Record<string, unknown> | null>(null);
   const [frscLatency, setFrscLatency] = useState<number | null>(null);
+
+  // LACVIS State
+  const [lacvisPlate, setLacvisPlate] = useState("ABC-123-XY");
+  const [lacvisLoading, setLacvisLoading] = useState(false);
+  const [lacvisResponse, setLacvisResponse] = useState<Record<string, unknown> | null>(null);
+  const [lacvisLatency, setLacvisLatency] = useState<number | null>(null);
+
+  // NHIA State
+  const [nhiaId, setNhiaId] = useState("NHIA-2026-00812");
+  const [nhiaLoading, setNhiaLoading] = useState(false);
+  const [nhiaResponse, setNhiaResponse] = useState<Record<string, unknown> | null>(null);
+  const [nhiaLatency, setNhiaLatency] = useState<number | null>(null);
 
   // N-ATLAS State
   const [nAtlasLang, setNAtlasLang] = useState("pcm");
@@ -56,6 +72,64 @@ export function LiveHandshakeHub() {
       });
     } finally {
       setFrscLoading(false);
+    }
+  };
+
+  // Handler for LACVIS test
+  const handleTestLacvis = async () => {
+    if (!lacvisPlate.trim()) return;
+    setLacvisLoading(true);
+    setLacvisResponse(null);
+    const start = performance.now();
+    try {
+      const res = await fetch("/api/simulator", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "probe_lacvis",
+          plate: lacvisPlate.trim(),
+        }),
+      });
+      const json = await res.json();
+      setLacvisLatency(Math.round(performance.now() - start));
+      setLacvisResponse(json);
+    } catch (err: unknown) {
+      setLacvisLatency(Math.round(performance.now() - start));
+      setLacvisResponse({
+        success: false,
+        error: err instanceof Error ? err.message : "Inspection probe failed",
+      });
+    } finally {
+      setLacvisLoading(false);
+    }
+  };
+
+  // Handler for NHIA test
+  const handleTestNhia = async () => {
+    if (!nhiaId.trim()) return;
+    setNhiaLoading(true);
+    setNhiaResponse(null);
+    const start = performance.now();
+    try {
+      const res = await fetch("/api/simulator", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "probe_nhia",
+          nhiaNumber: nhiaId.trim(),
+        }),
+      });
+      const json = await res.json();
+      setNhiaLatency(Math.round(performance.now() - start));
+      setNhiaResponse(json);
+    } catch (err: unknown) {
+      setNhiaLatency(Math.round(performance.now() - start));
+      setNhiaResponse({
+        success: false,
+        error: err instanceof Error ? err.message : "Enrollee probe failed",
+      });
+    } finally {
+      setNhiaLoading(false);
     }
   };
 
@@ -123,7 +197,7 @@ export function LiveHandshakeHub() {
             </h2>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Test and verify real-time data handshakes across FRSC NVIS, N-ATLAS Sovereign Model, Paystack Rail, and Supabase Realtime CDC.
+            Test and verify real-time data handshakes across FRSC NVIS, LACVIS, NHIA, N-ATLAS Sovereign Model, Paystack, Flutterwave, and Supabase CDC.
           </p>
         </div>
 
@@ -135,11 +209,11 @@ export function LiveHandshakeHub() {
       </div>
 
       {/* Tabs */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
         <button
           type="button"
           onClick={() => setActiveTab("frsc")}
-          className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-2 ${
+          className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
             activeTab === "frsc"
               ? "bg-emerald-50/70 border-emerald-300 ring-2 ring-emerald-400/20 shadow-xs"
               : "bg-slate-50 hover:bg-slate-100 border-slate-200"
@@ -148,19 +222,61 @@ export function LiveHandshakeHub() {
           <div className="flex items-center justify-between">
             <Car className={`w-4 h-4 ${activeTab === "frsc" ? "text-emerald-700" : "text-slate-500"}`} />
             <span className="text-[10px] font-mono font-bold text-emerald-800 bg-emerald-100 px-1.5 py-0.5 rounded">
-              NVIS API
+              FRSC
             </span>
           </div>
           <div>
-            <div className="text-xs font-bold text-slate-900">1. FRSC Gateway</div>
-            <div className="text-[10px] text-slate-500 mt-0.5">National Plate &amp; DL</div>
+            <div className="text-xs font-bold text-slate-900">1. FRSC NVIS</div>
+            <div className="text-[10px] text-slate-500">Plate &amp; Theft</div>
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab("lacvis")}
+          className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
+            activeTab === "lacvis"
+              ? "bg-emerald-50/70 border-emerald-300 ring-2 ring-emerald-400/20 shadow-xs"
+              : "bg-slate-50 hover:bg-slate-100 border-slate-200"
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <Gauge className={`w-4 h-4 ${activeTab === "lacvis" ? "text-blue-700" : "text-slate-500"}`} />
+            <span className="text-[10px] font-mono font-bold text-blue-800 bg-blue-100 px-1.5 py-0.5 rounded">
+              LACVIS
+            </span>
+          </div>
+          <div>
+            <div className="text-xs font-bold text-slate-900">2. LACVIS</div>
+            <div className="text-[10px] text-slate-500">Roadworthy Test</div>
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab("nhia")}
+          className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
+            activeTab === "nhia"
+              ? "bg-emerald-50/70 border-emerald-300 ring-2 ring-emerald-400/20 shadow-xs"
+              : "bg-slate-50 hover:bg-slate-100 border-slate-200"
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <HeartPulse className={`w-4 h-4 ${activeTab === "nhia" ? "text-rose-700" : "text-slate-500"}`} />
+            <span className="text-[10px] font-mono font-bold text-rose-800 bg-rose-100 px-1.5 py-0.5 rounded">
+              NHIA
+            </span>
+          </div>
+          <div>
+            <div className="text-xs font-bold text-slate-900">3. NHIA HMO</div>
+            <div className="text-[10px] text-slate-500">Enrollee &amp; Tier</div>
           </div>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveTab("n_atlas")}
-          className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-2 ${
+          className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
             activeTab === "n_atlas"
               ? "bg-emerald-50/70 border-emerald-300 ring-2 ring-emerald-400/20 shadow-xs"
               : "bg-slate-50 hover:bg-slate-100 border-slate-200"
@@ -173,15 +289,15 @@ export function LiveHandshakeHub() {
             </span>
           </div>
           <div>
-            <div className="text-xs font-bold text-slate-900">2. N-ATLAS Model</div>
-            <div className="text-[10px] text-slate-500 mt-0.5">Sovereign Multilingual</div>
+            <div className="text-xs font-bold text-slate-900">4. N-ATLAS Model</div>
+            <div className="text-[10px] text-slate-500">Multilingual Voice</div>
           </div>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveTab("paystack")}
-          className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-2 ${
+          className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
             activeTab === "paystack"
               ? "bg-emerald-50/70 border-emerald-300 ring-2 ring-emerald-400/20 shadow-xs"
               : "bg-slate-50 hover:bg-slate-100 border-slate-200"
@@ -190,19 +306,19 @@ export function LiveHandshakeHub() {
           <div className="flex items-center justify-between">
             <CreditCard className={`w-4 h-4 ${activeTab === "paystack" ? "text-emerald-700" : "text-slate-500"}`} />
             <span className="text-[10px] font-mono font-bold text-blue-800 bg-blue-100 px-1.5 py-0.5 rounded">
-              SETTLEMENT
+              SETTLE
             </span>
           </div>
           <div>
-            <div className="text-xs font-bold text-slate-900">3. Paystack Rail</div>
-            <div className="text-[10px] text-slate-500 mt-0.5">HMAC Webhooks &amp; Cards</div>
+            <div className="text-xs font-bold text-slate-900">5. Paystack</div>
+            <div className="text-[10px] text-slate-500">HMAC Webhooks</div>
           </div>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveTab("flutterwave")}
-          className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-2 ${
+          className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
             activeTab === "flutterwave"
               ? "bg-emerald-50/70 border-emerald-300 ring-2 ring-emerald-400/20 shadow-xs"
               : "bg-slate-50 hover:bg-slate-100 border-slate-200"
@@ -211,19 +327,19 @@ export function LiveHandshakeHub() {
           <div className="flex items-center justify-between">
             <CreditCard className={`w-4 h-4 ${activeTab === "flutterwave" ? "text-amber-700" : "text-slate-500"}`} />
             <span className="text-[10px] font-mono font-bold text-amber-800 bg-amber-100 px-1.5 py-0.5 rounded">
-              MULTI-RAIL
+              RAIL 2
             </span>
           </div>
           <div>
-            <div className="text-xs font-bold text-slate-900">4. Flutterwave Rail</div>
-            <div className="text-[10px] text-slate-500 mt-0.5">verif-hash &amp; Pan-Africa</div>
+            <div className="text-xs font-bold text-slate-900">6. Flutterwave</div>
+            <div className="text-[10px] text-slate-500">verif-hash Header</div>
           </div>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveTab("supabase")}
-          className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-2 ${
+          className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
             activeTab === "supabase"
               ? "bg-emerald-50/70 border-emerald-300 ring-2 ring-emerald-400/20 shadow-xs"
               : "bg-slate-50 hover:bg-slate-100 border-slate-200"
@@ -236,8 +352,8 @@ export function LiveHandshakeHub() {
             </span>
           </div>
           <div>
-            <div className="text-xs font-bold text-slate-900">5. Supabase DB</div>
-            <div className="text-[10px] text-slate-500 mt-0.5">Realtime Publications</div>
+            <div className="text-xs font-bold text-slate-900">7. Supabase DB</div>
+            <div className="text-[10px] text-slate-500">Realtime Streams</div>
           </div>
         </button>
       </div>
@@ -306,7 +422,133 @@ export function LiveHandshakeHub() {
         </div>
       )}
 
-      {/* 2. N-ATLAS AI Panel */}
+      {/* 2. LACVIS Roadworthiness Panel */}
+      {activeTab === "lacvis" && (
+        <div className="space-y-4 animate-in fade-in duration-150">
+          <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <span className="text-xs font-bold text-slate-900">
+                  LACVIS Computerized Vehicle Inspection Service Handshake
+                </span>
+                <p className="text-[11px] text-slate-500">
+                  Tests computerized brake efficiency (70% statutory threshold), emissions compliance, and vehicle safety test centers.
+                </p>
+              </div>
+              <span className="text-[10px] font-mono text-slate-600 bg-slate-200 px-2 py-0.5 rounded self-start sm:self-auto font-bold">
+                ENDPOINT: /api/simulator (probe_lacvis)
+              </span>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-center gap-2 pt-1">
+              <input
+                id="lacvis-plate-input"
+                type="text"
+                value={lacvisPlate}
+                onChange={(e) => setLacvisPlate(e.target.value.toUpperCase())}
+                placeholder="Enter plate number (e.g. ABC-123-XY, FAIL-123-XX)"
+                className="w-full sm:flex-1 bg-white border border-slate-300 rounded-xl px-3.5 py-2 text-xs font-mono font-bold text-slate-900 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 shadow-2xs"
+              />
+              <button
+                type="button"
+                id="btn-test-lacvis-handshake"
+                onClick={handleTestLacvis}
+                disabled={lacvisLoading || !lacvisPlate.trim()}
+                className="w-full sm:w-auto px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold transition-all shadow-md shadow-blue-600/20 flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+              >
+                {lacvisLoading ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <>
+                    <Zap className="w-3.5 h-3.5" />
+                    <span>Ping LACVIS Gateway</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Test Response */}
+          {lacvisResponse && (
+            <div className="p-4 rounded-2xl bg-slate-900 text-slate-100 border border-slate-800 space-y-3 font-mono text-xs">
+              <div className="flex items-center justify-between text-[11px] text-slate-400 border-b border-slate-800 pb-2">
+                <span className="flex items-center gap-1.5 text-blue-400 font-bold">
+                  <CheckCircle2 className="w-3.5 h-3.5" /> Computerized Inspection Verified
+                </span>
+                <span>Latency: {lacvisLatency}ms</span>
+              </div>
+              <pre className="overflow-x-auto text-[11px] max-h-56 leading-relaxed">
+                {JSON.stringify(lacvisResponse, null, 2)}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 3. NHIA Health Gateway Panel */}
+      {activeTab === "nhia" && (
+        <div className="space-y-4 animate-in fade-in duration-150">
+          <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <span className="text-xs font-bold text-slate-900">
+                  National Health Insurance Authority (NHIA) Handshake
+                </span>
+                <p className="text-[11px] text-slate-500">
+                  Tests central health insurance enrollee registry, biometric NIN cross-validation, and accredited HMO healthcare providers.
+                </p>
+              </div>
+              <span className="text-[10px] font-mono text-slate-600 bg-slate-200 px-2 py-0.5 rounded self-start sm:self-auto font-bold">
+                ENDPOINT: /api/simulator (probe_nhia)
+              </span>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-center gap-2 pt-1">
+              <input
+                id="nhia-id-input"
+                type="text"
+                value={nhiaId}
+                onChange={(e) => setNhiaId(e.target.value.toUpperCase())}
+                placeholder="Enter NHIA Enrollee ID (e.g. NHIA-2026-00812, NHIA-00829104)"
+                className="w-full sm:flex-1 bg-white border border-slate-300 rounded-xl px-3.5 py-2 text-xs font-mono font-bold text-slate-900 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 shadow-2xs"
+              />
+              <button
+                type="button"
+                id="btn-test-nhia-handshake"
+                onClick={handleTestNhia}
+                disabled={nhiaLoading || !nhiaId.trim()}
+                className="w-full sm:w-auto px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-bold transition-all shadow-md shadow-rose-600/20 flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+              >
+                {nhiaLoading ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <>
+                    <Zap className="w-3.5 h-3.5" />
+                    <span>Ping NHIA Gateway</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Test Response */}
+          {nhiaResponse && (
+            <div className="p-4 rounded-2xl bg-slate-900 text-slate-100 border border-slate-800 space-y-3 font-mono text-xs">
+              <div className="flex items-center justify-between text-[11px] text-slate-400 border-b border-slate-800 pb-2">
+                <span className="flex items-center gap-1.5 text-rose-400 font-bold">
+                  <CheckCircle2 className="w-3.5 h-3.5" /> Enrollee Record Verified
+                </span>
+                <span>Latency: {nhiaLatency}ms</span>
+              </div>
+              <pre className="overflow-x-auto text-[11px] max-h-56 leading-relaxed">
+                {JSON.stringify(nhiaResponse, null, 2)}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 4. N-ATLAS AI Panel */}
       {activeTab === "n_atlas" && (
         <div className="space-y-4 animate-in fade-in duration-150">
           <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
@@ -379,7 +621,7 @@ export function LiveHandshakeHub() {
         </div>
       )}
 
-      {/* 3. Paystack Rail Panel */}
+      {/* 5. Paystack Rail Panel */}
       {activeTab === "paystack" && (
         <div className="space-y-4 animate-in fade-in duration-150">
           <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-4 text-xs">
@@ -436,7 +678,7 @@ export function LiveHandshakeHub() {
         </div>
       )}
 
-      {/* 4. Flutterwave Rail Panel */}
+      {/* 6. Flutterwave Rail Panel */}
       {activeTab === "flutterwave" && (
         <div className="space-y-4 animate-in fade-in duration-150">
           <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-4 text-xs">
@@ -493,7 +735,7 @@ export function LiveHandshakeHub() {
         </div>
       )}
 
-      {/* 5. Supabase DB & Realtime Panel */}
+      {/* 7. Supabase DB & Realtime Panel */}
       {activeTab === "supabase" && (
         <div className="space-y-4 animate-in fade-in duration-150">
           <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-4 text-xs">
