@@ -564,7 +564,7 @@ export async function runValidation(envOverride = process.env, argvOverride = pr
     }
 
     try {
-      const ledgerRes = await anonClient.from("action_ledger_events").select("id, action, hash");
+      const ledgerRes = await anonClient.from("action_ledger_events").select("id, action, event_hash");
       const rlsLedger = classifyRlsDenial(ledgerRes, "action_ledger_events");
       record("rls_ledger_isolation", "rls", rlsLedger.isIsolated && !rlsLedger.isCriticalLeak, rlsLedger.reason);
     } catch (err) {
