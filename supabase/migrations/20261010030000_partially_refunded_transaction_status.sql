@@ -4,10 +4,14 @@
 DO $$
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_enum
-    WHERE enumtypid = 'public.transaction_status'::regtype
-      AND enumlabel = 'partially_refunded'
+    SELECT 1 FROM pg_type t
+    JOIN pg_namespace n ON n.oid = t.typnamespace
+    WHERE t.typname = 'transaction_status' AND n.nspname = 'public'
   ) THEN
-    ALTER TYPE public.transaction_status ADD VALUE 'partially_refunded';
+    CREATE TYPE public.transaction_status AS ENUM (
+      'pending', 'processing', 'succeeded', 'failed', 'refunded', 'partially_refunded'
+    );
   END IF;
 END $$;
+
+ALTER TYPE public.transaction_status ADD VALUE IF NOT EXISTS 'partially_refunded';

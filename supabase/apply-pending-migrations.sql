@@ -22,8 +22,6 @@
 -- and click "RUN". It is 100% idempotent and safe to run multiple times.
 -- ==============================================================================
 
-BEGIN;
-
 -- ==============================================================================
 -- 1. ACTION LEDGER EVENTS TABLE & CRYPTOGRAPHIC IMMUTABILITY
 -- ==============================================================================
@@ -425,13 +423,17 @@ CREATE INDEX IF NOT EXISTS idx_assets_engine ON public.assets ((metadata->>'engi
 DO $$
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_enum
-    WHERE enumtypid = 'public.transaction_status'::regtype
-      AND enumlabel = 'partially_refunded'
+    SELECT 1 FROM pg_type t
+    JOIN pg_namespace n ON n.oid = t.typnamespace
+    WHERE t.typname = 'transaction_status' AND n.nspname = 'public'
   ) THEN
-    ALTER TYPE public.transaction_status ADD VALUE 'partially_refunded';
+    CREATE TYPE public.transaction_status AS ENUM (
+      'pending', 'processing', 'succeeded', 'failed', 'refunded', 'partially_refunded'
+    );
   END IF;
 END $$;
+
+ALTER TYPE public.transaction_status ADD VALUE IF NOT EXISTS 'partially_refunded';
 
 -- ==============================================================================
 -- 8. ATOMIC SETTLEMENT & REFUND BALANCE RESERVATION RPCS
@@ -787,6 +789,8 @@ BEGIN
   ) THEN
     ALTER PUBLICATION supabase_realtime ADD TABLE transactions;
   END IF;
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'Supabase realtime publication table configuration notice: %', SQLERRM;
 END $$;
 
 -- ==============================================================================
@@ -814,5 +818,3 @@ BEGIN
     EXECUTE format('GRANT EXECUTE ON FUNCTION public.%I(%s) TO service_role;', r.proname, r.args);
   END LOOP;
 END $$;
-
-COMMIT;
