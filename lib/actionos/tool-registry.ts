@@ -15,6 +15,11 @@ import { QueryVehicleTool } from "./tools/query-vehicle";
 import { RegisterVehicleTool } from "./tools/register-vehicle";
 import { VerifyVehicleInspectionTool } from "./tools/verify-vehicle-inspection";
 import { RenewVehicleLicenseTool } from "./tools/renew-vehicle-license";
+import { QueryHmoPlanTool } from "./tools/query-hmo-plan";
+import { CheckHealthEligibilityTool } from "./tools/check-health-eligibility";
+import { RenewHmoPolicyTool } from "./tools/renew-hmo-policy";
+import { VerifyDriverLicenseTool } from "./tools/verify-driver-license";
+import { RenewDriverLicenseTool } from "./tools/renew-driver-license";
 
 export class ActionOSToolRegistry {
   private static instance: ActionOSToolRegistry;
@@ -48,6 +53,13 @@ export class ActionOSToolRegistry {
     this.register(new SendNotificationTool());
     this.register(new ScheduleReminderTool());
     this.register(new RefundPaymentTool());
+    // Health HMO tools
+    this.register(new QueryHmoPlanTool());
+    this.register(new CheckHealthEligibilityTool());
+    this.register(new RenewHmoPolicyTool());
+    // Driver's License tools
+    this.register(new VerifyDriverLicenseTool());
+    this.register(new RenewDriverLicenseTool());
   }
 
   public register(tool: IActionOSTool): void {
@@ -55,6 +67,10 @@ export class ActionOSToolRegistry {
   }
 
   public get(name: string): IActionOSTool | undefined {
+    return this.tools.get(name);
+  }
+
+  public getTool(name: string): IActionOSTool | undefined {
     return this.tools.get(name);
   }
 

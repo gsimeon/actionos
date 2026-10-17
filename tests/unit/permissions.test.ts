@@ -35,6 +35,38 @@ describe("ActionOSPermissions", () => {
       toolName: "verify_vehicle_inspection",
     });
     assert.equal(inspRes.allowed, true);
+
+    const hmoQueryRes = ActionOSPermissions.checkPermission({
+      role: "customer",
+      toolName: "query_hmo_plan",
+    });
+    assert.equal(hmoQueryRes.allowed, true);
+
+    const hmoEligRes = ActionOSPermissions.checkPermission({
+      role: "customer",
+      toolName: "check_health_eligibility",
+    });
+    assert.equal(hmoEligRes.allowed, true);
+
+    const hmoRenewRes = ActionOSPermissions.checkPermission({
+      role: "customer",
+      toolName: "renew_hmo_policy",
+      amount: 95000,
+    });
+    assert.equal(hmoRenewRes.allowed, true);
+
+    const dlVerifyRes = ActionOSPermissions.checkPermission({
+      role: "customer",
+      toolName: "verify_driver_license",
+    });
+    assert.equal(dlVerifyRes.allowed, true);
+
+    const dlRenewRes = ActionOSPermissions.checkPermission({
+      role: "customer",
+      toolName: "renew_driver_license",
+      amount: 15750,
+    });
+    assert.equal(dlRenewRes.allowed, true);
   });
 
   it("should require approval when customer exceeds 500k limit", () => {

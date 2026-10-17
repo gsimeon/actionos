@@ -66,6 +66,11 @@ export class ActionOSPermissions {
       case "register_vehicle":
       case "verify_vehicle_inspection":
       case "renew_vehicle_license":
+      case "query_hmo_plan":
+      case "check_health_eligibility":
+      case "renew_hmo_policy":
+      case "verify_driver_license":
+      case "renew_driver_license":
         return { allowed: true, requiresApproval: false };
 
       case "refund_payment":

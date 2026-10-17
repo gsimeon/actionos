@@ -290,6 +290,161 @@ export class ActionOSPlanner {
         break;
       }
 
+      case "renew_hmo_policy": {
+        goal = "Autonomous health insurance (HMO) renewal with NHIA verification and digital health card generation";
+        riskLevel = "high";
+        rawSteps.push(
+          {
+            action_type: "customer_lookup",
+            description: "Verify customer profile and active tenant context",
+            tool_name: "get_customer",
+            requires_confirmation: false,
+            input: { customerId },
+          },
+          {
+            action_type: "hmo_lookup",
+            description: "Query citizen NHIA enrollee record and accredited healthcare providers",
+            tool_name: "query_hmo_plan",
+            requires_confirmation: false,
+            input: {
+              nhiaNumber: understanding.entities.nhiaNumber as string,
+              nin: understanding.entities.nin as string,
+              language: understanding.entities.detectedLanguage as string,
+            },
+          },
+          {
+            action_type: "health_eligibility_check",
+            description: "Validate statutory NHIA renewal constraints and compute actuarial premium quote",
+            tool_name: "check_health_eligibility",
+            requires_confirmation: false,
+            input: {
+              nhiaNumber: understanding.entities.nhiaNumber as string,
+              nin: understanding.entities.nin as string,
+            },
+          },
+          {
+            action_type: "hmo_renewal",
+            description: "Execute HMO policy renewal, payment fee settlement, and digital health card issuance",
+            tool_name: "renew_hmo_policy",
+            requires_confirmation: true,
+            input: {
+              nhiaNumber: understanding.entities.nhiaNumber as string,
+              nin: understanding.entities.nin as string,
+              language: understanding.entities.detectedLanguage as string,
+            },
+          },
+          {
+            action_type: "notification_dispatch",
+            description: "Send multi-channel health renewal confirmation",
+            tool_name: "send_notification",
+            requires_confirmation: false,
+            input: {},
+          },
+          {
+            action_type: "reminder_schedule",
+            description: "Schedule automated HMO renewal reminders for next coverage window",
+            tool_name: "schedule_reminder",
+            requires_confirmation: false,
+            input: {},
+          }
+        );
+        break;
+      }
+
+      case "query_hmo_plan": {
+        goal = "Retrieve citizen NHIA health insurance plan and accredited healthcare provider directory";
+        riskLevel = "low";
+        rawSteps.push(
+          {
+            action_type: "customer_lookup",
+            description: "Verify customer profile and active tenant context",
+            tool_name: "get_customer",
+            requires_confirmation: false,
+            input: { customerId },
+          },
+          {
+            action_type: "hmo_lookup",
+            description: "Query citizen NHIA enrollee record and accredited healthcare providers",
+            tool_name: "query_hmo_plan",
+            requires_confirmation: false,
+            input: {
+              nhiaNumber: understanding.entities.nhiaNumber as string,
+              nin: understanding.entities.nin as string,
+              language: understanding.entities.detectedLanguage as string,
+            },
+          }
+        );
+        break;
+      }
+
+      case "renew_driver_license": {
+        goal = "Autonomous FRSC Driver's License renewal, statutory fee settlement, and biometric capture appointment scheduling";
+        riskLevel = "high";
+        rawSteps.push(
+          {
+            action_type: "customer_lookup",
+            description: "Verify customer profile and active tenant context",
+            tool_name: "get_customer",
+            requires_confirmation: false,
+            input: { customerId },
+          },
+          {
+            action_type: "dl_verification",
+            description: "Verify Driver's License authenticity and revocation status against FRSC registry",
+            tool_name: "verify_driver_license",
+            requires_confirmation: false,
+            input: {
+              dlNumber: understanding.entities.dlNumber as string,
+              language: understanding.entities.detectedLanguage as string,
+            },
+          },
+          {
+            action_type: "dl_renewal",
+            description: "Execute statutory Driver's License renewal, MVAA/FRSC fee settlement, and biometric appointment scheduling",
+            tool_name: "renew_driver_license",
+            requires_confirmation: true,
+            input: {
+              dlNumber: understanding.entities.dlNumber as string,
+              durationYears: 3,
+              language: understanding.entities.detectedLanguage as string,
+            },
+          },
+          {
+            action_type: "notification_dispatch",
+            description: "Send temporary permit and biometric appointment notification",
+            tool_name: "send_notification",
+            requires_confirmation: false,
+            input: {},
+          }
+        );
+        break;
+      }
+
+      case "verify_driver_license": {
+        goal = "Verify Driver's License authenticity on the FRSC registry";
+        riskLevel = "low";
+        rawSteps.push(
+          {
+            action_type: "customer_lookup",
+            description: "Verify customer profile",
+            tool_name: "get_customer",
+            requires_confirmation: false,
+            input: { customerId },
+          },
+          {
+            action_type: "dl_verification",
+            description: "Verify Driver's License validity on FRSC registry",
+            tool_name: "verify_driver_license",
+            requires_confirmation: false,
+            input: {
+              dlNumber: understanding.entities.dlNumber as string,
+              language: understanding.entities.detectedLanguage as string,
+            },
+          }
+        );
+        break;
+      }
+
       default: {
         goal = "Inspect customer policy details";
         riskLevel = "low";

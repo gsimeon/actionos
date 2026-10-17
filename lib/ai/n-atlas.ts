@@ -60,6 +60,27 @@ export class DeterministicDemoAIProvider implements NAtlasProvider {
       extractedPolicy = policyMatch[1].replace(/\s+/g, "-").toUpperCase();
     }
 
+    // NHIA match: NHIA-2026-00812 or NHIA202600812
+    let extractedNhia: string | undefined;
+    const nhiaMatch = raw.match(/(nhia[-/\s]?([a-z]{2,3}[-/\s]?)?[0-9]{4}[-/\s]?[0-9]{4,8})/i);
+    if (nhiaMatch) {
+      extractedNhia = nhiaMatch[1].replace(/[\s/]+/g, "-").toUpperCase();
+    }
+
+    // NIN match: 11 consecutive digits
+    let extractedNin: string | undefined;
+    const ninMatch = raw.match(/\b([0-9]{11})\b/);
+    if (ninMatch) {
+      extractedNin = ninMatch[1];
+    }
+
+    // Driver's License match: e.g. ABC12345678 or KJA-882-AB
+    let extractedDl: string | undefined;
+    const dlMatch = raw.match(/(?:dl|license|licence)?[:\s]*\b([a-z]{2,3}[-0-9]{6,14}[a-z0-9]?)\b/i);
+    if (dlMatch && (raw.includes("driver") || raw.includes("driving") || raw.includes("dl") || raw.includes("lasisi"))) {
+      extractedDl = dlMatch[1].replace(/\s+/g, "").toUpperCase();
+    }
+
     // Language detection: prioritize explicitly provided language tag, otherwise detect from text
     let detectedLang = input.language && input.language !== "en-NG"
       ? input.language.toLowerCase()
@@ -218,6 +239,9 @@ export class DeterministicDemoAIProvider implements NAtlasProvider {
 
     const isCheck =
       raw.includes("check") ||
+      raw.includes("query") ||
+      raw.includes("find") ||
+      raw.includes("lookup") ||
       raw.includes("status") ||
       raw.includes("view") ||
       raw.includes("duba") || // Hausa
@@ -239,8 +263,62 @@ export class DeterministicDemoAIProvider implements NAtlasProvider {
     let confidence = 0.5;
 
     // Specific intent resolution priority:
-    // When explicit insurance keywords are present with renewal verbs, prioritize policy renewal
-    if (isExplicitInsurance && isRenew) {
+    // HMO & Health Insurance intents
+    const isHmo =
+      raw.includes("hmo") ||
+      raw.includes("health") ||
+      raw.includes("nhia") ||
+      raw.includes("hospital") ||
+      raw.includes("clinic") ||
+      raw.includes("doctor") ||
+      raw.includes("ilera") || // Yoruba
+      raw.includes("lafiya") || // Hausa
+      raw.includes("ahuike") || // Igbo
+      raw.includes("ahụike");
+
+    // Driver's License intents
+    const isDriverLicense =
+      (raw.includes("driver") ||
+        raw.includes("driving") ||
+        raw.includes("awako") ||
+        raw.includes("awakọ") ||
+        raw.includes("tuki") ||
+        raw.includes("ikwo ugboala") ||
+        raw.includes("ịkwọ ụgbọala") ||
+        raw.includes("frsc license") ||
+        raw.includes("frsc licence") ||
+        raw.includes("driving permit") ||
+        raw.includes("driver permit") ||
+        raw.includes("lasisin tuki") ||
+        raw.includes("iwe-ase awako") ||
+        raw.includes("ikike ikwo")) &&
+      (raw.includes("license") ||
+        raw.includes("licence") ||
+        raw.includes("permit") ||
+        raw.includes("lasisi") ||
+        raw.includes("iwe") ||
+        raw.includes("ikike") ||
+        raw.includes("takarda") ||
+        raw.includes("renew") ||
+        raw.includes("expire") ||
+        raw.includes("sabunta") ||
+        raw.includes("atunto") ||
+        raw.includes("duba") ||
+        raw.includes("check"));
+
+    if (isHmo && (isRenew || raw.includes("pay") || raw.includes("renew"))) {
+      intent = "renew_hmo_policy";
+      confidence = 0.99;
+    } else if (isHmo && (isCheck || raw.includes("plan") || raw.includes("hospital") || raw.includes("tier") || raw.includes("enrollee"))) {
+      intent = "query_hmo_plan";
+      confidence = 0.98;
+    } else if (isDriverLicense && (isRenew || raw.includes("renew") || raw.includes("expire") || raw.includes("sabunta") || raw.includes("atunto"))) {
+      intent = "renew_driver_license";
+      confidence = 0.99;
+    } else if (isDriverLicense && isCheck) {
+      intent = "verify_driver_license";
+      confidence = 0.98;
+    } else if (isExplicitInsurance && isRenew) {
       intent = "renew_policy";
       confidence = 0.99;
     } else if (isVehicleLicenseRenewal) {
@@ -298,6 +376,18 @@ export class DeterministicDemoAIProvider implements NAtlasProvider {
         ? "AUTO-2026-00182"
         : undefined);
 
+    const resolvedNhiaNumber =
+      extractedNhia ||
+      (intent === "renew_hmo_policy" || intent === "query_hmo_plan"
+        ? "NHIA-2026-00812"
+        : undefined);
+
+    const resolvedDlNumber =
+      extractedDl ||
+      (intent === "renew_driver_license" || intent === "verify_driver_license"
+        ? "ABC12345678"
+        : undefined);
+
     return {
       intent,
       confidence,
@@ -307,6 +397,9 @@ export class DeterministicDemoAIProvider implements NAtlasProvider {
         vin: extractedVin,
         chassisNumber: extractedVin,
         engineNumber: extractedEngine,
+        nhiaNumber: resolvedNhiaNumber,
+        nin: extractedNin,
+        dlNumber: resolvedDlNumber,
         detectedLanguage: detectedLang,
         urgency: raw.includes("quick") || raw.includes("sharp") ? "high" : "normal",
         _aiProvider: this.name,

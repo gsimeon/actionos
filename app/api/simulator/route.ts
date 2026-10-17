@@ -3,12 +3,15 @@ import crypto from "node:crypto";
 import { frscGateway, FrscGatewayError } from "@/lib/integrations/frsc";
 import { lacvisGateway, LacvisGatewayError } from "@/lib/integrations/lacvis";
 import { niidGateway, NiidGatewayError } from "@/lib/integrations/niid";
+import { nhiaGateway, NhiaGatewayError } from "@/lib/integrations/nhia";
 import { POST as paymentWebhookHandler } from "@/app/api/webhooks/payment/route";
 import { resolveExecutionContext, DEMO_CONTEXT } from "@/lib/security/auth-context";
 import type { AuthenticatedExecutionContext } from "@/types/actionos";
 import { getRepositoryContainer } from "@/lib/repositories";
 import { VerifyNiidTool } from "@/lib/actionos/tools/verify-niid";
 import { VerifyVehicleInspectionTool } from "@/lib/actionos/tools/verify-vehicle-inspection";
+import { QueryHmoPlanTool } from "@/lib/actionos/tools/query-hmo-plan";
+import { VerifyDriverLicenseTool } from "@/lib/actionos/tools/verify-driver-license";
 import { createWorkflowExecutionContext } from "@/lib/runtime/execution-context";
 
 export async function POST(req: Request) {
@@ -72,7 +75,35 @@ export async function POST(req: Request) {
       });
     }
 
-    // 4. Multi-Rail Payment Webhook Simulation
+    // 4. NHIA Health Insurance Portal Probe
+    if (action === "probe_nhia") {
+      const nhiaNumber = (body.nhiaNumber || "NHIA-2026-00812").trim();
+      const nin = body.nin ? body.nin.trim() : undefined;
+      const res = await nhiaGateway.verifyEnrollee({
+        nhiaNumber,
+        nin,
+      });
+      return NextResponse.json({
+        success: true,
+        action,
+        latencyMs: Math.round(performance.now() - start),
+        data: res,
+      });
+    }
+
+    // 5. FRSC Driver's License Registry Probe
+    if (action === "probe_dl") {
+      const dlNumber = (body.dlNumber || "ABC12345678").trim();
+      const res = await frscGateway.verifyDriverLicense(dlNumber);
+      return NextResponse.json({
+        success: true,
+        action,
+        latencyMs: Math.round(performance.now() - start),
+        data: res,
+      });
+    }
+
+    // 6. Multi-Rail Payment Webhook Simulation
     if (action === "simulate_webhook") {
       const provider = (body.provider || "paystack") as "paystack" | "flutterwave";
       const eventType = body.eventType || (provider === "paystack" ? "charge.success" : "charge.completed");
@@ -236,6 +267,52 @@ export async function POST(req: Request) {
           description: "NIID records indicate ACTIVE-999-OK has 240 days of valid coverage remaining; duplicate renewal blocked.",
           latencyMs: Math.round(performance.now() - start),
           outcome: toolRes.data?.activeExistingPolicy ? "DUPLICATE_RENEWAL_PREVENTED" : "CLEARED",
+          details: toolRes.data,
+        });
+      }
+
+      if (scenarioId === "hmo_statutory_renewal") {
+        const hmoTool = new QueryHmoPlanTool();
+        const wfContext = createWorkflowExecutionContext(context, {
+          sessionId: `sim_scen_hmo_${Date.now()}`,
+          planId: "plan_sim_hmo",
+          channel: "web",
+          language: "en-NG",
+          isSimulated: true,
+        });
+
+        const toolRes = await hmoTool.execute({ nhiaNumber: "NHIA-2026-00812" }, wfContext);
+        return NextResponse.json({
+          success: true,
+          action,
+          scenarioId,
+          title: "NHIA Health Insurance (HMO) Statutory Renewal",
+          description: "Enrollee NHIA-2026-00812 verified on central health registry; Silver plan eligible for renewal.",
+          latencyMs: Math.round(performance.now() - start),
+          outcome: toolRes.data?.enrollee?.eligibleForRenewal ? "ELIGIBLE_FOR_RENEWAL" : "INELIGIBLE",
+          details: toolRes.data,
+        });
+      }
+
+      if (scenarioId === "driver_license_renewal") {
+        const dlTool = new VerifyDriverLicenseTool();
+        const wfContext = createWorkflowExecutionContext(context, {
+          sessionId: `sim_scen_dl_${Date.now()}`,
+          planId: "plan_sim_dl",
+          channel: "web",
+          language: "en-NG",
+          isSimulated: true,
+        });
+
+        const toolRes = await dlTool.execute({ dlNumber: "ABC12345678" }, wfContext);
+        return NextResponse.json({
+          success: true,
+          action,
+          scenarioId,
+          title: "FRSC Driver's License Statutory Renewal",
+          description: "Driver's license ABC12345678 verified on national FRSC registry; biometric appointment allocated.",
+          latencyMs: Math.round(performance.now() - start),
+          outcome: toolRes.data?.verified ? "VERIFIED_FOR_RENEWAL" : "DENIED",
           details: toolRes.data,
         });
       }

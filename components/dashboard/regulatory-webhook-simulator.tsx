@@ -14,9 +14,13 @@ import {
   Play,
   Copy,
   Check,
+  HeartPulse,
+  CreditCard,
+  MessageSquare,
 } from "lucide-react";
+import { WhatsAppSimulator } from "./whatsapp-simulator";
 
-type SimulatorTab = "regulatory" | "webhooks" | "scenarios";
+type SimulatorTab = "regulatory" | "webhooks" | "scenarios" | "whatsapp";
 type RegulatorySubAgency = "frsc" | "lacvis" | "niid";
 type PaymentProvider = "paystack" | "flutterwave";
 
@@ -223,6 +227,16 @@ export function RegulatoryWebhookSimulator() {
             }`}
           >
             Judge Scenarios
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("whatsapp")}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+              tab === "whatsapp" ? "bg-white text-emerald-800 shadow-xs" : "text-slate-600 hover:text-slate-900"
+            }`}
+          >
+            <MessageSquare className="w-3.5 h-3.5 text-emerald-600" />
+            <span>WhatsApp Bot</span>
           </button>
         </div>
       </div>
@@ -761,6 +775,66 @@ export function RegulatoryWebhookSimulator() {
                 <span>Launch NIID Conflict Scenario</span>
               </button>
             </div>
+
+            {/* Scenario 4: NHIA HMO Statutory Renewal */}
+            <div className="p-4 rounded-2xl border border-slate-200 bg-slate-50/60 hover:bg-slate-50 transition-all flex flex-col justify-between space-y-3">
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="px-2 py-0.5 rounded-md bg-rose-100 text-rose-800 text-[10px] font-bold font-mono">
+                    HEALTH HMO
+                  </span>
+                  <HeartPulse className="w-4 h-4 text-rose-600" />
+                </div>
+                <h3 className="text-sm font-bold text-slate-900">NHIA HMO Statutory Renewal</h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Probes central NHIA registry for <code className="text-slate-800 font-bold">NHIA-2026-00812</code>, confirms active Silver tier eligibility, and issues digital biometric card.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                disabled={Boolean(scenarioLoading)}
+                onClick={() => handleRunScenario("hmo_statutory_renewal")}
+                className="w-full py-2 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2"
+              >
+                {scenarioLoading === "hmo_statutory_renewal" ? (
+                  <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                )}
+                <span>Launch NHIA HMO Scenario</span>
+              </button>
+            </div>
+
+            {/* Scenario 5: FRSC Driver's License Biometric Renewal */}
+            <div className="p-4 rounded-2xl border border-slate-200 bg-slate-50/60 hover:bg-slate-50 transition-all flex flex-col justify-between space-y-3">
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="px-2 py-0.5 rounded-md bg-indigo-100 text-indigo-800 text-[10px] font-bold font-mono">
+                    DRIVER LICENSE
+                  </span>
+                  <CreditCard className="w-4 h-4 text-indigo-600" />
+                </div>
+                <h3 className="text-sm font-bold text-slate-900">FRSC Driver&apos;s License Renewal</h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Probes national DL registry for <code className="text-slate-800 font-bold">ABC12345678</code>, settles MVAA statutory fee, and allocates biometric appointment.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                disabled={Boolean(scenarioLoading)}
+                onClick={() => handleRunScenario("driver_license_renewal")}
+                className="w-full py-2 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2"
+              >
+                {scenarioLoading === "driver_license_renewal" ? (
+                  <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                )}
+                <span>Launch Driver&apos;s License Scenario</span>
+              </button>
+            </div>
           </div>
 
           {/* Scenario Execution Log */}
@@ -783,6 +857,13 @@ export function RegulatoryWebhookSimulator() {
               </pre>
             </div>
           )}
+        </div>
+      )}
+
+      {/* TAB 4: INTERACTIVE WHATSAPP OMNICHANNEL SIMULATOR */}
+      {tab === "whatsapp" && (
+        <div className="animate-in fade-in duration-150">
+          <WhatsAppSimulator />
         </div>
       )}
     </div>

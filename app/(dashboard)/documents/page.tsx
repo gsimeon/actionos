@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { formatDateTime } from "@/lib/utils";
 import type { Document } from "@/types/database";
+import { StatutoryDocumentViewer } from "@/components/actionos/statutory-document-viewer";
 
 const TYPE_TABS = [
   { id: "all", label: "All Documents" },
@@ -287,143 +288,11 @@ export default function DocumentsPage() {
 
       {/* Official Certificate Preview Modal */}
       {selectedDoc && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-          <div className="relative w-full max-w-2xl rounded-3xl border border-slate-200 bg-white p-6 sm:p-10 shadow-2xl overflow-y-auto max-h-[90vh]">
-            <button
-              type="button"
-              onClick={() => setSelectedDoc(null)}
-              className="absolute top-5 right-5 p-2 rounded-xl bg-slate-100 text-slate-500 hover:text-slate-800 hover:bg-slate-200 cursor-pointer"
-            >
-              <X className="w-5 h-5" />
-            </button>
-
-            {/* Sandbox Disclosure Notice */}
-            <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 flex items-start gap-2.5">
-              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-              <div>
-                <strong className="font-bold">Sandbox Test Fixture:</strong> This certificate is a simulated demonstration fixture for the NITDA 2026 AI Innovation Challenge. In production deployment, ActionOS connects directly to the live NAICOM NIID API and Lagos State MVAA database for statutory registration.
-              </div>
-            </div>
-
-            {/* Certificate Document Frame */}
-            <div className="border-4 border-double border-emerald-600/30 p-6 sm:p-8 rounded-2xl bg-gradient-to-b from-emerald-50/30 via-white to-slate-50 text-slate-900 shadow-inner relative overflow-hidden">
-              {/* Simulated Watermark Background */}
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-[0.06] select-none rotate-[-30deg]">
-                <span className="text-4xl sm:text-6xl font-black text-slate-900 tracking-widest uppercase border-4 border-slate-900 p-4 text-center">
-                  SIMULATED TEST FIXTURE<br />NON-STATUTORY RECORD
-                </span>
-              </div>
-
-              {/* Seal watermark */}
-              <div className="absolute right-6 top-6 opacity-5 pointer-events-none">
-                <ShieldCheck className="w-40 h-40 text-emerald-600" />
-              </div>
-
-              {/* Certificate Header */}
-              <div className="text-center border-b border-emerald-200 pb-5 mb-6">
-                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-300 text-[10px] font-black uppercase tracking-widest mb-2">
-                  {selectedDoc.file_name.includes("Vehicle_License")
-                    ? "FEDERAL REPUBLIC OF NIGERIA • LAGOS STATE MVAA"
-                    : selectedDoc.file_name.includes("Roadworthiness")
-                    ? "LAGOS STATE COMPUTERIZED VEHICLE INSPECTION (LACVIS)"
-                    : "FEDERAL REPUBLIC OF NIGERIA • NAICOM REGISTERED"}
-                </div>
-                <h2 className="text-xl sm:text-2xl font-black tracking-tight text-slate-900 uppercase">
-                  {selectedDoc.file_name.includes("Vehicle_License")
-                    ? "Official Motor Vehicle License"
-                    : selectedDoc.file_name.includes("Roadworthiness")
-                    ? "Roadworthiness Certificate of Compliance"
-                    : "Vehicle Insurance Certificate"}
-                </h2>
-                <div className="text-xs text-slate-500 mt-1">
-                  {selectedDoc.file_name.includes("Vehicle_License")
-                    ? "Issued under Lagos State Motor Vehicle Administration Agency Law (Simulation)"
-                    : selectedDoc.file_name.includes("Roadworthiness")
-                    ? "Issued under Lagos State Vehicle Inspection Service Regulations (Simulation)"
-                    : "Issued under the Motor Vehicles (Third Party Insurance) Act (Simulation)"}
-                </div>
-                <div className="mt-2">
-                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-100 text-amber-800 border border-amber-300">
-                    NON-STATUTORY TEST FIXTURE (SANDBOX)
-                  </span>
-                </div>
-              </div>
-
-              {/* Certificate Metadata Grid */}
-              <div className="grid grid-cols-2 gap-4 text-xs mb-6">
-                <div>
-                  <span className="text-slate-500 block text-[10px] font-bold uppercase">DOCUMENT ID</span>
-                  <span className="font-mono font-bold text-slate-900">{selectedDoc.id}</span>
-                  <span className="text-slate-500 block text-[11px] mt-0.5">Type: {selectedDoc.document_type}</span>
-                </div>
-
-                <div>
-                  <span className="text-slate-500 block text-[10px] font-bold uppercase">FILE NAME</span>
-                  <span className="font-mono font-bold text-emerald-700 text-xs truncate block" title={selectedDoc.file_name}>
-                    {selectedDoc.file_name}
-                  </span>
-                  <span className="text-slate-500 block text-[11px] mt-0.5">MIME: {selectedDoc.mime_type}</span>
-                </div>
-
-                <div>
-                  <span className="text-slate-500 block text-[10px] font-bold uppercase">CUSTOMER REFERENCE</span>
-                  <span className="font-mono text-slate-800 text-xs truncate block" title={selectedDoc.customer_id}>
-                    {selectedDoc.customer_id}
-                  </span>
-                </div>
-
-                <div>
-                  <span className="text-slate-500 block text-[10px] font-bold uppercase">ISSUED AT</span>
-                  <span className="font-mono text-slate-800 text-xs">
-                    {formatDateTime(selectedDoc.created_at)}
-                  </span>
-                </div>
-              </div>
-
-              {/* Verification & Barcode */}
-              <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center justify-between gap-4">
-                <div className="space-y-1">
-                  <div className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                    <span>Cryptographic Verification Seal</span>
-                  </div>
-                  <div className="font-mono text-[10px] text-emerald-800 break-all">
-                    DOC-HASH: sha256:{selectedDoc.id.replace(/-/g, "").slice(0, 32)}
-                  </div>
-                  <div className="text-[10px] text-emerald-700">
-                    Storage Path: {selectedDoc.file_path}
-                  </div>
-                </div>
-
-                <div className="w-16 h-16 bg-white rounded-lg border border-emerald-300 p-1 flex items-center justify-center shrink-0">
-                  <QrCode className="w-12 h-12 text-slate-800" />
-                </div>
-              </div>
-
-              {/* Footer */}
-              <div className="text-center text-[10px] text-slate-400 mt-6 border-t border-slate-200 pt-3">
-                ActionOS Autonomous Action Engine &bull; Non-repudiation Guaranteed &bull; Immutable Action Ledger™ Audited
-              </div>
-            </div>
-
-            <div className="mt-6 flex items-center justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => setSelectedDoc(null)}
-                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all cursor-pointer"
-              >
-                Close
-              </button>
-              <button
-                type="button"
-                onClick={() => window.print()}
-                className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-2 transition-all shadow-md shadow-emerald-600/20 cursor-pointer"
-              >
-                <Printer className="w-3.5 h-3.5" />
-                <span>Print Document</span>
-              </button>
-            </div>
-          </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <StatutoryDocumentViewer
+            document={selectedDoc}
+            onClose={() => setSelectedDoc(null)}
+          />
         </div>
       )}
     </div>

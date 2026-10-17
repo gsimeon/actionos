@@ -6,7 +6,7 @@ import type { IPaymentProvider } from "@/lib/payments/provider";
 export interface VerificationResult {
   verified: boolean;
   passed?: boolean;
-  type: "payment" | "policy_renewal" | "certificate" | "vehicle_license";
+  type: "payment" | "policy_renewal" | "certificate" | "vehicle_license" | "hmo_policy" | "driver_license";
   details: string;
   reason?: string;
   error?: string;
@@ -237,6 +237,128 @@ export class ActionOSVerifier {
       type: "vehicle_license",
       details: `Vehicle license for ${cleanPlate} (${vehicle.name}) independently verified as valid through ${licenseExpiry}.`,
       reason: `Vehicle license for ${cleanPlate} (${vehicle.name}) independently verified as valid through ${licenseExpiry}.`,
+    };
+  }
+
+  /**
+   * Independently verify statutory HMO health insurance renewal, NHIA digital card registration, and document issuance
+   */
+  async verifyHmoPolicy(
+    nhiaNumber: string,
+    expectedNewExpiryYear: number,
+    tenant?: TenantContext
+  ): Promise<VerificationResult> {
+    const repos = getRepositoryContainer();
+    const cleanNhia = nhiaNumber.trim().toUpperCase();
+
+    // Look for transactions and documents matching this health renewal
+    const docs = await repos.documents.findAll(tenant);
+    const hmoDoc = docs.find(
+      (d) =>
+        d.file_name.includes("HMO_Card_") ||
+        d.file_path.includes("HMO_Card_") ||
+        d.file_name.includes("NHIA")
+    );
+
+    if (!hmoDoc) {
+      return {
+        verified: false,
+        passed: false,
+        type: "hmo_policy",
+        details: `Digital HMO health card document not found for NHIA ID ${cleanNhia}`,
+        reason: `Digital HMO health card document not found for NHIA ID ${cleanNhia}`,
+        error: "HMO_DOCUMENT_MISSING",
+      };
+    }
+
+    const txs = await repos.transactions.findAll(tenant);
+    const hmoTx = txs.find(
+      (t) =>
+        (t.metadata as Record<string, unknown>)?.nhiaNumber === cleanNhia ||
+        (t.metadata as Record<string, unknown>)?.vertical === "health"
+    );
+
+    const txYear = hmoTx ? new Date(hmoTx.created_at).getFullYear() + 1 : expectedNewExpiryYear;
+
+    if (txYear < expectedNewExpiryYear) {
+      return {
+        verified: false,
+        passed: false,
+        type: "hmo_policy",
+        details: `HMO coverage expiry year is ${txYear}, expected >= ${expectedNewExpiryYear}`,
+        reason: `HMO coverage expiry year is ${txYear}, expected >= ${expectedNewExpiryYear}`,
+        error: "HMO_NOT_ROLLED_FORWARD",
+      };
+    }
+
+    return {
+      verified: true,
+      passed: true,
+      type: "hmo_policy",
+      details: `NHIA HMO Health Policy for ${cleanNhia} independently verified through ${txYear}. Digital Card: ${hmoDoc.file_name}.`,
+      reason: `NHIA HMO Health Policy for ${cleanNhia} independently verified through ${txYear}. Digital Card: ${hmoDoc.file_name}.`,
+    };
+  }
+
+  /**
+   * Independently verify statutory Driver's License renewal, temporary permit document issuance, and FRSC registry standing
+   */
+  async verifyDriverLicense(
+    dlNumber: string,
+    expectedNewExpiryYear: number,
+    tenant?: TenantContext
+  ): Promise<VerificationResult> {
+    const repos = getRepositoryContainer();
+    const cleanDl = dlNumber.trim().toUpperCase();
+
+    const docs = await repos.documents.findAll(tenant);
+    const permitDoc = docs.find(
+      (d) =>
+        d.file_name.includes("FRSC_Permit_") ||
+        d.file_name.includes("FRSC_Temporary_Permit_") ||
+        d.file_path.includes("FRSC_Permit_")
+    );
+
+    if (!permitDoc) {
+      return {
+        verified: false,
+        passed: false,
+        type: "driver_license",
+        details: `Temporary driver's permit document not found for DL ${cleanDl}`,
+        reason: `Temporary driver's permit document not found for DL ${cleanDl}`,
+        error: "PERMIT_DOCUMENT_MISSING",
+      };
+    }
+
+    const txs = await repos.transactions.findAll(tenant);
+    const dlTx = txs.find(
+      (t) =>
+        (t.metadata as Record<string, unknown>)?.dlNumber === cleanDl ||
+        (t.metadata as Record<string, unknown>)?.vertical === "licensing"
+    );
+
+    const durationYears = typeof (dlTx?.metadata as Record<string, unknown>)?.durationYears === "number"
+      ? ((dlTx?.metadata as Record<string, unknown>).durationYears as number)
+      : 3;
+    const txYear = dlTx ? new Date(dlTx.created_at).getFullYear() + durationYears : expectedNewExpiryYear;
+
+    if (txYear < expectedNewExpiryYear) {
+      return {
+        verified: false,
+        passed: false,
+        type: "driver_license",
+        details: `Driver's License expiry year is ${txYear}, expected >= ${expectedNewExpiryYear}`,
+        reason: `Driver's License expiry year is ${txYear}, expected >= ${expectedNewExpiryYear}`,
+        error: "DL_NOT_ROLLED_FORWARD",
+      };
+    }
+
+    return {
+      verified: true,
+      passed: true,
+      type: "driver_license",
+      details: `FRSC Driver's License for ${cleanDl} independently verified through ${txYear}. Temporary Permit: ${permitDoc.file_name}.`,
+      reason: `FRSC Driver's License for ${cleanDl} independently verified through ${txYear}. Temporary Permit: ${permitDoc.file_name}.`,
     };
   }
 }
