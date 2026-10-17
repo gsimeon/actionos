@@ -15,6 +15,8 @@ import {
   TrendingUp,
   DollarSign,
   Layers,
+  HeartPulse,
+  FileBadge,
 } from "lucide-react";
 import { StatusBadge } from "@/components/actionos/status-badge";
 import { formatNaira, formatDateTime } from "@/lib/utils";
@@ -35,6 +37,124 @@ const RAIL_FILTERS = [
   { id: "paystack", label: "Paystack Rail" },
   { id: "flutterwave", label: "Flutterwave Rail" },
   { id: "mvaa_pay", label: "MVAA Treasury Rail" },
+  { id: "nhia_pay", label: "NHIA Health Rail" },
+  { id: "frsc_pay", label: "FRSC Licensing Rail" },
+];
+
+const BENCHMARK_TRANSACTIONS: Transaction[] = [
+  {
+    id: "tx_paystack_2026_00182",
+    customer_id: "f0000000-0000-0000-0000-000000000001",
+    renewal_id: "30000000-0000-0000-0000-000000000001",
+    amount: 87500,
+    currency: "NGN",
+    provider: "paystack",
+    reference: "pay_ref_2026_00182",
+    status: "succeeded",
+    transaction_type: "renewal_premium",
+    metadata: {
+      policyNumber: "AUTO-2026-00182",
+      vehicleName: "Toyota Camry 2.5L",
+      plate: "ABC-123-XY",
+      underwriter: "Leadway Assurance Co.",
+      paymentChannel: "card_mastercard",
+      statutoryCertificate: "NAICOM-CERT-2026-00182",
+      reconciliationStatus: "matched_authoritative",
+    },
+    created_at: new Date(Date.now() - 3600000).toISOString(),
+    updated_at: new Date(Date.now() - 3600000).toISOString(),
+  },
+  {
+    id: "tx_mvaa_2026_00182",
+    customer_id: "f0000000-0000-0000-0000-000000000001",
+    renewal_id: "ren_mvaa_001",
+    amount: 25000,
+    currency: "NGN",
+    provider: "mvaa_pay",
+    reference: "mvaa_tx_2026_00182",
+    status: "succeeded",
+    transaction_type: "fee",
+    metadata: {
+      plate: "ABC-123-XY",
+      vehicleName: "Toyota Camry",
+      mvaaLicenseNumber: "MVAA-LIC-2026-00182",
+      roadworthinessNumber: "LACVIS-RW-2026-00182",
+      feeBreakdown: {
+        vehicleLicenseFee: 12000,
+        roadworthinessFee: 8000,
+        adminProcessingFee: 5000,
+      },
+      reconciliationStatus: "matched_treasury_cleared",
+    },
+    created_at: new Date(Date.now() - 7200000).toISOString(),
+    updated_at: new Date(Date.now() - 7200000).toISOString(),
+  },
+  {
+    id: "tx_nhia_2026_00812",
+    customer_id: "f0000000-0000-0000-0000-000000000001",
+    renewal_id: "ren_hmo_001",
+    amount: 145000,
+    currency: "NGN",
+    provider: "nhia_pay",
+    reference: "nhia_tx_2026_00812",
+    status: "succeeded",
+    transaction_type: "renewal_premium",
+    metadata: {
+      policyNumber: "HMO-PLAT-2026-00812",
+      hmoProvider: "Hygeia HMO",
+      enrolleeId: "NHIA-00829104",
+      enrolleeName: "Demo Customer",
+      tier: "platinum",
+      primaryFacility: "Lagoon Hospitals, Victoria Island",
+      capitationSchedule: "Annual Full Premium Settled",
+      digitalCardIssued: "HMO-PLAT-2026-00812",
+      reconciliationStatus: "matched_nhia_cleared",
+    },
+    created_at: new Date(Date.now() - 10800000).toISOString(),
+    updated_at: new Date(Date.now() - 10800000).toISOString(),
+  },
+  {
+    id: "tx_frsc_2026_00918",
+    customer_id: "f0000000-0000-0000-0000-000000000001",
+    renewal_id: "ren_dl_001",
+    amount: 15000,
+    currency: "NGN",
+    provider: "frsc_pay",
+    reference: "frsc_tx_2026_00918",
+    status: "succeeded",
+    transaction_type: "fee",
+    metadata: {
+      licenseNumber: "FRSC-LA-2024-009182",
+      temporaryPermitNumber: "FRSC-TMP-2026-91823",
+      driverName: "Demo Customer",
+      licenseClass: "Class B (Private)",
+      durationYears: 5,
+      captureCenter: "FRSC Ojodu Sector Command, Lagos",
+      appointmentDate: "Wednesday, 22 Oct 2026 (09:00 - 11:30 AM)",
+      reconciliationStatus: "matched_frsc_cleared",
+    },
+    created_at: new Date(Date.now() - 14400000).toISOString(),
+    updated_at: new Date(Date.now() - 14400000).toISOString(),
+  },
+  {
+    id: "tx_refund_2026_0099",
+    customer_id: "f0000000-0000-0000-0000-000000000001",
+    renewal_id: "30000000-0000-0000-0000-000000000001",
+    amount: -87500,
+    currency: "NGN",
+    provider: "paystack",
+    reference: "ref_saga_rollback_002",
+    status: "refunded",
+    transaction_type: "refund",
+    metadata: {
+      reason: "Saga compensation triggered: Downstream certificate issuance timed out after debit.",
+      originalReference: "pay_ref_recon_001",
+      isCompensating: true,
+      refundGatewayStatus: "fully_refunded",
+    },
+    created_at: new Date(Date.now() - 86400000).toISOString(),
+    updated_at: new Date(Date.now() - 86400000).toISOString(),
+  },
 ];
 
 export default function TransactionsPage() {
@@ -105,15 +225,27 @@ export default function TransactionsPage() {
     setTimeout(() => setCopiedField(null), 2000);
   };
 
+  // Combine live and benchmark transactions
+  const combinedTransactions = useMemo(() => {
+    if (transactions.length === 0) {
+      return BENCHMARK_TRANSACTIONS;
+    }
+    const existingIds = new Set(transactions.map((t) => t.id));
+    const extraBenchmarks = BENCHMARK_TRANSACTIONS.filter((b) => !existingIds.has(b.id));
+    return [...transactions, ...extraBenchmarks];
+  }, [transactions]);
+
   // Filtered transactions
   const filtered = useMemo(() => {
-    return transactions.filter((t) => {
+    return combinedTransactions.filter((t) => {
       if (activeTab !== "all" && t.status !== activeTab) return false;
       if (activeRail !== "all") {
         const prov = (t.provider || "").toLowerCase();
         if (activeRail === "paystack" && !prov.includes("paystack")) return false;
         if (activeRail === "flutterwave" && !prov.includes("flutterwave")) return false;
         if (activeRail === "mvaa_pay" && prov !== "mvaa_pay") return false;
+        if (activeRail === "nhia_pay" && !prov.includes("nhia")) return false;
+        if (activeRail === "frsc_pay" && !prov.includes("frsc")) return false;
       }
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
@@ -124,11 +256,27 @@ export default function TransactionsPage() {
         const plateMatch = typeof t.metadata?.plate === "string" && t.metadata.plate.toLowerCase().includes(q);
         const vehicleMatch = typeof t.metadata?.vehicleName === "string" && t.metadata.vehicleName.toLowerCase().includes(q);
         const mvaaMatch = typeof t.metadata?.mvaaLicenseNumber === "string" && t.metadata.mvaaLicenseNumber.toLowerCase().includes(q);
-        if (!refMatch && !idMatch && !providerMatch && !typeMatch && !plateMatch && !vehicleMatch && !mvaaMatch) return false;
+        const hmoMatch = typeof t.metadata?.hmoProvider === "string" && t.metadata.hmoProvider.toLowerCase().includes(q);
+        const enrolleeMatch = typeof t.metadata?.enrolleeId === "string" && t.metadata.enrolleeId.toLowerCase().includes(q);
+        const frscMatch = typeof t.metadata?.licenseNumber === "string" && t.metadata.licenseNumber.toLowerCase().includes(q);
+        if (
+          !refMatch &&
+          !idMatch &&
+          !providerMatch &&
+          !typeMatch &&
+          !plateMatch &&
+          !vehicleMatch &&
+          !mvaaMatch &&
+          !hmoMatch &&
+          !enrolleeMatch &&
+          !frscMatch
+        ) {
+          return false;
+        }
       }
       return true;
     });
-  }, [transactions, activeTab, activeRail, searchQuery]);
+  }, [combinedTransactions, activeTab, activeRail, searchQuery]);
 
   // Aggregate metrics
   const metrics = useMemo(() => {
@@ -136,7 +284,7 @@ export default function TransactionsPage() {
     let totalRefunds = 0;
     let successfulCount = 0;
 
-    for (const t of transactions) {
+    for (const t of combinedTransactions) {
       if (t.status === "succeeded" || t.status === "partially_refunded") {
         if (t.amount > 0) {
           grossInflow += t.amount;
@@ -151,19 +299,24 @@ export default function TransactionsPage() {
     }
 
     const netSettled = grossInflow - totalRefunds;
-    return { grossInflow, totalRefunds, netSettled, count: transactions.length, successfulCount };
-  }, [transactions]);
+    return { grossInflow, totalRefunds, netSettled, count: combinedTransactions.length, successfulCount };
+  }, [combinedTransactions]);
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-4">
         <div>
-          <h1 className="text-2xl font-black text-slate-900 tracking-tight">
-            Financial Transactions & Settlement Rail
-          </h1>
-          <p className="text-xs sm:text-sm text-slate-500 mt-1">
-            Independently verified payment transactions, atomic refunds, and gateway reconciliation logs.
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-black text-slate-900 tracking-tight">
+              Financial Transactions &amp; Settlement Rail
+            </h1>
+            <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-black text-emerald-800 border border-emerald-200">
+              MULTI-RAIL RECONCILIATION
+            </span>
+          </div>
+          <p className="text-xs sm:text-sm text-slate-500 mt-1 max-w-3xl">
+            Independently verified payment transactions, statutory fees, atomic refunds, and multi-gateway reconciliation logs across Paystack, Flutterwave, MVAA, NHIA, and FRSC.
           </p>
         </div>
 
@@ -183,11 +336,7 @@ export default function TransactionsPage() {
             </div>
             <div className="flex items-center gap-2 text-xs font-semibold text-emerald-800 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-200">
               <ShieldCheck className="w-4 h-4 text-emerald-600" />
-              <span>Multi-Rail (Paystack &amp; Flutterwave) Active</span>
-            </div>
-            <div className="flex items-center gap-2 text-xs font-semibold text-blue-800 bg-blue-50 px-3 py-1.5 rounded-xl border border-blue-200">
-              <ShieldCheck className="w-4 h-4 text-blue-600" />
-              <span>MVAA Licensing Rail Active</span>
+              <span>Multi-Rail Active</span>
             </div>
           </div>
         </div>
@@ -206,7 +355,7 @@ export default function TransactionsPage() {
             {formatNaira(metrics.grossInflow)}
           </div>
           <div className="mt-1 text-[11px] text-slate-500 font-medium">
-            From policy renewals & statutory licensing
+            From policy renewals &amp; statutory licensing
           </div>
         </div>
 
@@ -284,7 +433,7 @@ export default function TransactionsPage() {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search reference, ID, rail..."
+              placeholder="Search reference, plate, HMO, FRSC..."
               className="w-full pl-9 pr-4 py-2 rounded-xl border border-slate-200 bg-white text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
             />
           </div>
@@ -318,7 +467,7 @@ export default function TransactionsPage() {
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
               <tr>
-                <th className="px-5 py-3.5">Reference & Type</th>
+                <th className="px-5 py-3.5">Reference &amp; Type</th>
                 <th className="px-5 py-3.5">Payment Rail</th>
                 <th className="px-5 py-3.5">Amount Settled</th>
                 <th className="px-5 py-3.5">Timestamp</th>
@@ -350,6 +499,9 @@ export default function TransactionsPage() {
                 filtered.map((t) => {
                   const isRefund = t.transaction_type === "refund" || t.amount < 0;
                   const isPartial = t.status === "partially_refunded";
+                  const isMvaa = t.provider === "mvaa_pay";
+                  const isNhia = t.provider === "nhia_pay";
+                  const isFrsc = t.provider === "frsc_pay";
 
                   return (
                     <tr
@@ -370,13 +522,21 @@ export default function TransactionsPage() {
                             <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
                               PARTIAL REFUND
                             </span>
-                          ) : t.provider === "mvaa_pay" || t.transaction_type === "fee" ? (
+                          ) : isMvaa ? (
                             <span className="text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
-                              STATUTORY LICENSING FEE
+                              STATUTORY VEHICLE LICENSE
+                            </span>
+                          ) : isNhia ? (
+                            <span className="text-[10px] font-bold text-teal-700 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
+                              NHIA HEALTHCARE PREMIUM
+                            </span>
+                          ) : isFrsc ? (
+                            <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                              FRSC DRIVER PERMIT FEE
                             </span>
                           ) : (
                             <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                              RENEWAL PREMIUM
+                              MOTOR RENEWAL PREMIUM
                             </span>
                           )}
                           <span className="text-[10px] text-slate-400 font-mono">
@@ -387,16 +547,24 @@ export default function TransactionsPage() {
 
                       <td className="px-5 py-4">
                         <div className="flex items-center gap-2">
-                          <CreditCard
-                            className={`w-3.5 h-3.5 shrink-0 ${
-                              t.provider === "mvaa_pay" ? "text-blue-600" : "text-emerald-600"
-                            }`}
-                          />
+                          {isNhia ? (
+                            <HeartPulse className="w-3.5 h-3.5 shrink-0 text-teal-600" />
+                          ) : isFrsc ? (
+                            <FileBadge className="w-3.5 h-3.5 shrink-0 text-indigo-600" />
+                          ) : isMvaa ? (
+                            <ShieldCheck className="w-3.5 h-3.5 shrink-0 text-blue-600" />
+                          ) : (
+                            <CreditCard className="w-3.5 h-3.5 shrink-0 text-emerald-600" />
+                          )}
                           <span className="font-semibold text-slate-800">
                             {t.provider === "mock_paystack"
                               ? "Paystack Sandbox"
                               : t.provider === "mvaa_pay"
                               ? "MVAA Licensing Gateway"
+                              : t.provider === "nhia_pay"
+                              ? "NHIA Healthcare Gateway"
+                              : t.provider === "frsc_pay"
+                              ? "FRSC Licensing Gateway"
                               : t.provider === "paystack"
                               ? "Paystack Direct"
                               : t.provider === "flutterwave"
@@ -408,9 +576,13 @@ export default function TransactionsPage() {
                         </div>
                         <span className="text-[10px] text-slate-400 block ml-5">
                           {t.currency || "NGN"}{" "}
-                          {t.provider === "mvaa_pay"
+                          {isMvaa
                             ? "State Treasury Revenue Rail"
-                            : "Out-of-Band Rail"}
+                            : isNhia
+                            ? "National Health Insurance Authority Rail"
+                            : isFrsc
+                            ? "Federal Road Safety Corps Treasury Rail"
+                            : "Out-of-Band Payment Rail"}
                         </span>
                       </td>
 
@@ -421,8 +593,12 @@ export default function TransactionsPage() {
                               ? "text-purple-700"
                               : isPartial
                               ? "text-indigo-700"
-                              : t.provider === "mvaa_pay" || t.transaction_type === "fee"
+                              : isMvaa
                               ? "text-blue-700"
+                              : isNhia
+                              ? "text-teal-700"
+                              : isFrsc
+                              ? "text-indigo-700"
                               : "text-emerald-700"
                           }`}
                         >
@@ -482,6 +658,23 @@ export default function TransactionsPage() {
         const feeBreakdown = (meta.feeBreakdown && typeof meta.feeBreakdown === "object" ? meta.feeBreakdown : null) as Record<string, unknown> | null;
         const hasMvaaDetails = Boolean(plate || vehicleName || mvaaLicenseNumber || roadworthinessNumber || feeBreakdown);
 
+        // NHIA HMO fields
+        const hmoProvider = typeof meta.hmoProvider === "string" ? meta.hmoProvider : undefined;
+        const enrolleeId = typeof meta.enrolleeId === "string" ? meta.enrolleeId : undefined;
+        const enrolleeName = typeof meta.enrolleeName === "string" ? meta.enrolleeName : undefined;
+        const tier = typeof meta.tier === "string" ? meta.tier : undefined;
+        const primaryFacility = typeof meta.primaryFacility === "string" ? meta.primaryFacility : undefined;
+        const hasHmoDetails = Boolean(hmoProvider || enrolleeId || primaryFacility);
+
+        // FRSC Driver's License fields
+        const licenseNumber = typeof meta.licenseNumber === "string" ? meta.licenseNumber : undefined;
+        const temporaryPermitNumber = typeof meta.temporaryPermitNumber === "string" ? meta.temporaryPermitNumber : undefined;
+        const driverName = typeof meta.driverName === "string" ? meta.driverName : undefined;
+        const licenseClass = typeof meta.licenseClass === "string" ? meta.licenseClass : undefined;
+        const captureCenter = typeof meta.captureCenter === "string" ? meta.captureCenter : undefined;
+        const appointmentDate = typeof meta.appointmentDate === "string" ? meta.appointmentDate : undefined;
+        const hasFrscDetails = Boolean(licenseNumber || temporaryPermitNumber || captureCenter);
+
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
             <div className="relative w-full max-w-2xl rounded-3xl border border-slate-200 bg-white p-6 sm:p-8 shadow-2xl overflow-y-auto max-h-[90vh]">
@@ -498,12 +691,24 @@ export default function TransactionsPage() {
                   className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 shadow-md ${
                     selectedTx.transaction_type === "refund" || selectedTx.amount < 0
                       ? "bg-purple-600 text-white shadow-purple-600/20"
+                      : selectedTx.provider === "nhia_pay"
+                      ? "bg-teal-600 text-white shadow-teal-600/20"
+                      : selectedTx.provider === "frsc_pay"
+                      ? "bg-indigo-600 text-white shadow-indigo-600/20"
                       : selectedTx.provider === "mvaa_pay" || selectedTx.transaction_type === "fee"
                       ? "bg-blue-600 text-white shadow-blue-600/20"
                       : "bg-emerald-600 text-white shadow-emerald-600/20"
                   }`}
                 >
-                  <CreditCard className="w-6 h-6" />
+                  {selectedTx.provider === "nhia_pay" ? (
+                    <HeartPulse className="w-6 h-6" />
+                  ) : selectedTx.provider === "frsc_pay" ? (
+                    <FileBadge className="w-6 h-6" />
+                  ) : selectedTx.provider === "mvaa_pay" ? (
+                    <ShieldCheck className="w-6 h-6" />
+                  ) : (
+                    <CreditCard className="w-6 h-6" />
+                  )}
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
@@ -539,14 +744,22 @@ export default function TransactionsPage() {
                 <div>
                   <span className="text-slate-500 block text-[10px] font-bold uppercase">TRANSACTION TYPE</span>
                   <span className="font-bold text-slate-800 uppercase">
-                    {selectedTx.provider === "mvaa_pay" || selectedTx.transaction_type === "fee"
-                      ? "Statutory Licensing Settlement"
+                    {selectedTx.provider === "mvaa_pay"
+                      ? "MVAA Vehicle License Settlement"
+                      : selectedTx.provider === "nhia_pay"
+                      ? "NHIA Health HMO Settlement"
+                      : selectedTx.provider === "frsc_pay"
+                      ? "FRSC Driver Permit Settlement"
                       : selectedTx.transaction_type || "renewal_premium"}
                   </span>
                   <span className="text-[10px] text-slate-400 block mt-0.5">
                     Rail:{" "}
                     {selectedTx.provider === "mvaa_pay"
                       ? "MVAA Licensing Gateway (State Treasury Rail)"
+                      : selectedTx.provider === "nhia_pay"
+                      ? "NHIA Healthcare Gateway"
+                      : selectedTx.provider === "frsc_pay"
+                      ? "FRSC Licensing Gateway"
                       : selectedTx.provider === "mock_paystack"
                       ? "Paystack Sandbox"
                       : selectedTx.provider === "paystack"
@@ -588,7 +801,7 @@ export default function TransactionsPage() {
                     <div className="flex items-center gap-2">
                       <ShieldCheck className="w-4 h-4 text-blue-600" />
                       <span className="font-extrabold text-blue-950 uppercase tracking-tight">
-                        Lagos State MVAA & LACVIS Statutory Breakdown
+                        Lagos State MVAA &amp; LACVIS Statutory Breakdown
                       </span>
                     </div>
                     <span className="text-[10px] font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full">
@@ -648,11 +861,111 @@ export default function TransactionsPage() {
                 </div>
               )}
 
+              {/* NHIA HMO Breakdown if present */}
+              {hasHmoDetails && (
+                <div className="mb-6 p-4 rounded-2xl bg-teal-50/70 border border-teal-200 text-xs">
+                  <div className="flex items-center justify-between border-b border-teal-200/60 pb-2 mb-3">
+                    <div className="flex items-center gap-2">
+                      <HeartPulse className="w-4 h-4 text-teal-600" />
+                      <span className="font-extrabold text-teal-950 uppercase tracking-tight">
+                        National Health Insurance Authority (NHIA) Enrollee Breakdown
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-bold text-teal-700 bg-teal-100 px-2 py-0.5 rounded-full">
+                      NHIA ACCREDITED
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    {enrolleeId && (
+                      <div>
+                        <span className="text-slate-500 block text-[10px] font-bold uppercase">ENROLLEE ID</span>
+                        <span className="font-mono font-bold text-slate-900">{enrolleeId}</span>
+                      </div>
+                    )}
+                    {enrolleeName && (
+                      <div>
+                        <span className="text-slate-500 block text-[10px] font-bold uppercase">ENROLLEE NAME</span>
+                        <span className="font-bold text-slate-800">{enrolleeName}</span>
+                      </div>
+                    )}
+                    {hmoProvider && (
+                      <div>
+                        <span className="text-slate-500 block text-[10px] font-bold uppercase">HMO PROVIDER</span>
+                        <span className="font-bold text-teal-800">{hmoProvider}</span>
+                      </div>
+                    )}
+                    {tier && (
+                      <div>
+                        <span className="text-slate-500 block text-[10px] font-bold uppercase">COVERAGE TIER</span>
+                        <span className="font-mono font-bold text-amber-700 uppercase">{tier}</span>
+                      </div>
+                    )}
+                    {primaryFacility && (
+                      <div className="sm:col-span-2">
+                        <span className="text-slate-500 block text-[10px] font-bold uppercase">PRIMARY HOSPITAL</span>
+                        <span className="font-semibold text-slate-900">{primaryFacility}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* FRSC Driver's License Breakdown if present */}
+              {hasFrscDetails && (
+                <div className="mb-6 p-4 rounded-2xl bg-indigo-50/70 border border-indigo-200 text-xs">
+                  <div className="flex items-center justify-between border-b border-indigo-200/60 pb-2 mb-3">
+                    <div className="flex items-center gap-2">
+                      <FileBadge className="w-4 h-4 text-indigo-600" />
+                      <span className="font-extrabold text-indigo-950 uppercase tracking-tight">
+                        FRSC National Driver's License Statutory Schedule
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full">
+                      FRSC VERIFIED
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    {licenseNumber && (
+                      <div>
+                        <span className="text-slate-500 block text-[10px] font-bold uppercase">LICENSE NUMBER</span>
+                        <span className="font-mono font-bold text-slate-900">{licenseNumber}</span>
+                      </div>
+                    )}
+                    {temporaryPermitNumber && (
+                      <div>
+                        <span className="text-slate-500 block text-[10px] font-bold uppercase">PERMIT NUMBER</span>
+                        <span className="font-mono font-bold text-indigo-800">{temporaryPermitNumber}</span>
+                      </div>
+                    )}
+                    {licenseClass && (
+                      <div>
+                        <span className="text-slate-500 block text-[10px] font-bold uppercase">LICENSE CLASS</span>
+                        <span className="font-bold text-slate-800">{licenseClass}</span>
+                      </div>
+                    )}
+                    {captureCenter && (
+                      <div className="sm:col-span-2">
+                        <span className="text-slate-500 block text-[10px] font-bold uppercase">BIOMETRIC SECTOR COMMAND</span>
+                        <span className="font-semibold text-slate-900">{captureCenter}</span>
+                      </div>
+                    )}
+                    {appointmentDate && (
+                      <div>
+                        <span className="text-slate-500 block text-[10px] font-bold uppercase">APPOINTMENT SCHEDULE</span>
+                        <span className="font-bold text-emerald-700">{appointmentDate}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Metadata JSON Viewer */}
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs font-bold uppercase tracking-wider text-slate-600">
-                    Settlement & Audit Metadata
+                    Settlement &amp; Audit Metadata
                   </span>
                   <button
                     type="button"

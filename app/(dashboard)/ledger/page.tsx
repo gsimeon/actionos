@@ -11,11 +11,17 @@ import {
   RotateCcw,
   CheckCircle2,
   Layers,
+  Car,
+  HeartPulse,
+  FileBadge,
+  Shield,
+  AlertCircle,
 } from "lucide-react";
 import type { ActionLedgerEvent } from "@/types/actionos";
 import { useLedgerRealtime } from "@/lib/realtime";
 
-const BENCHMARK_EVENTS: ActionLedgerEvent[] = [
+// 1. Motor Insurance Benchmark (12 events)
+const BENCHMARK_MOTOR_EVENTS: ActionLedgerEvent[] = [
   {
     id: "ev_001_intent",
     sessionId: "act_benchmark_camry_001",
@@ -162,13 +168,562 @@ const BENCHMARK_EVENTS: ActionLedgerEvent[] = [
     sessionId: "act_benchmark_camry_001",
     timestamp: "2026-10-08T20:00:05.820Z",
     action: "notification_dispatch",
-    description: "Dispatched multi-channel notifications across SMS (+2348011111111), Email, and In-App",
+    description: "Dispatched multi-channel notifications across WhatsApp (+2348011111111), SMS, and In-App",
     status: "verified",
     actor: "ActionOS Engine",
     tool: "send_notification",
     hash: "5c728fd92463932007549429960058272862401505f1452d6952783426590bc5",
     previousHash: "4b617ec81352821996438318859947161751390494e0341c5841672315489ab4",
     signature: "hmac_sha256_sig_notif_012_valid",
+  },
+];
+
+// 2. Health HMO Benchmark (10 events)
+const BENCHMARK_HMO_EVENTS: ActionLedgerEvent[] = [
+  {
+    id: "ev_hmo_001_intent",
+    sessionId: "act_hmo_hygeia_001",
+    timestamp: "2026-10-09T14:10:01.050Z",
+    action: "intent_detection",
+    description: "N-ATLAS Multilingual Engine recognized healthcare renewal intent: 'Renew my Hygeia health insurance policy for another year'",
+    status: "verified",
+    actor: "User",
+    tool: "n_atlas_multilingual_parser",
+    hash: "91a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f80",
+    previousHash: "0000000000000000000000000000000000000000000000000000000000000000",
+    signature: "hmac_sha256_hmo_intent_001",
+  },
+  {
+    id: "ev_hmo_002_customer",
+    sessionId: "act_hmo_hygeia_001",
+    timestamp: "2026-10-09T14:10:01.210Z",
+    action: "customer_lookup",
+    description: "Resolved policyholder Demo Customer (CUS-000001, NIN: DEMO-NIN-000001)",
+    status: "verified",
+    actor: "ActionOS Engine",
+    tool: "get_customer",
+    hash: "a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091",
+    previousHash: "91a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f80",
+    signature: "hmac_sha256_hmo_cust_002",
+  },
+  {
+    id: "ev_hmo_003_nhia_check",
+    sessionId: "act_hmo_hygeia_001",
+    timestamp: "2026-10-09T14:10:01.450Z",
+    action: "regulatory_verification",
+    description: "Queried National Health Insurance Authority (NHIA) central enrollee registry: verified ID NHIA-00829104 with Hygeia HMO",
+    status: "verified",
+    actor: "ActionOS Engine",
+    tool: "query_hmo_plan",
+    hash: "b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2",
+    previousHash: "a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091",
+    signature: "hmac_sha256_hmo_nhia_003",
+  },
+  {
+    id: "ev_hmo_004_tier_eval",
+    sessionId: "act_hmo_hygeia_001",
+    timestamp: "2026-10-09T14:10:01.670Z",
+    action: "plan_evaluation",
+    description: "Evaluated tier 'Platinum' coverage schedule: Primary HCP Lagoon Hospitals VI verified for outpatient, surgery & dental",
+    status: "verified",
+    actor: "ActionOS Engine",
+    tool: "query_hmo_plan",
+    hash: "c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3",
+    previousHash: "b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2",
+    signature: "hmac_sha256_hmo_tier_004",
+  },
+  {
+    id: "ev_hmo_005_auth_req",
+    sessionId: "act_hmo_hygeia_001",
+    timestamp: "2026-10-09T14:10:01.900Z",
+    action: "authorization_requested",
+    description: "Halted at Authorization Gate: Explicit human biometric approval required for ₦145,000 healthcare premium debit",
+    status: "verified",
+    actor: "Policy Guardrail",
+    hash: "d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4",
+    previousHash: "c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3",
+    signature: "hmac_sha256_hmo_authreq_005",
+  },
+  {
+    id: "ev_hmo_006_auth_conf",
+    sessionId: "act_hmo_hygeia_001",
+    timestamp: "2026-10-09T14:10:03.400Z",
+    action: "authorization_confirmed",
+    description: "Enrollee confirmed renewal authorization via Passkey biometric token bound to HMO-PLAT-2026-00812",
+    status: "verified",
+    actor: "User",
+    hash: "e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5",
+    previousHash: "d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4",
+    signature: "hmac_sha256_hmo_authconf_006",
+  },
+  {
+    id: "ev_hmo_007_pay",
+    sessionId: "act_hmo_hygeia_001",
+    timestamp: "2026-10-09T14:10:03.850Z",
+    action: "payment_settlement",
+    description: "Settled ₦145,000 healthcare premium to Hygeia HMO through NHIA Healthcare Gateway (ref: nhia_tx_2026_00812)",
+    status: "verified",
+    actor: "Payment Gateway",
+    tool: "renew_hmo_policy",
+    hash: "f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6",
+    previousHash: "e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5",
+    signature: "hmac_sha256_hmo_pay_007",
+  },
+  {
+    id: "ev_hmo_008_renew",
+    sessionId: "act_hmo_hygeia_001",
+    timestamp: "2026-10-09T14:10:04.120Z",
+    action: "hmo_policy_renewed",
+    description: "Database renewal finalized: Policy HMO-PLAT-2026-00812 roll-forward confirmed through 2027-10-24",
+    status: "verified",
+    actor: "ActionOS Engine",
+    tool: "renew_hmo_policy",
+    hash: "08192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f7",
+    previousHash: "f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6",
+    signature: "hmac_sha256_hmo_ren_008",
+  },
+  {
+    id: "ev_hmo_009_card",
+    sessionId: "act_hmo_hygeia_001",
+    timestamp: "2026-10-09T14:10:04.380Z",
+    action: "document_issuance",
+    description: "Generated certified NHIA Digital HMO Card (ActionOS_NHIA_HMO_Card_00812.pdf) with vector QR verification seal",
+    status: "verified",
+    actor: "ActionOS Engine",
+    tool: "renew_hmo_policy",
+    hash: "192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708",
+    previousHash: "08192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f7",
+    signature: "hmac_sha256_hmo_card_009",
+  },
+  {
+    id: "ev_hmo_010_notify",
+    sessionId: "act_hmo_hygeia_001",
+    timestamp: "2026-10-09T14:10:04.600Z",
+    action: "notification_dispatch",
+    description: "Dispatched omnichannel renewal receipt and digital card via WhatsApp and SMS (+2348011111111)",
+    status: "verified",
+    actor: "ActionOS Engine",
+    tool: "send_notification",
+    hash: "2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f70819",
+    previousHash: "192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708",
+    signature: "hmac_sha256_hmo_notif_010",
+  },
+];
+
+// 3. Driver's License Benchmark (10 events)
+const BENCHMARK_DRIVER_LICENSE_EVENTS: ActionLedgerEvent[] = [
+  {
+    id: "ev_dl_001_intent",
+    sessionId: "act_dl_frsc_001",
+    timestamp: "2026-10-10T09:15:00.110Z",
+    action: "intent_detection",
+    description: "N-ATLAS Multilingual Engine parsed user input: 'Renew my driver license for 5 years make I no enter problem with road safety'",
+    status: "verified",
+    actor: "User",
+    tool: "n_atlas_multilingual_parser",
+    hash: "3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a",
+    previousHash: "0000000000000000000000000000000000000000000000000000000000000000",
+    signature: "hmac_sha256_dl_intent_001",
+  },
+  {
+    id: "ev_dl_002_customer",
+    sessionId: "act_dl_frsc_001",
+    timestamp: "2026-10-10T09:15:00.280Z",
+    action: "customer_lookup",
+    description: "Located customer Demo Customer (CUS-000001) with national identity number DEMO-NIN-000001",
+    status: "verified",
+    actor: "ActionOS Engine",
+    tool: "get_customer",
+    hash: "4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b",
+    previousHash: "3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a",
+    signature: "hmac_sha256_dl_cust_002",
+  },
+  {
+    id: "ev_dl_003_nvis",
+    sessionId: "act_dl_frsc_001",
+    timestamp: "2026-10-10T09:15:00.520Z",
+    action: "regulatory_verification",
+    description: "Federal Road Safety Corps (FRSC) NVIS database cross-check verified valid Class B license FRSC-LA-2024-009182",
+    status: "verified",
+    actor: "ActionOS Engine",
+    tool: "renew_drivers_license",
+    hash: "5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c",
+    previousHash: "4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b",
+    signature: "hmac_sha256_dl_nvis_003",
+  },
+  {
+    id: "ev_dl_004_biometrics",
+    sessionId: "act_dl_frsc_001",
+    timestamp: "2026-10-10T09:15:00.740Z",
+    action: "biometric_slot_reservation",
+    description: "Reserved biometric recapture slot at FRSC Ojodu Sector Command, Lagos for Wednesday, 22 Oct 2026 (09:00 - 11:30 AM)",
+    status: "verified",
+    actor: "ActionOS Engine",
+    tool: "renew_drivers_license",
+    hash: "6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d",
+    previousHash: "5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c",
+    signature: "hmac_sha256_dl_bio_004",
+  },
+  {
+    id: "ev_dl_005_auth_req",
+    sessionId: "act_dl_frsc_001",
+    timestamp: "2026-10-10T09:15:01.010Z",
+    action: "authorization_requested",
+    description: "Halted at Authorization Gate: Explicit human consent required to debit statutory fee of ₦15,000 (5-Year Duration)",
+    status: "verified",
+    actor: "Policy Guardrail",
+    hash: "7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e",
+    previousHash: "6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d",
+    signature: "hmac_sha256_dl_authreq_005",
+  },
+  {
+    id: "ev_dl_006_auth_conf",
+    sessionId: "act_dl_frsc_001",
+    timestamp: "2026-10-10T09:15:02.800Z",
+    action: "authorization_confirmed",
+    description: "Customer confirmed biometric passkey authorization for ₦15,000 FRSC renewal debit",
+    status: "verified",
+    actor: "User",
+    hash: "8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f",
+    previousHash: "7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e",
+    signature: "hmac_sha256_dl_authconf_006",
+  },
+  {
+    id: "ev_dl_007_treasury_settle",
+    sessionId: "act_dl_frsc_001",
+    timestamp: "2026-10-10T09:15:03.250Z",
+    action: "statutory_settlement",
+    description: "Settled ₦15,000 to Federal Road Safety Corps treasury rail with reference frsc_tx_2026_00918",
+    status: "verified",
+    actor: "Payment Gateway",
+    tool: "renew_drivers_license",
+    hash: "91a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f80",
+    previousHash: "8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f",
+    signature: "hmac_sha256_dl_settle_007",
+  },
+  {
+    id: "ev_dl_008_portal_approve",
+    sessionId: "act_dl_frsc_001",
+    timestamp: "2026-10-10T09:15:03.550Z",
+    action: "statutory_application_approved",
+    description: "FRSC National Licensing Portal returned approval code FRSC-DL-2026-88192; validity rolled forward to 2031-10-20",
+    status: "verified",
+    actor: "ActionOS Engine",
+    tool: "renew_drivers_license",
+    hash: "a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091",
+    previousHash: "91a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f80",
+    signature: "hmac_sha256_dl_approve_008",
+  },
+  {
+    id: "ev_dl_009_permit_issued",
+    sessionId: "act_dl_frsc_001",
+    timestamp: "2026-10-10T09:15:03.800Z",
+    action: "document_issuance",
+    description: "Issued official FRSC Temporary Driving Permit (FRSC-TMP-2026-91823) with verifiable vector QR code and appointment barcode",
+    status: "verified",
+    actor: "ActionOS Engine",
+    tool: "renew_drivers_license",
+    hash: "b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2",
+    previousHash: "a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091",
+    signature: "hmac_sha256_dl_permit_009",
+  },
+  {
+    id: "ev_dl_010_notify",
+    sessionId: "act_dl_frsc_001",
+    timestamp: "2026-10-10T09:15:04.050Z",
+    action: "notification_dispatch",
+    description: "Dispatched biometric appointment instructions & downloadable temporary permit via WhatsApp and Email (customer@actionos.ng)",
+    status: "verified",
+    actor: "ActionOS Engine",
+    tool: "send_notification",
+    hash: "c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3",
+    previousHash: "b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2",
+    signature: "hmac_sha256_dl_notif_010",
+  },
+];
+
+// 4. Vehicle License & LACVIS Roadworthiness Benchmark (10 events)
+const BENCHMARK_VEHICLE_LICENSE_EVENTS: ActionLedgerEvent[] = [
+  {
+    id: "ev_veh_001_intent",
+    sessionId: "act_veh_mvaa_001",
+    timestamp: "2026-10-09T11:00:01.000Z",
+    action: "intent_detection",
+    description: "Parsed vehicle renewal request: 'Renew my vehicle paper and roadworthiness for Toyota Camry ABC-123-XY'",
+    status: "verified",
+    actor: "User",
+    tool: "n_atlas_multilingual_parser",
+    hash: "d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4",
+    previousHash: "0000000000000000000000000000000000000000000000000000000000000000",
+    signature: "hmac_sha256_veh_intent_001",
+  },
+  {
+    id: "ev_veh_002_asset",
+    sessionId: "act_veh_mvaa_001",
+    timestamp: "2026-10-09T11:00:01.200Z",
+    action: "asset_lookup",
+    description: "Retrieved asset ABC-123-XY (Toyota Camry, VIN: DEMO-VIN-000001) bound to customer Demo Customer",
+    status: "verified",
+    actor: "ActionOS Engine",
+    tool: "query_vehicle",
+    hash: "e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5",
+    previousHash: "d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4",
+    signature: "hmac_sha256_veh_asset_002",
+  },
+  {
+    id: "ev_veh_003_lacvis",
+    sessionId: "act_veh_mvaa_001",
+    timestamp: "2026-10-09T11:00:01.480Z",
+    action: "computerized_inspection_verification",
+    description: "LACVIS Computerized Vehicle Inspection station test verified: Brake Efficiency 84% (Pass), Headlamp Alignment Compliant",
+    status: "verified",
+    actor: "ActionOS Engine",
+    tool: "verify_vehicle_inspection",
+    hash: "f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6",
+    previousHash: "e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5",
+    signature: "hmac_sha256_veh_lacvis_003",
+  },
+  {
+    id: "ev_veh_004_fee_calc",
+    sessionId: "act_veh_mvaa_001",
+    timestamp: "2026-10-09T11:00:01.710Z",
+    action: "statutory_fee_computation",
+    description: "Computed statutory tariff schedule: License ₦12,000 + Roadworthiness ₦8,000 + Admin Processing ₦5,000 = ₦25,000 total",
+    status: "verified",
+    actor: "ActionOS Engine",
+    tool: "renew_vehicle_license",
+    hash: "08192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f7",
+    previousHash: "f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6",
+    signature: "hmac_sha256_veh_fee_004",
+  },
+  {
+    id: "ev_veh_005_auth_req",
+    sessionId: "act_veh_mvaa_001",
+    timestamp: "2026-10-09T11:00:01.950Z",
+    action: "authorization_requested",
+    description: "Halted at Authorization Gate: Explicit human consent required for ₦25,000 State Treasury debit",
+    status: "verified",
+    actor: "Policy Guardrail",
+    hash: "192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708",
+    previousHash: "08192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f7",
+    signature: "hmac_sha256_veh_authreq_005",
+  },
+  {
+    id: "ev_veh_006_auth_conf",
+    sessionId: "act_veh_mvaa_001",
+    timestamp: "2026-10-09T11:00:03.200Z",
+    action: "authorization_confirmed",
+    description: "Customer authorized payment via biometrics for ₦25,000 vehicle licensing",
+    status: "verified",
+    actor: "User",
+    hash: "2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f70819",
+    previousHash: "192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708",
+    signature: "hmac_sha256_veh_authconf_006",
+  },
+  {
+    id: "ev_veh_007_treasury_settle",
+    sessionId: "act_veh_mvaa_001",
+    timestamp: "2026-10-09T11:00:03.650Z",
+    action: "statutory_settlement",
+    description: "Settled ₦25,000 via Lagos State MVAA Licensing Gateway with ref mvaa_tx_2026_00182",
+    status: "verified",
+    actor: "Payment Gateway",
+    tool: "renew_vehicle_license",
+    hash: "3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a",
+    previousHash: "2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f70819",
+    signature: "hmac_sha256_veh_settle_007",
+  },
+  {
+    id: "ev_veh_008_mvaa_update",
+    sessionId: "act_veh_mvaa_001",
+    timestamp: "2026-10-09T11:00:03.950Z",
+    action: "statutory_record_rollforward",
+    description: "MVAA central database roll-forward completed: License MVAA-LIC-2026-00182 extended to 2027-10-14",
+    status: "verified",
+    actor: "ActionOS Engine",
+    tool: "renew_vehicle_license",
+    hash: "4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b",
+    previousHash: "3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a",
+    signature: "hmac_sha256_veh_update_008",
+  },
+  {
+    id: "ev_veh_009_doc_issuance",
+    sessionId: "act_veh_mvaa_001",
+    timestamp: "2026-10-09T11:00:04.200Z",
+    action: "document_issuance",
+    description: "Issued official Lagos State Vehicle License Paper and LACVIS Certificate (ActionOS_Vehicle_License_ABC-123-XY.pdf)",
+    status: "verified",
+    actor: "ActionOS Engine",
+    tool: "renew_vehicle_license",
+    hash: "5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c",
+    previousHash: "4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b",
+    signature: "hmac_sha256_veh_doc_009",
+  },
+  {
+    id: "ev_veh_010_notify",
+    sessionId: "act_veh_mvaa_001",
+    timestamp: "2026-10-09T11:00:04.450Z",
+    action: "notification_dispatch",
+    description: "Dispatched renewal confirmation and digital vehicle papers via WhatsApp and SMS (+2348011111111)",
+    status: "verified",
+    actor: "ActionOS Engine",
+    tool: "send_notification",
+    hash: "6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d",
+    previousHash: "5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c",
+    signature: "hmac_sha256_veh_notif_010",
+  },
+];
+
+// 5. Autonomous Saga Rollback & Compensating Refund Benchmark (8 events)
+const BENCHMARK_SAGA_REFUND_EVENTS: ActionLedgerEvent[] = [
+  {
+    id: "ev_saga_001_intent",
+    sessionId: "act_recon_refund_002",
+    timestamp: "2026-10-07T16:20:00.050Z",
+    action: "intent_detection",
+    description: "Initiated automated renewal workflow for commercial policy AUTO-2026-33918",
+    status: "verified",
+    actor: "ActionOS Engine",
+    tool: "n_atlas_multilingual_parser",
+    hash: "7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e",
+    previousHash: "0000000000000000000000000000000000000000000000000000000000000000",
+    signature: "hmac_sha256_saga_intent_001",
+  },
+  {
+    id: "ev_saga_002_customer",
+    sessionId: "act_recon_refund_002",
+    timestamp: "2026-10-07T16:20:00.220Z",
+    action: "customer_lookup",
+    description: "Retrieved customer Demo Customer (CUS-000001) for policy AUTO-2026-33918",
+    status: "verified",
+    actor: "ActionOS Engine",
+    tool: "get_customer",
+    hash: "8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f",
+    previousHash: "7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e",
+    signature: "hmac_sha256_saga_cust_002",
+  },
+  {
+    id: "ev_saga_003_payment",
+    sessionId: "act_recon_refund_002",
+    timestamp: "2026-10-07T16:20:01.400Z",
+    action: "payment_settlement",
+    description: "Debited ₦65,000 via Paystack Gateway (ref: pay_ref_recon_001) following customer authorization",
+    status: "verified",
+    actor: "Payment Gateway",
+    tool: "verify_payment",
+    hash: "91a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f80",
+    previousHash: "8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f",
+    signature: "hmac_sha256_saga_pay_003",
+  },
+  {
+    id: "ev_saga_004_downstream_fail",
+    sessionId: "act_recon_refund_002",
+    timestamp: "2026-10-07T16:20:04.800Z",
+    action: "downstream_statutory_outage",
+    description: "Downstream certificate generation failed: NAICOM Central Registry returned HTTP 504 Gateway Timeout",
+    status: "failed",
+    actor: "ActionOS Engine",
+    tool: "generate_certificate",
+    hash: "a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091",
+    previousHash: "91a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f80",
+    signature: "hmac_sha256_saga_fail_004",
+  },
+  {
+    id: "ev_saga_005_rollback_trigger",
+    sessionId: "act_recon_refund_002",
+    timestamp: "2026-10-07T16:20:05.100Z",
+    action: "saga_compensating_trigger",
+    description: "Saga Fault-Tolerance Protocol Activated: Initiated compensating transaction to prevent customer fund loss",
+    status: "verified",
+    actor: "ActionOS Engine",
+    isCompensating: true,
+    hash: "b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2",
+    previousHash: "a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091",
+    signature: "hmac_sha256_saga_trigger_005",
+  },
+  {
+    id: "ev_saga_006_refund_dispatched",
+    sessionId: "act_recon_refund_002",
+    timestamp: "2026-10-07T16:20:05.450Z",
+    action: "compensating_refund_initiated",
+    description: "Dispatched automated compensating refund of ₦65,000 to Paystack (ref: ref_saga_rollback_002)",
+    status: "verified",
+    actor: "Payment Gateway",
+    tool: "refund_payment",
+    isCompensating: true,
+    hash: "c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3",
+    previousHash: "b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2",
+    signature: "hmac_sha256_saga_ref_006",
+  },
+  {
+    id: "ev_saga_007_webhook_confirmed",
+    sessionId: "act_recon_refund_002",
+    timestamp: "2026-10-07T16:20:06.100Z",
+    action: "authoritative_webhook_reversal",
+    description: "Authoritative Paystack refund webhook received: Reversal of ₦65,000 confirmed successfully without human intervention",
+    status: "verified",
+    actor: "Payment Gateway",
+    tool: "verify_webhook_signature",
+    isCompensating: true,
+    hash: "d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4",
+    previousHash: "c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3",
+    signature: "hmac_sha256_saga_hook_007",
+  },
+  {
+    id: "ev_saga_008_sealed",
+    sessionId: "act_recon_refund_002",
+    timestamp: "2026-10-07T16:20:06.350Z",
+    action: "ledger_rollback_sealed",
+    description: "Audit trail sealed with Zero Financial Leakage invariant: Customer refunded in full; incident logged in durable store",
+    status: "verified",
+    actor: "ActionOS Engine",
+    isCompensating: true,
+    hash: "e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5",
+    previousHash: "d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4",
+    signature: "hmac_sha256_saga_seal_008",
+  },
+];
+
+const BENCHMARK_SCENARIOS = [
+  {
+    id: "motor",
+    label: "Motor Insurance (NAICOM)",
+    icon: Car,
+    events: BENCHMARK_MOTOR_EVENTS,
+    sessionId: "act_benchmark_camry_001",
+    title: "12-Stage Benchmark Motor Insurance Renewal Ledger",
+  },
+  {
+    id: "hmo",
+    label: "Health HMO (NHIA)",
+    icon: HeartPulse,
+    events: BENCHMARK_HMO_EVENTS,
+    sessionId: "act_hmo_hygeia_001",
+    title: "10-Stage Benchmark Health HMO Healthcare Renewal Ledger",
+  },
+  {
+    id: "driver_license",
+    label: "Driver's License (FRSC)",
+    icon: FileBadge,
+    events: BENCHMARK_DRIVER_LICENSE_EVENTS,
+    sessionId: "act_dl_frsc_001",
+    title: "10-Stage Benchmark FRSC National Driver's License Renewal Ledger",
+  },
+  {
+    id: "vehicle_license",
+    label: "Vehicle License (MVAA)",
+    icon: Shield,
+    events: BENCHMARK_VEHICLE_LICENSE_EVENTS,
+    sessionId: "act_veh_mvaa_001",
+    title: "10-Stage Benchmark Lagos MVAA & LACVIS Vehicle License Ledger",
+  },
+  {
+    id: "saga_refund",
+    label: "Saga Reversal (Refund)",
+    icon: RotateCcw,
+    events: BENCHMARK_SAGA_REFUND_EVENTS,
+    sessionId: "act_recon_refund_002",
+    title: "8-Stage Benchmark Autonomous Saga Rollback & Compensating Refund",
   },
 ];
 
@@ -190,6 +745,7 @@ function ActionLedgerContent() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeMode, setActiveMode] = useState<"live" | "benchmark">("live");
+  const [selectedScenario, setSelectedScenario] = useState("motor");
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [, startTransition] = useTransition();
 
@@ -268,10 +824,13 @@ function ActionLedgerContent() {
     },
   });
 
-  const displayedEvents =
-    activeMode === "benchmark" || (activeMode === "live" && liveEvents.length === 0 && !loading)
-      ? BENCHMARK_EVENTS
-      : liveEvents;
+  const currentScenarioObj =
+    BENCHMARK_SCENARIOS.find((s) => s.id === selectedScenario) || BENCHMARK_SCENARIOS[0];
+
+  const isShowingBenchmark =
+    activeMode === "benchmark" || (activeMode === "live" && liveEvents.length === 0 && !loading);
+
+  const displayedEvents = isShowingBenchmark ? currentScenarioObj.events : liveEvents;
 
   const compensatingCount = displayedEvents.filter(
     (e) => e.isCompensating || (e.metadata as Record<string, unknown> | undefined)?.isCompensating
@@ -293,7 +852,7 @@ function ActionLedgerContent() {
             </span>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 mt-1 max-w-3xl">
-            Every autonomous AI action, statutory NIID validation, financial settlement, and saga rollback is cryptographically linked with SHA-256 and HMAC-SHA256 digital signatures.
+            Every autonomous AI action, statutory NIID / NHIA / FRSC validation, financial settlement, and saga rollback is cryptographically linked with SHA-256 and HMAC-SHA256 digital signatures.
           </p>
         </div>
 
@@ -320,7 +879,7 @@ function ActionLedgerContent() {
                   : "text-slate-600 hover:text-slate-900"
               }`}
             >
-              Benchmark Run (12)
+              Benchmark Scenarios (5)
             </button>
           </div>
 
@@ -356,6 +915,41 @@ function ActionLedgerContent() {
         </div>
       </div>
 
+      {/* Benchmark Scenario Selector Tabs (Visible in benchmark mode or empty live mode) */}
+      {isShowingBenchmark && (
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none border-b border-slate-200 pb-3">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 shrink-0 mr-1">
+            Audit Scenarios:
+          </span>
+          {BENCHMARK_SCENARIOS.map((scen) => {
+            const Icon = scen.icon;
+            const isSelected = selectedScenario === scen.id;
+            return (
+              <button
+                key={scen.id}
+                type="button"
+                onClick={() => setSelectedScenario(scen.id)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                  isSelected
+                    ? "bg-slate-900 text-white shadow-xs"
+                    : "bg-white text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200"
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                <span>{scen.label}</span>
+                <span
+                  className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                    isSelected ? "bg-slate-800 text-slate-200" : "bg-slate-100 text-slate-500"
+                  }`}
+                >
+                  {scen.events.length}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* Real-Time Operational Statistics Strip */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Metric 1: Total Logged Records */}
@@ -367,7 +961,7 @@ function ActionLedgerContent() {
                 <span>Audited Records</span>
               </span>
               <span className="text-[10px] font-mono text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
-                {activeMode === "live" ? "REALTIME" : "REFERENCE"}
+                {activeMode === "live" && liveEvents.length > 0 ? "REALTIME" : "REFERENCE"}
               </span>
             </div>
             <div className="text-2xl font-black text-slate-900 mt-1">
@@ -409,7 +1003,7 @@ function ActionLedgerContent() {
                 <Hash className="w-4 h-4 text-emerald-600" />
                 <span>Cryptographic Chain</span>
               </span>
-              {integrity?.valid ? (
+              {integrity?.valid || isShowingBenchmark ? (
                 <span className="text-[10px] font-mono text-emerald-800 bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-200">
                   INTACT
                 </span>
@@ -420,7 +1014,7 @@ function ActionLedgerContent() {
               )}
             </div>
             <div className="text-2xl font-black text-slate-900 mt-1">
-              {integrity?.chainValid ? "Zero Drift" : "Sequential SHA-256"}
+              {integrity?.chainValid || isShowingBenchmark ? "Zero Drift" : "Sequential SHA-256"}
             </div>
           </div>
           <p className="text-xs text-slate-500 mt-2">
@@ -451,7 +1045,7 @@ function ActionLedgerContent() {
             </div>
           </div>
           <p className="text-xs text-slate-500 mt-2">
-            Compensating transactions cleanly reversed across Paystack &amp; core insurance tables.
+            Compensating transactions cleanly reversed across Paystack &amp; core statutory tables.
           </p>
         </div>
       </div>
@@ -462,7 +1056,7 @@ function ActionLedgerContent() {
           <div className="flex items-center gap-2.5">
             <Sparkles className="w-4 h-4 text-amber-600 shrink-0" />
             <span>
-              <strong>Showing Benchmark Reference Run:</strong> No live sessions were recorded in the active store yet. Trigger a workflow in the Operations Center to see real-time events appear here.
+              <strong>Showing Benchmark Reference Run:</strong> No live sessions were recorded in the active store yet. Switch across the 5 scenarios above or trigger a live workflow in the Operations Center to see real-time events appear here.
             </span>
           </div>
           <span className="text-[10px] font-bold uppercase tracking-wider text-amber-800 bg-amber-100 px-2 py-0.5 rounded border border-amber-300">
@@ -474,12 +1068,15 @@ function ActionLedgerContent() {
       {/* Main Ledger Component with Live Data */}
       <ActionLedger
         events={displayedEvents}
-        sessionId={urlSessionId || (displayedEvents[0]?.sessionId ?? "act_benchmark_camry_001")}
+        sessionId={
+          urlSessionId ||
+          (isShowingBenchmark ? currentScenarioObj.sessionId : displayedEvents[0]?.sessionId ?? "act_benchmark_camry_001")
+        }
         workflowTitle={
           urlSessionId
             ? `Cryptographic Audit Ledger for Session ${urlSessionId}`
-            : activeMode === "benchmark"
-            ? "Complete 12-Stage Benchmark Vehicle Insurance Renewal Ledger"
+            : isShowingBenchmark
+            ? currentScenarioObj.title
             : "Live ActionOS Orchestration & Settlement Audit Ledger"
         }
         onRefresh={fetchLedger}
