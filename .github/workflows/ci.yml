@@ -2,7 +2,7 @@ name: ActionOS Continuous Integration
 
 on:
   push:
-    branches: [main]
+    branches: [main, fix/reliability-gate-v2]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -74,8 +74,8 @@ jobs:
   staging-verification:
     name: Live Supabase Staging Reliability Gate
     needs: [verify]
-    # Runs when explicitly triggered via workflow_dispatch, or on push to main when staging credentials exist
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.SUPABASE_STAGING_URL != '')
+    # Designated live staging gate triggered explicitly via workflow_dispatch
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
 
     steps:
@@ -96,7 +96,7 @@ jobs:
           SUPABASE_STAGING_URL: ${{ secrets.SUPABASE_STAGING_URL }}
           SUPABASE_STAGING_ANON_KEY: ${{ secrets.SUPABASE_STAGING_ANON_KEY }}
           SUPABASE_STAGING_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_STAGING_SERVICE_ROLE_KEY }}
-          RELIABILITY_GATE_MODE: ${{ inputs.gate_mode || 'staging-required' }}
+          RELIABILITY_GATE_MODE: ${{ github.event.inputs.gate_mode || 'staging-required' }}
         run: npm run db:verify:staging
 
       - name: Archive Live Staging Verification Machine-Readable Report
