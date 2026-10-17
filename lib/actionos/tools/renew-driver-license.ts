@@ -6,6 +6,7 @@ import { frscGateway, validateDriverLicense } from "@/lib/integrations/frsc";
 import { normalizeNigerianLanguage, type SupportedNigerianLanguage } from "@/lib/ai/nigerian-languages";
 
 export interface RenewDriverLicenseInput {
+  customerId?: string;
   dlNumber?: string;
   durationYears?: 3 | 5;
   captureCenterId?: string;
@@ -13,6 +14,7 @@ export interface RenewDriverLicenseInput {
   expectedAmount?: number;
   language?: string;
 }
+
 
 export interface RenewDriverLicenseOutput {
   renewed: boolean;
@@ -168,7 +170,7 @@ export class RenewDriverLicenseTool
     const verificationHash = crypto.createHash("sha256").update(canonicalData).digest("hex");
 
     // 2. Settle payment record in repository
-    const targetCustomerId = context.auth.customerId || "CUS-000001";
+    const targetCustomerId = input.customerId || context.auth.customerId || "CUS-000001";
     const txReference = input.paymentReference || `ACT-DL-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
     const transactionRecord = await repos.transactions.create(
       {

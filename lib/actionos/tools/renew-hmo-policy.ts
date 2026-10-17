@@ -6,6 +6,7 @@ import { nhiaGateway, type HmoTier, type HmoCardIssuanceResult } from "@/lib/int
 import { normalizeNigerianLanguage, type SupportedNigerianLanguage } from "@/lib/ai/nigerian-languages";
 
 export interface RenewHmoPolicyInput {
+  customerId?: string;
   nhiaNumber?: string;
   nin?: string;
   tier?: HmoTier;
@@ -16,6 +17,7 @@ export interface RenewHmoPolicyInput {
   dependentsCount?: number;
   language?: string;
 }
+
 
 export interface RenewHmoPolicyOutput {
   renewed: boolean;
@@ -140,7 +142,7 @@ export class RenewHmoPolicyTool implements IActionOSTool<RenewHmoPolicyInput, Re
     }
 
     // 4. Record financial settlement transaction in ActionOS repository
-    const targetCustomerId = context.auth.customerId || "CUS-000001";
+    const targetCustomerId = input.customerId || context.auth.customerId || "CUS-000001";
     const txReference = input.paymentReference || `ACT-HMO-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
     const transactionRecord = await repos.transactions.create(
       {

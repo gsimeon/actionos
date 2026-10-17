@@ -27,13 +27,19 @@ import {
   Clock,
   RotateCcw,
   ArrowRight,
+  HeartPulse,
+  CreditCard,
+  QrCode,
+  FileBadge,
 } from "lucide-react";
 import { StatusBadge } from "@/components/actionos/status-badge";
 import { AuthorizationCard, type AuthorizationOptions } from "@/components/actionos/authorization-dialog";
+import { StatutoryDocumentViewer } from "@/components/actionos/statutory-document-viewer";
 import { formatNaira, formatDate } from "@/lib/utils";
-import type { Renewal, Policy, Customer } from "@/types/database";
+import type { Renewal, Policy, Customer, Document } from "@/types/database";
 import type { AuthorizationDetails, UnderwriterQuote, ActionLedgerEvent } from "@/types/actionos";
 import { useRenewalsRealtime } from "@/lib/realtime";
+
 
 // Underwriter comparison benchmark data
 const UNDERWRITER_MARKETPLACE: Record<string, UnderwriterQuote[]> = {
@@ -85,7 +91,136 @@ const UNDERWRITER_MARKETPLACE: Record<string, UnderwriterQuote[]> = {
   ],
 };
 
+export interface HmoBenchmarkRecord {
+  id: string;
+  nhiaNumber: string;
+  enrolleeName: string;
+  hmoProviderName: string;
+  tier: "bronze" | "silver" | "gold" | "platinum";
+  primaryHcpName: string;
+  expiryDate: string;
+  daysUntilExpiry: number;
+  status: "active" | "expiring_soon" | "expired";
+  annualPremium: number;
+  digitalCardNumber: string;
+  nin: string;
+  phone: string;
+}
+
+export const HMO_BENCHMARK_RECORDS: HmoBenchmarkRecord[] = [
+  {
+    id: "hmo-001",
+    nhiaNumber: "NHIA-2026-00812",
+    enrolleeName: "Amina Bello",
+    hmoProviderName: "Hygeia HMO",
+    tier: "gold",
+    primaryHcpName: "Lagoon Hospital Ikoyi",
+    expiryDate: new Date(Date.now() + 8 * 86400000).toISOString(),
+    daysUntilExpiry: 8,
+    status: "expiring_soon",
+    annualPremium: 185000,
+    digitalCardNumber: "NHIA-HYG-2026-0812",
+    nin: "28491039581",
+    phone: "+234 803 123 4567",
+  },
+  {
+    id: "hmo-002",
+    nhiaNumber: "NHIA-2026-08942",
+    enrolleeName: "Emeka Okafor",
+    hmoProviderName: "Reliance HMO",
+    tier: "silver",
+    primaryHcpName: "Reddington Multi-Specialist Hospital",
+    expiryDate: new Date(Date.now() + 24 * 86400000).toISOString(),
+    daysUntilExpiry: 24,
+    status: "expiring_soon",
+    annualPremium: 95000,
+    digitalCardNumber: "NHIA-REL-2026-8942",
+    nin: "84729104821",
+    phone: "+234 802 987 6543",
+  },
+  {
+    id: "hmo-003",
+    nhiaNumber: "NHIA-2026-04112",
+    enrolleeName: "Babatunde Adeleke",
+    hmoProviderName: "AXA Mansard Health",
+    tier: "platinum",
+    primaryHcpName: "St. Nicholas Hospital",
+    expiryDate: new Date(Date.now() + 195 * 86400000).toISOString(),
+    daysUntilExpiry: 195,
+    status: "active",
+    annualPremium: 350000,
+    digitalCardNumber: "NHIA-AXA-2026-4112",
+    nin: "19284756102",
+    phone: "+234 809 555 1234",
+  },
+];
+
+export interface DriverLicenseBenchmarkRecord {
+  id: string;
+  dlNumber: string;
+  holderName: string;
+  classOfVehicle: string;
+  stateOfIssue: string;
+  captureCenter: string;
+  expiryDate: string;
+  daysUntilExpiry: number;
+  status: "active" | "expiring_soon" | "expired";
+  durationYears: 3 | 5;
+  statutoryFee: number;
+  temporaryPermitNumber: string;
+  phone: string;
+}
+
+export const DRIVER_LICENSE_BENCHMARK_RECORDS: DriverLicenseBenchmarkRecord[] = [
+  {
+    id: "dl-001",
+    dlNumber: "AAA00000AA",
+    holderName: "Chinedu Eze",
+    classOfVehicle: "Class E (Private & Light Commercial)",
+    stateOfIssue: "Lagos State",
+    captureCenter: "FRSC DLC Ikeja, Secretariat",
+    expiryDate: new Date(Date.now() + 6 * 86400000).toISOString(),
+    daysUntilExpiry: 6,
+    status: "expiring_soon",
+    durationYears: 3,
+    statutoryFee: 10500,
+    temporaryPermitNumber: "FRSC-TMP-2026-0018",
+    phone: "+234 805 777 8899",
+  },
+  {
+    id: "dl-002",
+    dlNumber: "KJA12345AB",
+    holderName: "Fatima Mohammed",
+    classOfVehicle: "Class E (Private Saloon)",
+    stateOfIssue: "Lagos State",
+    captureCenter: "FRSC DLC Lagos Island",
+    expiryDate: new Date(Date.now() + 18 * 86400000).toISOString(),
+    daysUntilExpiry: 18,
+    status: "expiring_soon",
+    durationYears: 5,
+    statutoryFee: 15750,
+    temporaryPermitNumber: "FRSC-TMP-2026-0042",
+    phone: "+234 813 444 3322",
+  },
+  {
+    id: "dl-003",
+    dlNumber: "ABJ98765CD",
+    holderName: "Oluwaseun Adeleke",
+    classOfVehicle: "Class E (Private Saloon)",
+    stateOfIssue: "FCT Abuja",
+    captureCenter: "FRSC Sector Command Garki, Abuja",
+    expiryDate: new Date(Date.now() + 240 * 86400000).toISOString(),
+    daysUntilExpiry: 240,
+    status: "active",
+    durationYears: 3,
+    statutoryFee: 10500,
+    temporaryPermitNumber: "FRSC-TMP-2026-0091",
+    phone: "+234 802 111 2233",
+  },
+];
+
 interface SagaExecutionState {
+
   isOpen: boolean;
   renewal: Renewal | null;
   policy: Policy | null;
@@ -157,6 +292,23 @@ export function RenewalOperationsCenter() {
     quotes: UnderwriterQuote[];
   } | null>(null);
 
+  // Regulatory Vertical Navigation Tab
+  const [verticalTab, setVerticalTab] = useState<
+    "all" | "motor_insurance" | "vehicle_license" | "health_hmo" | "driver_license"
+  >("all");
+
+  // Health HMO Operational Pipeline State
+  const [hmoRecords, setHmoRecords] = useState<HmoBenchmarkRecord[]>(HMO_BENCHMARK_RECORDS);
+  const [renewingHmoId, setRenewingHmoId] = useState<string | null>(null);
+
+  // FRSC Driver License Operational Pipeline State
+  const [driverLicenseRecords, setDriverLicenseRecords] =
+    useState<DriverLicenseBenchmarkRecord[]>(DRIVER_LICENSE_BENCHMARK_RECORDS);
+  const [renewingDlId, setRenewingDlId] = useState<string | null>(null);
+
+  // Verifiable Vector QR Statutory Document Viewer State
+  const [viewingDocument, setViewingDocument] = useState<Document | null>(null);
+
   // Statutory Vehicle License Renewal State
   const [renewingLicensePlate, setRenewingLicensePlate] = useState<string | null>(null);
   const [licenseRenewalResult, setLicenseRenewalResult] = useState<{
@@ -167,6 +319,7 @@ export function RenewalOperationsCenter() {
     message: string;
     receiptDocName?: string;
   } | null>(null);
+
 
   // Live Saga Execution Drawer State
   const [sagaState, setSagaState] = useState<SagaExecutionState>({
@@ -296,6 +449,229 @@ export function RenewalOperationsCenter() {
       setRenewingLicensePlate(null);
     }
   };
+
+  // Handle statutory Health HMO renewal via NHIA Gateway
+  const handleRenewHmo = async (hmo: HmoBenchmarkRecord) => {
+    setRenewingHmoId(hmo.id);
+    try {
+      const res = await fetch("/api/health/renew-hmo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          nhiaNumber: hmo.nhiaNumber,
+          nin: hmo.nin,
+          tier: hmo.tier,
+          primaryHcpName: hmo.primaryHcpName,
+          language: "en-NG",
+        }),
+      });
+      const json = await res.json();
+      if (!json.success || !json.data) {
+        throw new Error(json.error?.message || "Failed to renew HMO policy");
+      }
+      const data = json.data;
+      const card = data.digitalCard;
+      const doc: Document = {
+        id: card.digitalCardNumber,
+        customer_id: "CUS-000001",
+        renewal_id: null,
+        document_type: "certificate",
+        file_name: `NHIA_HMO_Card_${card.digitalCardNumber}.pdf`,
+        file_path: `/documents/health/NHIA_HMO_Card_${card.digitalCardNumber}.pdf`,
+        mime_type: "application/pdf",
+        status: "generated",
+        created_at: new Date().toISOString(),
+        ...({
+          metadata: {
+            assetName: `${hmo.enrolleeName} (${hmo.tier.toUpperCase()} Tier)`,
+            assetIdentifier: hmo.nhiaNumber,
+            underwriter: `${hmo.hmoProviderName} • NHIA Accredited`,
+            statutoryAuthority: "National Health Insurance Authority (NHIA)",
+            policyNumber: hmo.nhiaNumber,
+            amount: data.premiumPaid,
+            expiryDate: data.coverageEndDate,
+            verificationHash: card.verificationHash,
+            qrVerificationUrl: card.qrVerificationUrl,
+          },
+        } as unknown as Record<string, unknown>),
+      };
+
+      setHmoRecords((prev) =>
+        prev.map((item) =>
+          item.id === hmo.id
+            ? {
+                ...item,
+                status: "active",
+                daysUntilExpiry: 365,
+                expiryDate: data.coverageEndDate,
+                digitalCardNumber: card.digitalCardNumber,
+              }
+            : item
+        )
+      );
+
+      setViewingDocument(doc);
+      setActionAlert({
+        type: "success",
+        message: `NHIA HMO policy ${hmo.nhiaNumber} for ${hmo.enrolleeName} successfully renewed until ${data.coverageEndDate.split("T")[0]}! Digital Card: ${card.digitalCardNumber}.`,
+      });
+    } catch (err) {
+      setActionAlert({
+        type: "warning",
+        message: err instanceof Error ? err.message : "Error renewing HMO policy",
+      });
+    } finally {
+      setRenewingHmoId(null);
+    }
+  };
+
+  // Handle statutory FRSC Driver's License renewal with biometric DLC scheduling
+  const handleRenewDriverLicense = async (dl: DriverLicenseBenchmarkRecord) => {
+    setRenewingDlId(dl.id);
+    try {
+      const res = await fetch("/api/licensing/renew-driver-license", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          dlNumber: dl.dlNumber,
+          durationYears: dl.durationYears,
+          language: "en-NG",
+        }),
+      });
+      const json = await res.json();
+      if (!json.success || !json.data) {
+        throw new Error(json.error?.message || "Failed to renew driver license");
+      }
+      const data = json.data;
+      const permitNumber = data.temporaryPermitNumber;
+      const doc: Document = {
+        id: permitNumber,
+        customer_id: "CUS-000001",
+        renewal_id: null,
+        document_type: "certificate",
+        file_name: `FRSC_Temporary_Permit_${permitNumber}.pdf`,
+        file_path: `/documents/licensing/FRSC_Permit_${permitNumber}.pdf`,
+        mime_type: "application/pdf",
+        status: "generated",
+        created_at: new Date().toISOString(),
+        ...({
+          metadata: {
+            assetName: `${dl.holderName} (${dl.durationYears}-Year Renewal)`,
+            assetIdentifier: dl.dlNumber,
+            underwriter: "Federal Road Safety Corps (FRSC)",
+            statutoryAuthority: "Federal Road Safety Corps (FRSC)",
+            policyNumber: dl.dlNumber,
+            amount: data.statutoryFee,
+            expiryDate: data.newExpiryDate,
+            verificationHash: data.verificationHash,
+            qrVerificationUrl: data.qrVerificationUrl,
+            appointmentWindow: data.captureCenter?.appointmentWindow,
+            captureCenter: data.captureCenter?.name,
+          },
+        } as unknown as Record<string, unknown>),
+      };
+
+      setDriverLicenseRecords((prev) =>
+        prev.map((item) =>
+          item.id === dl.id
+            ? {
+                ...item,
+                status: "active",
+                daysUntilExpiry: dl.durationYears * 365,
+                expiryDate: data.newExpiryDate,
+                temporaryPermitNumber: permitNumber,
+              }
+            : item
+        )
+      );
+
+      setViewingDocument(doc);
+      setActionAlert({
+        type: "success",
+        message: `Driver's License ${dl.dlNumber} renewed for ${dl.durationYears} years until ${data.newExpiryDate.split("T")[0]}! Temporary Permit: ${permitNumber}. Biometric capture: ${data.captureCenter?.appointmentWindow} at ${data.captureCenter?.name}.`,
+      });
+    } catch (err) {
+      setActionAlert({
+        type: "warning",
+        message: err instanceof Error ? err.message : "Error renewing driver license",
+      });
+    } finally {
+      setRenewingDlId(null);
+    }
+  };
+
+  // Handle viewing statutory document for a renewal
+  const handleViewStatutoryDoc = (
+    docType: "insurance" | "license" | "roadworthiness" | "hmo" | "driver_license",
+    referenceOrRenewal: string | Renewal
+  ) => {
+    if (typeof referenceOrRenewal !== "string") {
+      const r = referenceOrRenewal;
+      const policy = r.policy;
+      const vehicleMeta = (policy?.metadata || {}) as Record<string, unknown>;
+      const plate = policy?.asset?.identifier || (vehicleMeta.vehicle_reg as string) || "ABC-123-XY";
+      const vehicleName = policy?.asset?.name || (vehicleMeta.vehicle_name as string) || "Toyota Camry (2020)";
+      const policyNum = policy?.policy_number || "AUTO-2026-00182";
+      const certNum = `NIID-CERT-${policyNum.replace(/\D/g, "").padEnd(6, "0").slice(-6)}`;
+
+      if (docType === "license") {
+        const licNum = `MVAA-LIC-${plate.replace(/-/g, "")}`;
+        setViewingDocument({
+          id: licNum,
+          customer_id: r.customer_id,
+          renewal_id: r.id,
+          document_type: "certificate",
+          file_name: `Vehicle_License_${licNum}.pdf`,
+          file_path: `/documents/vehicles/Vehicle_License_${licNum}.pdf`,
+          mime_type: "application/pdf",
+          status: "generated",
+          created_at: new Date().toISOString(),
+          ...({
+            metadata: {
+              assetName: vehicleName,
+              assetIdentifier: plate,
+              underwriter: "Lagos State Motor Vehicle Administration Agency (MVAA)",
+              statutoryAuthority: "Lagos State MVAA",
+              policyNumber: licNum,
+              mvaaLicenseNumber: licNum,
+              roadworthinessNumber: `LACVIS-${plate.replace(/-/g, "")}`,
+              amount: 24550,
+              expiryDate: policy?.expiry_date || new Date().toISOString(),
+              verificationHash: licNum.replace(/[^A-Za-z0-9]/g, "").padEnd(64, "0").toLowerCase(),
+              qrVerificationUrl: `https://mvaa.lagosstate.gov.ng/verify?license=${licNum}`,
+            },
+          } as unknown as Record<string, unknown>),
+        });
+        return;
+      }
+
+      setViewingDocument({
+        id: certNum,
+        customer_id: r.customer_id,
+        renewal_id: r.id,
+        document_type: "certificate",
+        file_name: `NIID_Insurance_Certificate_${certNum}.pdf`,
+        file_path: `/documents/insurance/NIID_Insurance_Certificate_${certNum}.pdf`,
+        mime_type: "application/pdf",
+        status: "generated",
+        created_at: new Date().toISOString(),
+        ...({
+          metadata: {
+            assetName: vehicleName,
+            assetIdentifier: plate,
+            underwriter: (r as unknown as { underwriter?: string }).underwriter || "Leadway Assurance",
+            statutoryAuthority: "National Insurance Commission (NAICOM)",
+            policyNumber: policyNum,
+            amount: r.quote_amount || 87500,
+            expiryDate: policy?.expiry_date || new Date().toISOString(),
+            verificationHash: certNum.replace(/[^A-Za-z0-9]/g, "").padEnd(64, "0").toLowerCase(),
+            qrVerificationUrl: `https://niid.nigeriainsurers.org/verify?cert=${certNum}`,
+          },
+        } as unknown as Record<string, unknown>),
+      });
+    }
+  };
+
 
   // Filtered dataset
   const filteredRenewals = useMemo(() => {
@@ -699,8 +1075,77 @@ export function RenewalOperationsCenter() {
         </div>
       </div>
 
+      {/* 2.5 Multi-Vertical Operations Navigation */}
+      <div className="flex items-center gap-2 overflow-x-auto pb-1">
+        <button
+          type="button"
+          onClick={() => setVerticalTab("all")}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+            verticalTab === "all"
+              ? "bg-slate-900 text-white shadow-xs"
+              : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
+          }`}
+        >
+          <Layers className="w-3.5 h-3.5" />
+          <span>All Statutory Verticals</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setVerticalTab("motor_insurance")}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+            verticalTab === "motor_insurance"
+              ? "bg-emerald-600 text-white shadow-xs"
+              : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
+          }`}
+        >
+          <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+          <span>Motor Insurance (NAICOM / NIID)</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setVerticalTab("vehicle_license")}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+            verticalTab === "vehicle_license"
+              ? "bg-blue-600 text-white shadow-xs"
+              : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
+          }`}
+        >
+          <Car className="w-3.5 h-3.5 text-blue-500" />
+          <span>Vehicle License &amp; LACVIS (MVAA)</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setVerticalTab("health_hmo")}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+            verticalTab === "health_hmo"
+              ? "bg-rose-600 text-white shadow-xs"
+              : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
+          }`}
+        >
+          <HeartPulse className="w-3.5 h-3.5 text-rose-500" />
+          <span>Health HMO (NHIA Statutory)</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setVerticalTab("driver_license")}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+            verticalTab === "driver_license"
+              ? "bg-indigo-600 text-white shadow-xs"
+              : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
+          }`}
+        >
+          <CreditCard className="w-3.5 h-3.5 text-indigo-500" />
+          <span>Driver's License &amp; DLC (FRSC)</span>
+        </button>
+      </div>
+
       {/* 3. Search & Filter Bar */}
       <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-xs space-y-3">
+
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
           {/* Search box */}
           <div className="relative flex-1">
@@ -819,7 +1264,8 @@ export function RenewalOperationsCenter() {
       </div>
 
       {/* 4. High-Density Pipeline Table */}
-      <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-sm">
+      {(verticalTab === "all" || verticalTab === "motor_insurance" || verticalTab === "vehicle_license") && (
+        <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-sm">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-50/80 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
@@ -1007,6 +1453,16 @@ export function RenewalOperationsCenter() {
 
                           <button
                             type="button"
+                            onClick={() => handleViewStatutoryDoc("insurance", r)}
+                            className="px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-semibold transition-all inline-flex items-center gap-1 cursor-pointer"
+                            title="View NAICOM NIID Statutory Certificate & Vector QR"
+                          >
+                            <QrCode className="w-3 h-3 text-emerald-600" />
+                            <span className="hidden sm:inline">QR Cert</span>
+                          </button>
+
+                          <button
+                            type="button"
                             onClick={() => {
                               setActionAlert({
                                 type: "info",
@@ -1038,6 +1494,305 @@ export function RenewalOperationsCenter() {
           </table>
         </div>
       </div>
+      )}
+
+      {/* 4.1 NHIA Health HMO Regulatory Pipeline Table */}
+      {(verticalTab === "all" || verticalTab === "health_hmo") && (
+        <div className="rounded-2xl border border-rose-200 bg-white overflow-hidden shadow-sm">
+          <div className="p-4 bg-gradient-to-r from-rose-50/90 via-pink-50/50 to-white border-b border-rose-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-rose-100 text-rose-800 border border-rose-300 flex items-center justify-center">
+                <HeartPulse className="w-4 h-4 text-rose-700" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-extrabold text-slate-900">
+                    National Health Insurance Authority (NHIA) HMO Renewals
+                  </h3>
+                  <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200">
+                    STATUTORY HEALTH ADAPTER
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  Actuarial tier verification, accredited hospital coverage, and verified digital card issuance with Merkle QR seal.
+                </p>
+              </div>
+            </div>
+            <span className="font-mono text-xs font-bold text-rose-800 bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-200 self-start sm:self-auto">
+              {hmoRecords.length} Active Enrollees
+            </span>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50/80 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
+                <tr>
+                  <th className="px-5 py-3.5">Enrollee &amp; Identity</th>
+                  <th className="px-5 py-3.5">NHIA Enrollee ID &amp; HMO</th>
+                  <th className="px-5 py-3.5">Tier &amp; Primary Hospital</th>
+                  <th className="px-5 py-3.5">Coverage Expiry</th>
+                  <th className="px-5 py-3.5">Annual Statutory Premium</th>
+                  <th className="px-5 py-3.5 text-right">Autonomous Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {hmoRecords.map((hmo) => (
+                  <tr key={hmo.id} className="hover:bg-rose-50/20 transition-colors">
+                    <td className="px-5 py-4">
+                      <div className="font-bold text-slate-900 text-sm">{hmo.enrolleeName}</div>
+                      <div className="text-[11px] text-slate-500 font-mono mt-0.5">
+                        NIN: {hmo.nin} &bull; {hmo.phone}
+                      </div>
+                    </td>
+                    <td className="px-5 py-4">
+                      <span className="font-mono text-xs font-bold text-rose-900 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                        {hmo.nhiaNumber}
+                      </span>
+                      <div className="text-xs text-slate-700 font-semibold mt-1">
+                        {hmo.hmoProviderName}
+                      </div>
+                    </td>
+                    <td className="px-5 py-4">
+                      <span className="capitalize font-bold text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-800 border border-slate-200">
+                        {hmo.tier} Tier
+                      </span>
+                      <div className="text-xs text-slate-600 mt-1">
+                        {hmo.primaryHcpName}
+                      </div>
+                    </td>
+                    <td className="px-5 py-4">
+                      <div className="text-xs font-bold text-slate-800">
+                        {formatDate(hmo.expiryDate)}
+                      </div>
+                      <span
+                        className={`inline-block mt-0.5 text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                          hmo.daysUntilExpiry <= 14
+                            ? "bg-rose-100 text-rose-800"
+                            : "bg-emerald-100 text-emerald-800"
+                        }`}
+                      >
+                        {hmo.daysUntilExpiry > 0 ? `${hmo.daysUntilExpiry} days remaining` : "Expired"}
+                      </span>
+                    </td>
+                    <td className="px-5 py-4">
+                      <div className="font-mono font-bold text-sm text-slate-900">
+                        {formatNaira(hmo.annualPremium)}
+                      </div>
+                      <span className="text-[10px] text-slate-400">Official NHIA Fee</span>
+                    </td>
+                    <td className="px-5 py-4 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setViewingDocument({
+                              id: hmo.digitalCardNumber,
+                              customer_id: "CUS-000001",
+                              renewal_id: null,
+                              document_type: "certificate",
+                              file_name: `NHIA_HMO_Card_${hmo.digitalCardNumber}.pdf`,
+                              file_path: `/documents/health/NHIA_HMO_Card_${hmo.digitalCardNumber}.pdf`,
+                              mime_type: "application/pdf",
+                              status: "generated",
+                              created_at: new Date().toISOString(),
+                              ...({
+                                metadata: {
+                                  assetName: `${hmo.enrolleeName} (${hmo.tier.toUpperCase()} Tier)`,
+                                  assetIdentifier: hmo.nhiaNumber,
+                                  underwriter: `${hmo.hmoProviderName} • NHIA Accredited`,
+                                  statutoryAuthority: "National Health Insurance Authority (NHIA)",
+                                  policyNumber: hmo.nhiaNumber,
+                                  amount: hmo.annualPremium,
+                                  expiryDate: hmo.expiryDate,
+                                  verificationHash: hmo.digitalCardNumber.replace(/[^A-Za-z0-9]/g, "").padEnd(64, "0").toLowerCase(),
+                                  qrVerificationUrl: `https://nhia.gov.ng/verify?enrollee=${hmo.digitalCardNumber}`,
+                                },
+                              } as unknown as Record<string, unknown>),
+                            });
+                          }}
+                          className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 text-xs font-semibold transition-all inline-flex items-center gap-1 cursor-pointer"
+                          title="View Digital HMO Enrollee Card & QR"
+                        >
+                          <QrCode className="w-3.5 h-3.5 text-rose-600" />
+                          <span>HMO Card</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={renewingHmoId === hmo.id}
+                          onClick={() => handleRenewHmo(hmo)}
+                          className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 active:scale-95 text-white text-xs font-bold transition-all inline-flex items-center gap-1.5 shadow-sm shadow-rose-600/30 cursor-pointer disabled:opacity-50"
+                        >
+                          {renewingHmoId === hmo.id ? (
+                            <>
+                              <RefreshCw className="w-3 h-3 animate-spin" />
+                              <span>Renewing...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Zap className="w-3 h-3" />
+                              <span>Renew HMO</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* 4.2 FRSC Driver's License Regulatory Pipeline Table */}
+      {(verticalTab === "all" || verticalTab === "driver_license") && (
+        <div className="rounded-2xl border border-indigo-200 bg-white overflow-hidden shadow-sm">
+          <div className="p-4 bg-gradient-to-r from-indigo-50/90 via-blue-50/50 to-white border-b border-indigo-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-indigo-100 text-indigo-800 border border-indigo-300 flex items-center justify-center">
+                <CreditCard className="w-4 h-4 text-indigo-700" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-extrabold text-slate-900">
+                    Federal Road Safety Corps (FRSC) Driver's License Renewals
+                  </h3>
+                  <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 border border-indigo-200">
+                    DLC BIOMETRIC ADAPTER
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  National driver registry verification, biometric DLC appointment allocation, and official temporary driving permit issuance.
+                </p>
+              </div>
+            </div>
+            <span className="font-mono text-xs font-bold text-indigo-800 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-200 self-start sm:self-auto">
+              {driverLicenseRecords.length} Active Records
+            </span>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50/80 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
+                <tr>
+                  <th className="px-5 py-3.5">Driver Name &amp; Contact</th>
+                  <th className="px-5 py-3.5">License No. &amp; Class</th>
+                  <th className="px-5 py-3.5">State &amp; DLC Capture Center</th>
+                  <th className="px-5 py-3.5">Expiry &amp; Urgency</th>
+                  <th className="px-5 py-3.5">Statutory Fee &amp; Period</th>
+                  <th className="px-5 py-3.5 text-right">Autonomous Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {driverLicenseRecords.map((dl) => (
+                  <tr key={dl.id} className="hover:bg-indigo-50/20 transition-colors">
+                    <td className="px-5 py-4">
+                      <div className="font-bold text-slate-900 text-sm">{dl.holderName}</div>
+                      <div className="text-[11px] text-slate-500 font-mono mt-0.5">
+                        {dl.phone}
+                      </div>
+                    </td>
+                    <td className="px-5 py-4">
+                      <span className="font-mono text-xs font-bold text-indigo-900 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                        {dl.dlNumber}
+                      </span>
+                      <div className="text-xs text-slate-600 mt-1">
+                        {dl.classOfVehicle}
+                      </div>
+                    </td>
+                    <td className="px-5 py-4">
+                      <div className="font-semibold text-slate-800">{dl.stateOfIssue}</div>
+                      <div className="text-xs text-slate-500 mt-0.5">
+                        {dl.captureCenter}
+                      </div>
+                    </td>
+                    <td className="px-5 py-4">
+                      <div className="text-xs font-bold text-slate-800">
+                        {formatDate(dl.expiryDate)}
+                      </div>
+                      <span
+                        className={`inline-block mt-0.5 text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                          dl.daysUntilExpiry <= 14
+                            ? "bg-rose-100 text-rose-800"
+                            : "bg-emerald-100 text-emerald-800"
+                        }`}
+                      >
+                        {dl.daysUntilExpiry > 0 ? `${dl.daysUntilExpiry} days remaining` : "Expired"}
+                      </span>
+                    </td>
+                    <td className="px-5 py-4">
+                      <div className="font-mono font-bold text-sm text-slate-900">
+                        {formatNaira(dl.statutoryFee)}
+                      </div>
+                      <span className="text-[10px] text-slate-400 font-semibold">{dl.durationYears}-Year Renewal</span>
+                    </td>
+                    <td className="px-5 py-4 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setViewingDocument({
+                              id: dl.temporaryPermitNumber,
+                              customer_id: "CUS-000001",
+                              renewal_id: null,
+                              document_type: "certificate",
+                              file_name: `FRSC_Temporary_Permit_${dl.temporaryPermitNumber}.pdf`,
+                              file_path: `/documents/licensing/FRSC_Permit_${dl.temporaryPermitNumber}.pdf`,
+                              mime_type: "application/pdf",
+                              status: "generated",
+                              created_at: new Date().toISOString(),
+                              ...({
+                                metadata: {
+                                  assetName: `${dl.holderName} (${dl.durationYears}-Year Renewal)`,
+                                  assetIdentifier: dl.dlNumber,
+                                  underwriter: "Federal Road Safety Corps (FRSC)",
+                                  statutoryAuthority: "Federal Road Safety Corps (FRSC)",
+                                  policyNumber: dl.dlNumber,
+                                  amount: dl.statutoryFee,
+                                  expiryDate: dl.expiryDate,
+                                  verificationHash: dl.temporaryPermitNumber.replace(/[^A-Za-z0-9]/g, "").padEnd(64, "0").toLowerCase(),
+                                  qrVerificationUrl: `https://frsc.gov.ng/verify?dl=${dl.dlNumber}&permit=${dl.temporaryPermitNumber}`,
+                                  captureCenter: dl.captureCenter,
+                                },
+                              } as unknown as Record<string, unknown>),
+                            });
+                          }}
+                          className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 text-xs font-semibold transition-all inline-flex items-center gap-1 cursor-pointer"
+                          title="View Temporary Driving Permit & QR"
+                        >
+                          <QrCode className="w-3.5 h-3.5 text-indigo-600" />
+                          <span>Permit Slip</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={renewingDlId === dl.id}
+                          onClick={() => handleRenewDriverLicense(dl)}
+                          className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white text-xs font-bold transition-all inline-flex items-center gap-1.5 shadow-sm shadow-indigo-600/30 cursor-pointer disabled:opacity-50"
+                        >
+                          {renewingDlId === dl.id ? (
+                            <>
+                              <RefreshCw className="w-3 h-3 animate-spin" />
+                              <span>Scheduling...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Zap className="w-3 h-3" />
+                              <span>Renew License</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
 
       {/* 5. In-Page AI Renewal Saga Execution Modal / Drawer */}
       {sagaState.isOpen && (
@@ -1503,6 +2258,16 @@ export function RenewalOperationsCenter() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Statutory Vector QR Document Viewer Modal */}
+      {viewingDocument && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-md animate-in fade-in duration-200">
+          <StatutoryDocumentViewer
+            document={viewingDocument}
+            onClose={() => setViewingDocument(null)}
+          />
         </div>
       )}
     </div>

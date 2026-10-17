@@ -19,8 +19,9 @@ import {
 import { VoiceActionButton } from "@/components/voice/voice-action-button";
 import { AuthorizationCard, type AuthorizationOptions } from "./authorization-dialog";
 import { ActionLedger } from "./action-ledger";
+import { StatutoryDocumentViewer } from "@/components/actionos/statutory-document-viewer";
 import type { ActionLedgerEvent, AuthorizationDetails } from "@/types/actionos";
-import type { ActionSessionStatus } from "@/types/database";
+import type { ActionSessionStatus, Document } from "@/types/database";
 import { formatNaira, formatDate } from "@/lib/utils";
 import { useActionSessionRealtime, useLedgerRealtime } from "@/lib/realtime";
 
@@ -49,6 +50,56 @@ const PRESET_PROMPTS = [
     lang: "ig",
     label: "Megharia Mkpuchi (Igbo)",
     text: "Achọrọ m imeghari mkpuchi ụgbọ ala m maka ABC-123-XY.",
+  },
+  {
+    lang: "en-NG",
+    label: "Renew Health HMO (English)",
+    text: "Renew my NHIA health insurance policy NHIA-2026-00812 on Gold tier.",
+  },
+  {
+    lang: "pcm",
+    label: "Renew Health (Pidgin)",
+    text: "I wan renew my NHIA health insurance NHIA-2026-00812 for Gold tier sharp sharp.",
+  },
+  {
+    lang: "yo",
+    label: "Sọ Ilera Di Ọtun (Yorùbá)",
+    text: "Mo fẹ sọ iṣeduro ilera NHIA mi di ọtun fun NHIA-2026-00812.",
+  },
+  {
+    lang: "ha",
+    label: "Sabunta Lafiya (Hausa)",
+    text: "Ina so in sabunta inshorar lafiyata NHIA-2026-00812 a kan Gold tier.",
+  },
+  {
+    lang: "ig",
+    label: "Megharia Ahụike (Igbo)",
+    text: "Achọrọ m imeghari mkpuchi ahụike NHIA m NHIA-2026-00812.",
+  },
+  {
+    lang: "en-NG",
+    label: "Renew Driver's License (English)",
+    text: "Renew my driver's license AAA00000AA for 3 years at Ikeja DLC.",
+  },
+  {
+    lang: "pcm",
+    label: "Renew Driver License (Pidgin)",
+    text: "Renew my driver license AAA00000AA for 3 years make I go capture for Ikeja.",
+  },
+  {
+    lang: "yo",
+    label: "Sọ Iwe Awakọ Di Ọtun (Yorùbá)",
+    text: "Sọ iwe-aṣẹ awakọ mi AAA00000AA di ọtun fun ọdun mẹta ni Ikeja.",
+  },
+  {
+    lang: "ha",
+    label: "Sabunta Lasisin Tuki (Hausa)",
+    text: "Sabunta lasisin tuki na AAA00000AA na tsawon shekaru 3 a Ikeja.",
+  },
+  {
+    lang: "ig",
+    label: "Megharia Ikike Ịkwọ Ụgbọala (Igbo)",
+    text: "Megharia akwụkwọ ikike ịkwọ ụgbọala m AAA00000AA maka afọ atọ.",
   },
   {
     lang: "en-NG",
@@ -137,6 +188,7 @@ const WORKFLOW_STEPS: Array<{ key: ActionSessionStatus; label: string }> = [
   { key: "completed", label: "Completed" },
 ];
 
+
 interface CompletedOutcome {
   vehicle: string;
   plateNumber: string;
@@ -149,10 +201,64 @@ interface CompletedOutcome {
   paymentReference: string;
   isComplete: boolean;
   missingFields: string[];
-  verticalType?: "insurance_policy" | "vehicle_license";
+  verticalType?: "insurance_policy" | "vehicle_license" | "health_hmo" | "driver_license";
   mvaaLicenseNumber?: string;
   roadworthinessNumber?: string;
   statutoryAuthority?: string;
+  verificationHash?: string;
+  qrVerificationUrl?: string;
+}
+
+function createDocumentFromOutcome(outcome: CompletedOutcome): Document {
+  let fileName = `NIID_Insurance_Certificate_${outcome.certificateNumber}.pdf`;
+  if (outcome.verticalType === "health_hmo") {
+    fileName = `NHIA_HMO_Card_${outcome.certificateNumber}.pdf`;
+  } else if (outcome.verticalType === "driver_license") {
+    fileName = `FRSC_Temporary_Permit_${outcome.certificateNumber}.pdf`;
+  } else if (outcome.verticalType === "vehicle_license") {
+    fileName = `Vehicle_License_${outcome.certificateNumber}.pdf`;
+  }
+
+  const qrVerificationUrl =
+    outcome.qrVerificationUrl ||
+    (outcome.verticalType === "health_hmo"
+      ? `https://nhia.gov.ng/verify?enrollee=${outcome.certificateNumber}`
+      : outcome.verticalType === "driver_license"
+      ? `https://frsc.gov.ng/verify?dl=${outcome.policyNumber}&permit=${outcome.certificateNumber}`
+      : outcome.verticalType === "vehicle_license"
+      ? `https://mvaa.lagosstate.gov.ng/verify?license=${outcome.certificateNumber}`
+      : `https://niid.nigeriainsurers.org/verify?cert=${outcome.certificateNumber}`);
+
+  const verificationHash =
+    outcome.verificationHash ||
+    outcome.certificateNumber.replace(/[^A-Za-z0-9]/g, "").padEnd(64, "0").toLowerCase();
+
+  return {
+    id: outcome.certificateNumber,
+    customer_id: "CUS-000001",
+    renewal_id: null,
+    document_type: "certificate",
+    file_name: fileName,
+    file_path: `/documents/${fileName}`,
+    mime_type: "application/pdf",
+    status: "generated",
+    created_at: new Date().toISOString(),
+    ...({
+      metadata: {
+        assetName: outcome.vehicle,
+        assetIdentifier: outcome.plateNumber,
+        underwriter: outcome.underwriter,
+        statutoryAuthority: outcome.statutoryAuthority || outcome.underwriter,
+        policyNumber: outcome.policyNumber,
+        mvaaLicenseNumber: outcome.mvaaLicenseNumber,
+        roadworthinessNumber: outcome.roadworthinessNumber,
+        amount: outcome.amount,
+        expiryDate: outcome.newExpiry,
+        verificationHash,
+        qrVerificationUrl,
+      },
+    } as unknown as Record<string, unknown>),
+  };
 }
 
 function resolveCompletedOutcome(
@@ -160,7 +266,97 @@ function resolveCompletedOutcome(
   authDetails: AuthorizationDetails | null,
   options?: AuthorizationOptions
 ): CompletedOutcome | null {
-  // 1. Check for Vehicle License & Roadworthiness renewal workflow
+  // 1. Check for NHIA Health HMO renewal workflow
+  const renewHmoEvent = events.find((e) => e.tool === "renew_hmo_policy");
+  if (renewHmoEvent) {
+    const meta = (renewHmoEvent.metadata || {}) as Record<string, unknown>;
+    const nhiaNum = (meta.nhiaNumber as string) || renewHmoEvent.referenceId || "NHIA-2026-00812";
+    const enrolleeName = (meta.enrolleeName as string) || "Enrollee";
+    const tier = ((meta.tier as string) || "gold").toUpperCase();
+    const provider = (meta.hmoProviderName as string) || "Hygeia HMO";
+    const digitalCard = meta.digitalCard as Record<string, unknown> | undefined;
+    const cardNum =
+      (digitalCard?.digitalCardNumber as string) ||
+      (meta.digitalCardNumber as string) ||
+      renewHmoEvent.referenceId ||
+      "";
+    const fee = (meta.premiumPaid as number) || (meta.annualPremium as number) || 185000;
+    const expDate = (meta.coverageEndDate as string) || "";
+    const txObj = meta.transaction as Record<string, unknown> | undefined;
+    const payRef = (txObj?.reference as string) || (meta.paymentReference as string) || "HMO-PAY-SETTLED";
+    const qrUrl =
+      (digitalCard?.qrVerificationUrl as string) ||
+      `https://nhia.gov.ng/verify?enrollee=${cardNum}`;
+    const hash =
+      (digitalCard?.verificationHash as string) ||
+      (cardNum ? cardNum.replace(/[^A-Za-z0-9]/g, "").padEnd(64, "0").toLowerCase() : "");
+
+    const missing: string[] = [];
+    if (!cardNum) missing.push("NHIA Digital Card Number");
+    if (!expDate) missing.push("Coverage End Date");
+
+    return {
+      vehicle: `${enrolleeName} (${tier} Plan)`,
+      plateNumber: nhiaNum,
+      underwriter: `${provider} • NHIA Accredited`,
+      amount: fee,
+      newExpiry: expDate,
+      policyNumber: nhiaNum,
+      certificateNumber: cardNum,
+      paymentReference: payRef,
+      isComplete: missing.length === 0,
+      missingFields: missing,
+      verticalType: "health_hmo",
+      statutoryAuthority: "National Health Insurance Authority (NHIA)",
+      verificationHash: hash,
+      qrVerificationUrl: qrUrl,
+    };
+  }
+
+  // 2. Check for FRSC Driver's License renewal workflow
+  const renewDlEvent = events.find((e) => e.tool === "renew_driver_license");
+  if (renewDlEvent) {
+    const meta = (renewDlEvent.metadata || {}) as Record<string, unknown>;
+    const dlNum = (meta.dlNumber as string) || renewDlEvent.referenceId || "AAA00000AA";
+    const holderName = (meta.holderName as string) || "Demo Driver";
+    const duration = (meta.durationYears as number) || 3;
+    const permitNum = (meta.temporaryPermitNumber as string) || renewDlEvent.referenceId || "";
+    const fee = (meta.statutoryFee as number) || (duration === 5 ? 15750 : 10500);
+    const expDate = (meta.newExpiryDate as string) || "";
+    const txObj = meta.transaction as Record<string, unknown> | undefined;
+    const payRef = (txObj?.reference as string) || (meta.paymentReference as string) || "FRSC-PAY-SETTLED";
+    const qrUrl =
+      (meta.qrVerificationUrl as string) ||
+      `https://frsc.gov.ng/verify?dl=${dlNum}&permit=${permitNum}`;
+    const hash =
+      (meta.verificationHash as string) ||
+      (permitNum ? permitNum.replace(/[^A-Za-z0-9]/g, "").padEnd(64, "0").toLowerCase() : "");
+    const centerObj = meta.captureCenter as Record<string, unknown> | undefined;
+    const centerName = (centerObj?.name as string) || "FRSC DLC Ikeja";
+
+    const missing: string[] = [];
+    if (!permitNum) missing.push("FRSC Temporary Permit Number");
+    if (!expDate) missing.push("Permit Expiry Date");
+
+    return {
+      vehicle: `${holderName} (${duration}-Yr Renewal, ${centerName})`,
+      plateNumber: dlNum,
+      underwriter: "Federal Road Safety Corps (FRSC)",
+      amount: fee,
+      newExpiry: expDate,
+      policyNumber: dlNum,
+      certificateNumber: permitNum,
+      paymentReference: payRef,
+      isComplete: missing.length === 0,
+      missingFields: missing,
+      verticalType: "driver_license",
+      statutoryAuthority: "Federal Road Safety Corps (FRSC)",
+      verificationHash: hash,
+      qrVerificationUrl: qrUrl,
+    };
+  }
+
+  // 3. Check for Vehicle License & Roadworthiness renewal workflow
   const renewVehEvent = events.find((e) => e.tool === "renew_vehicle_license");
   if (renewVehEvent) {
     const meta = (renewVehEvent.metadata || {}) as Record<string, unknown>;
@@ -196,10 +392,12 @@ function resolveCompletedOutcome(
       mvaaLicenseNumber: mvaaLic,
       roadworthinessNumber: rwLic,
       statutoryAuthority: authority,
+      qrVerificationUrl: `https://mvaa.lagosstate.gov.ng/verify?license=${mvaaLic}`,
+      verificationHash: mvaaLic.replace(/[^A-Za-z0-9]/g, "").padEnd(64, "0").toLowerCase(),
     };
   }
 
-  // 2. Insurance Policy Renewal workflow
+  // 4. Insurance Policy Renewal workflow
   const certEvent = events.find(
     (e) => e.tool === "generate_certificate" || e.action === "issue_certificate"
   );
@@ -235,8 +433,11 @@ function resolveCompletedOutcome(
     isComplete: missing.length === 0,
     missingFields: missing,
     verticalType: "insurance_policy",
+    qrVerificationUrl: `https://niid.nigeriainsurers.org/verify?cert=${certRef || policyNum}`,
+    verificationHash: (certRef || policyNum).replace(/[^A-Za-z0-9]/g, "").padEnd(64, "0").toLowerCase(),
   };
 }
+
 
 export function ActionConsole() {
   const searchParams = useSearchParams();
@@ -618,9 +819,13 @@ export function ActionConsole() {
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="text-base font-extrabold text-slate-900 tracking-tight">
                     {completedOutcome.isComplete
-                      ? completedOutcome.verticalType === "vehicle_license"
+                      ? completedOutcome.verticalType === "health_hmo"
+                        ? "Workflow Completed: Verified NHIA Health Insurance (HMO)"
+                        : completedOutcome.verticalType === "driver_license"
+                        ? "Workflow Completed: Verified FRSC Driver's License & Temporary Permit"
+                        : completedOutcome.verticalType === "vehicle_license"
                         ? "Workflow Completed: Verified Vehicle License & Roadworthiness"
-                        : "Workflow Completed: Verified Renewal & Test Certificate"
+                        : "Workflow Completed: Verified Motor Insurance & Certificate"
                       : "Workflow Completed: Incomplete Verification"}
                   </h3>
                   {completedOutcome.isComplete ? (
@@ -638,7 +843,11 @@ export function ActionConsole() {
                 </div>
                 <p className="text-xs text-slate-600 mt-0.5 font-medium">
                   {completedOutcome.isComplete
-                    ? completedOutcome.verticalType === "vehicle_license"
+                    ? completedOutcome.verticalType === "health_hmo"
+                      ? "Autonomous lifecycle finished: NHIA enrollee validated, hospital tier verified, annual statutory premium settled, and secure digital card issued."
+                      : completedOutcome.verticalType === "driver_license"
+                      ? "Autonomous lifecycle finished: FRSC national database validated, statutory renewal fee settled, biometric capture scheduled, and temporary driving permit issued."
+                      : completedOutcome.verticalType === "vehicle_license"
                       ? "Autonomous lifecycle finished: MVAA registration validated, computerized LACVIS inspection cleared, official statutory fees settled, and digital road documents issued."
                       : "Autonomous lifecycle finished: eligibility validated, customer authorized, simulated payment settled, and policy rolled forward."
                     : "Autonomous lifecycle reported completed status, but one or more required ledger artifacts are missing from response."}
@@ -652,11 +861,15 @@ export function ActionConsole() {
                 disabled={completedOutcome.certificateNumber === "Not available"}
                 onClick={() => setShowCertModal(true)}
                 className="px-3.5 py-2 rounded-xl bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-800 border border-slate-200 text-xs font-bold shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
-                title={completedOutcome.certificateNumber === "Not available" ? "Certificate not available in ledger records" : "View Certificate Preview"}
+                title={completedOutcome.certificateNumber === "Not available" ? "Document not available in ledger records" : "View Statutory Document & QR"}
               >
                 <FileCheck className="w-3.5 h-3.5 text-emerald-600" />
                 <span>
-                  {completedOutcome.verticalType === "vehicle_license"
+                  {completedOutcome.verticalType === "health_hmo"
+                    ? "View Digital HMO Card"
+                    : completedOutcome.verticalType === "driver_license"
+                    ? "View Driver's Permit & QR"
+                    : completedOutcome.verticalType === "vehicle_license"
                     ? "View License & Roadworthiness"
                     : "View Certificate Preview"}
                 </span>
@@ -680,7 +893,13 @@ export function ActionConsole() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
             <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-2xs">
               <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block mb-1">
-                {completedOutcome.verticalType === "vehicle_license" ? "VEHICLE & LICENSE" : "POLICY STATE"}
+                {completedOutcome.verticalType === "health_hmo"
+                  ? "ENROLLEE & PLAN"
+                  : completedOutcome.verticalType === "driver_license"
+                  ? "DRIVER & PERMIT"
+                  : completedOutcome.verticalType === "vehicle_license"
+                  ? "VEHICLE & LICENSE"
+                  : "POLICY STATE"}
               </span>
               <div className="text-xs font-bold text-slate-900">
                 {completedOutcome.vehicle}
@@ -695,7 +914,13 @@ export function ActionConsole() {
 
             <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-2xs">
               <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block mb-1">
-                {completedOutcome.verticalType === "vehicle_license" ? "STATUTORY SETTLEMENT" : "SIMULATED SETTLEMENT"}
+                {completedOutcome.verticalType === "health_hmo"
+                  ? "HMO STATUTORY PREMIUM"
+                  : completedOutcome.verticalType === "driver_license"
+                  ? "FRSC STATUTORY FEE"
+                  : completedOutcome.verticalType === "vehicle_license"
+                  ? "STATUTORY SETTLEMENT"
+                  : "SIMULATED SETTLEMENT"}
               </span>
               <div className="text-sm font-black font-mono text-emerald-700">
                 {formatNaira(completedOutcome.amount)}
@@ -715,9 +940,15 @@ export function ActionConsole() {
 
             <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-2xs">
               <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block mb-1">
-                {completedOutcome.verticalType === "vehicle_license" ? "REGULATORY BODY" : "STATUTORY RECORD"}
+                {completedOutcome.verticalType === "health_hmo"
+                  ? "HEALTH AUTHORITY"
+                  : completedOutcome.verticalType === "driver_license"
+                  ? "LICENSING CORPS"
+                  : completedOutcome.verticalType === "vehicle_license"
+                  ? "REGULATORY BODY"
+                  : "STATUTORY RECORD"}
               </span>
-              <div className="text-xs font-bold text-slate-900">
+              <div className="text-xs font-bold text-slate-900 truncate">
                 {completedOutcome.underwriter}
               </div>
               <div className="text-[10px] font-mono font-bold mt-0.5 truncate">
@@ -758,127 +989,22 @@ export function ActionConsole() {
           <div className="p-3.5 rounded-2xl bg-amber-50/80 border border-amber-200 text-xs text-amber-950 flex items-start gap-2.5">
             <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
             <div className="leading-relaxed">
-              <strong>Sandbox Disclosure:</strong> This transaction and generated certificate ({completedOutcome.certificateNumber !== "Not available" ? `#${completedOutcome.certificateNumber}` : "Not available"}) are simulated demo fixtures for the NITDA 2026 AI Innovation Challenge. In production deployment, ActionOS verifies policies against the live NAICOM NIID and Lagos State MVAA databases and processes real settlement via production Paystack keys.
+              <strong>Sandbox Disclosure:</strong> This transaction and generated statutory record ({completedOutcome.certificateNumber !== "Not available" ? `#${completedOutcome.certificateNumber}` : "Not available"}) are simulated fixtures for the NITDA 2026 AI Innovation Challenge. In production, ActionOS verifies identities and credentials against live statutory databases (NAICOM, MVAA, NHIA, FRSC) with real Paystack settlement.
             </div>
           </div>
         </div>
       )}
 
-      {/* Test Certificate Preview Modal */}
+      {/* Verifiable Vector QR Statutory Document Viewer Modal */}
       {showCertModal && completedOutcome && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="relative w-full max-w-xl rounded-3xl bg-white p-6 sm:p-8 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto">
-            {/* Modal close */}
-            <button
-              type="button"
-              onClick={() => setShowCertModal(false)}
-              className="absolute top-5 right-5 p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all cursor-pointer"
-            >
-              <X className="w-5 h-5" />
-            </button>
-
-            {/* Certificate Header */}
-            <div className="text-center pb-4 border-b border-slate-100 relative">
-              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-100 text-amber-950 border border-amber-300 text-[10px] font-black uppercase tracking-wider mb-2">
-                DEMO / SANDBOX FIXTURE &bull; NON-STATUTORY
-              </div>
-              <h2 className="text-lg font-black text-slate-900 tracking-tight">
-                FEDERAL REPUBLIC OF NIGERIA
-              </h2>
-              <div className="text-xs font-bold text-slate-600 uppercase tracking-wider">
-                {completedOutcome.verticalType === "vehicle_license"
-                  ? "Lagos State Motor Vehicle Administration Agency (MVAA) & VIS"
-                  : "National Insurance Commission (NAICOM) • NIID Electronic Certificate"}
-              </div>
-              <div className="text-[11px] text-slate-400 font-mono mt-0.5">
-                {completedOutcome.verticalType === "vehicle_license"
-                  ? "Motor Vehicle Administration Law / National Road Traffic Regulations"
-                  : "Motor Vehicles (Third Party Insurance) Act 1950 / Insurance Act 2003"}
-              </div>
-            </div>
-
-            {/* Simulated Watermark Background */}
-            <div className="my-5 p-5 rounded-2xl bg-slate-50 border border-slate-200 relative overflow-hidden space-y-3 font-mono text-xs">
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-5 rotate-[-20deg] select-none text-4xl font-black text-slate-900">
-                SIMULATED TEST FIXTURE
-              </div>
-
-              <div className="grid grid-cols-2 gap-3 text-slate-700">
-                <div>
-                  <span className="text-[10px] text-slate-400 font-bold block">
-                    {completedOutcome.verticalType === "vehicle_license" ? "MVAA LICENSE NO." : "CERTIFICATE NUMBER"}
-                  </span>
-                  <span className="font-bold text-slate-900">
-                    {completedOutcome.mvaaLicenseNumber || completedOutcome.policyNumber}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-[10px] text-slate-400 font-bold block">
-                    {completedOutcome.verticalType === "vehicle_license" ? "ROADWORTHINESS NO." : "POLICY NUMBER"}
-                  </span>
-                  <span className="font-bold text-slate-900">
-                    {completedOutcome.roadworthinessNumber || (completedOutcome.verticalType === "vehicle_license" ? "LACVIS-VERIFIED" : completedOutcome.policyNumber)}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-[10px] text-slate-400 font-bold block">REGISTRATION NO. (PLATE)</span>
-                  <span className="font-bold text-emerald-800">{completedOutcome.plateNumber}</span>
-                </div>
-                <div>
-                  <span className="text-[10px] text-slate-400 font-bold block">VEHICLE DESCRIPTION</span>
-                  <span className="font-bold text-slate-900">{completedOutcome.vehicle}</span>
-                </div>
-                <div>
-                  <span className="text-[10px] text-slate-400 font-bold block">
-                    {completedOutcome.verticalType === "vehicle_license" ? "REGULATORY AUTHORITY" : "UNDERWRITER"}
-                  </span>
-                  <span className="font-bold text-slate-900">{completedOutcome.underwriter}</span>
-                </div>
-                <div>
-                  <span className="text-[10px] text-slate-400 font-bold block">
-                    {completedOutcome.verticalType === "vehicle_license" ? "STATUTORY FEES" : "PREMIUM SETTLED"}
-                  </span>
-                  <span className="font-bold text-emerald-800">{formatNaira(completedOutcome.amount)} (Simulated)</span>
-                </div>
-                <div>
-                  <span className="text-[10px] text-slate-400 font-bold block">EFFECTIVE FROM</span>
-                  <span>{formatDate(completedOutcome.currentExpiry || new Date().toISOString())}</span>
-                </div>
-                <div>
-                  <span className="text-[10px] text-slate-400 font-bold block">EXPIRING AT</span>
-                  <span className="font-bold text-emerald-800">{formatDate(completedOutcome.newExpiry)}</span>
-                </div>
-              </div>
-
-              <div className="pt-3 border-t border-slate-200/80 text-[10px] text-slate-500 font-sans leading-relaxed">
-                {completedOutcome.verticalType === "vehicle_license"
-                  ? "This certificate confirms that statutory motor vehicle licensing and computerized roadworthiness inspection (LACVIS) have been validated and renewed for the designated vehicle."
-                  : "This certificate certifies that an insurance policy covering the liabilities described in the Insurance Act has been issued for the designated vehicle."}
-                <strong className="block text-amber-900 mt-1">
-                  NOTICE: Generated in sandbox mode by ActionOS for evaluation purposes. Not a statutory document for law enforcement or roadworthiness inspection.
-                </strong>
-              </div>
-            </div>
-
-            {/* Modal actions */}
-            <div className="flex items-center justify-between pt-2">
-              <span className="text-[11px] text-slate-400 font-mono">
-                SESSION: {sessionId || "N/A"}
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  window.print();
-                }}
-                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs transition-all flex items-center gap-1.5 cursor-pointer"
-              >
-                <Printer className="w-3.5 h-3.5 text-slate-600" />
-                <span>Print / Save PDF</span>
-              </button>
-            </div>
-          </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-md animate-in fade-in duration-200">
+          <StatutoryDocumentViewer
+            document={createDocumentFromOutcome(completedOutcome)}
+            onClose={() => setShowCertModal(false)}
+          />
         </div>
       )}
+
 
       {/* Signature Action Ledger Timeline */}
       <ActionLedger

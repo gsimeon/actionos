@@ -93,3 +93,32 @@ export const renewVehicleLicenseSchema = z.object({
   expectedAmount: z.coerce.number().positive().optional(),
   language: z.string().default("en-NG"),
 });
+
+export const renewHmoPolicySchema = z.object({
+  customerId: z.string().optional(),
+  nhiaNumber: z.string().optional(),
+  nin: z.string().optional(),
+  tier: z.enum(["bronze", "silver", "gold", "platinum"]).optional(),
+  primaryHcpName: z.string().optional(),
+  primaryHcpId: z.string().optional(),
+  dependentsCount: z.coerce.number().int().min(0).max(10).optional(),
+  paymentReference: z.string().optional(),
+  expectedAmount: z.coerce.number().positive().optional(),
+  language: z.string().default("en-NG"),
+});
+
+export const renewDriverLicenseSchema = z.object({
+  customerId: z.string().optional(),
+  dlNumber: z.string().optional(),
+  durationYears: z.coerce
+    .number()
+    .int()
+    .refine((v) => v === 3 || v === 5, {
+      message: "FRSC Driver's license renewal duration must be either 3 or 5 years",
+    })
+    .default(3),
+  captureCenterId: z.string().optional(),
+  paymentReference: z.string().optional(),
+  language: z.string().default("en-NG"),
+});
+
