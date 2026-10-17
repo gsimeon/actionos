@@ -446,14 +446,40 @@ export class NAtlasConnectionError extends Error {
 }
 
 /**
+ * Trusted official sovereign domains for NITDA / NCAIR N-ATLAS endpoints.
+ */
+export const TRUSTED_N_ATLAS_HOSTS: readonly string[] = [
+  "api.n-atlas.ng",
+  "n-atlas.ng",
+  "ncair.nitda.gov.ng",
+  "api.nitda.gov.ng",
+];
+
+/**
+ * Validates whether a given endpoint URL belongs to an explicitly trusted N-ATLAS host.
+ */
+export function isOfficialNAtlasEndpoint(urlStr: string): boolean {
+  try {
+    const parsed = new URL(urlStr);
+    const hostname = parsed.hostname.toLowerCase();
+    return TRUSTED_N_ATLAS_HOSTS.some(
+      (trusted) => hostname === trusted || hostname.endsWith(`.${trusted}`)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Live N-ATLAS Foundation Model HTTP Adapter (NITDA / NCAIR)
  * Connects to N-ATLAS OpenAI-compatible chat completions or native inference endpoints.
+ * Prioritizes N_ATLAS_API_ENDPOINT with backward compatibility for N_ATLAS_API_URL.
  */
 export class HttpNAtlasAdapter implements INAtlasAdapter {
   public readonly name = "Live N-ATLAS Foundation Model (NITDA / NCAIR)";
 
   constructor(
-    private apiUrl: string = process.env.N_ATLAS_API_URL || "https://api.n-atlas.ng/v1",
+    private apiUrl: string = process.env.N_ATLAS_API_ENDPOINT || process.env.N_ATLAS_API_URL || "https://api.n-atlas.ng/v1",
     private apiKey: string = process.env.N_ATLAS_API_KEY || "",
     private strictMode: boolean = process.env.N_ATLAS_STRICT_MODE === "true"
   ) {}
@@ -481,6 +507,7 @@ export class HttpNAtlasAdapter implements INAtlasAdapter {
           _nAtlasFallback: true,
           _fallbackReason: "Missing N_ATLAS_API_KEY",
           _liveVerified: false,
+          _officialServiceVerified: false,
         },
       };
     }
@@ -523,6 +550,7 @@ export class HttpNAtlasAdapter implements INAtlasAdapter {
         if (content) {
           const parsed = JSON.parse(content);
           const latencyMs = Math.round(performance.now() - start);
+          const isOfficial = isOfficialNAtlasEndpoint(this.apiUrl);
           return {
             intent: parsed.intent || "unknown",
             confidence: parsed.confidence || 0.95,
@@ -539,10 +567,12 @@ export class HttpNAtlasAdapter implements INAtlasAdapter {
               _model: "n-atlas-multilingual",
               _isLiveAI: true,
               _liveVerified: true,
+              _officialServiceVerified: isOfficial,
               _latencyMs: latencyMs,
               _evidence: {
-                prompt: redactSensitiveInput(input.text),
+                sanitizedPrompt: redactSensitiveInput(input.text),
                 endpoint: this.apiUrl,
+                isOfficialEndpoint: isOfficial,
                 model: "n-atlas-multilingual",
                 timestamp: new Date().toISOString(),
                 latencyMs,
@@ -582,6 +612,7 @@ export class HttpNAtlasAdapter implements INAtlasAdapter {
         _model: "rule_based_benchmark",
         _isLiveAI: false,
         _liveVerified: false,
+        _officialServiceVerified: false,
         _fallbackReason: fetchError?.message || "Unknown error",
       },
     };

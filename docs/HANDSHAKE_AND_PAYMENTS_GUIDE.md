@@ -106,10 +106,21 @@ ActionOS integrates with **N-ATLAS** (Nigeria's multilingual foundation model de
 Add the following to `.env.local`:
 
 ```env
-N_ATLAS_API_URL=https://api.n-atlas.ng/v1
+# Official N-ATLAS Sovereign AI endpoint (NITDA / NCAIR)
+# N_ATLAS_API_URL is also supported as a backward-compatible alias
+N_ATLAS_API_ENDPOINT=https://api.n-atlas.ng/v1
 N_ATLAS_API_KEY=your_n_atlas_api_key_here
 N_ATLAS_MODEL=n-atlas-multilingual
+# Set to 'true' in CI/staging to fail-fast if N-ATLAS is unreachable rather than falling back
+N_ATLAS_STRICT_MODE=false
 ```
+
+> [!NOTE]
+> ActionOS independently verifies sovereign model provenance:
+> - `_isLiveAI`: Confirms live network HTTP connectivity and successful JSON response.
+> - `_officialServiceVerified`: Confirms the configured endpoint matches official NITDA / NCAIR sovereign trust domains (`api.n-atlas.ng`, `ncair.nitda.gov.ng`, `api.nitda.gov.ng`).
+> - `_evidence.sanitizedPrompt`: Ensures customer PII, cards, and NIN tokens are strictly redacted before audit trail persistence.
+
 
 ### 2.4 Payload & Schema
 The `HttpNAtlasAdapter` in ActionOS sends standard structured chat completion requests:

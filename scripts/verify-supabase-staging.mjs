@@ -40,11 +40,44 @@ export const EXPECTED_CORE_TABLES = [
 ];
 
 export const SENSITIVE_RPC_ENDPOINTS = [
-  { name: "settle_payment_webhook", args: { p_transaction_reference: "probe_ref_unauthorized" } },
-  { name: "reserve_refund_balance", args: { p_organization_id: "a0000000-0000-0000-0000-000000000001", p_amount: 100 } },
-  { name: "release_refund_reservation", args: { p_reservation_id: "probe_res_unauthorized" } },
-  { name: "finalize_atomic_refund_settlement", args: { p_refund_transaction_id: "probe_tx_unauthorized" } },
-  { name: "claim_and_accept_quote", args: { p_quote_id: "probe_quote_unauthorized" } },
+  {
+    name: "settle_payment_webhook",
+    args: {
+      p_transaction_id: "00000000-0000-0000-0000-000000000001",
+      p_status: "succeeded",
+      p_metadata: {},
+      p_provider: "paystack",
+      p_event_id: "probe_event_unauthorized",
+      p_event_type: "charge.success",
+      p_reference: "probe_ref_unauthorized",
+    },
+  },
+  {
+    name: "reserve_refund_balance",
+    args: {
+      p_organization_id: "00000000-0000-0000-0000-000000000001",
+      p_amount: 100,
+    },
+  },
+  {
+    name: "release_refund_reservation",
+    args: {
+      p_reservation_id: "00000000-0000-0000-0000-000000000001",
+    },
+  },
+  {
+    name: "finalize_atomic_refund_settlement",
+    args: {
+      p_refund_transaction_id: "00000000-0000-0000-0000-000000000001",
+    },
+  },
+  {
+    name: "claim_and_accept_quote",
+    args: {
+      p_session_id: "00000000-0000-0000-0000-000000000001",
+      p_quote_id: "00000000-0000-0000-0000-000000000001",
+    },
+  },
 ];
 
 /**
@@ -135,13 +168,24 @@ export function classifyRpcResult(result) {
     };
   }
 
-  // 4. Recognized permission denials:
-  // PostgREST returns 404 with PGRST202 when an RPC is revoked or not granted EXECUTE to the role.
-  // Postgres returns 403 / 401 with 42501 (insufficient privilege) or PGRST301 (JWT forbidden).
-  const isPostgrestRevoked = status === 404 && error.code === "PGRST202";
-  const isPostgresPermissionDenied = (status === 403 || status === 401) && (error.code === "42501" || error.code === "PGRST301");
+  // 4. Missing function in schema cache (PGRST202, HTTP 404)
+  // PostgREST returns 404 with PGRST202 when an RPC is NOT found in the schema cache
+  // or does not match parameter signatures. This is a MISSING function defect, NEVER a verified permission revocation!
+  if (status === 404 && error?.code === "PGRST202") {
+    return {
+      isPermissionDenied: false,
+      isCriticalLeak: false,
+      category: "function_missing",
+      reason: `Function not found in schema cache (HTTP 404, code: PGRST202): ${error.message} - missing functions cannot be verified as privilege revoked!`,
+    };
+  }
 
-  if (isPostgrestRevoked || isPostgresPermissionDenied) {
+  // 5. Recognized permission denials:
+  // Postgres returns 403 / 401 with 42501 (insufficient privilege) or PGRST301 (JWT forbidden).
+  // This explicitly proves the function exists in the database and Postgres strictly denied execution to the role.
+  const isPostgresPermissionDenied = (status === 403 || status === 401) && (error?.code === "42501" || error?.code === "PGRST301");
+
+  if (isPostgresPermissionDenied) {
     return {
       isPermissionDenied: true,
       isCriticalLeak: false,
@@ -611,6 +655,37 @@ export async function runValidation(envOverride = process.env, argvOverride = pr
             true,
             `Service role authentication verified (organizations returned: ${data?.length || 0})`
           );
+
+          // Privileged check: verify each sensitive RPC function actually exists in schema cache
+          console.log("\n6. Verifying Sensitive Function Existence via Privileged Service Role Check...");
+          for (const { name, args } of SENSITIVE_RPC_ENDPOINTS) {
+            try {
+              const adminRpcRes = await adminClient.rpc(name, args);
+              // PostgREST returns 404 with PGRST202 if function does not exist in the schema cache
+              if (adminRpcRes.status === 404 && adminRpcRes.error?.code === "PGRST202") {
+                record(
+                  `service_role_rpc_exists_${name}`,
+                  "service_role",
+                  false,
+                  `Function '${name}' does NOT exist in database schema cache (HTTP 404, code: PGRST202)`
+                );
+              } else {
+                record(
+                  `service_role_rpc_exists_${name}`,
+                  "service_role",
+                  true,
+                  `Function '${name}' confirmed present in database catalog and executable by service_role (status: ${adminRpcRes.status || 200})`
+                );
+              }
+            } catch (err) {
+              record(
+                `service_role_rpc_exists_${name}`,
+                "service_role",
+                false,
+                `Exception verifying RPC existence for '${name}': ${err.message}`
+              );
+            }
+          }
         }
       } catch (err) {
         record("service_role_authentication", "service_role", false, `Service role check threw exception: ${err.message}`);

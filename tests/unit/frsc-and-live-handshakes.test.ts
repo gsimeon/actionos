@@ -1,7 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { FrscGatewayClient } from "@/lib/integrations/frsc";
-import { HttpNAtlasAdapter, OfficialNAtlasProvider, NAtlasConnectionError } from "@/lib/ai/n-atlas";
+import {
+  HttpNAtlasAdapter,
+  OfficialNAtlasProvider,
+  NAtlasConnectionError,
+  isOfficialNAtlasEndpoint,
+  TRUSTED_N_ATLAS_HOSTS,
+} from "@/lib/ai/n-atlas";
 import { QueryVehicleTool } from "@/lib/actionos/tools/query-vehicle";
 import { createWorkflowExecutionContext } from "@/lib/runtime/execution-context";
 import { DEMO_CONTEXT } from "@/lib/security/auth-context";
@@ -36,6 +42,45 @@ describe("FRSC & Live N-ATLAS Handshake Adapters Suite", () => {
     });
   });
 
+  describe("N-ATLAS Sovereign Endpoint Validation & Trust Boundary", () => {
+    it("should validate trusted N-ATLAS official sovereign domains vs untrusted endpoints", () => {
+      assert.equal(isOfficialNAtlasEndpoint("https://api.n-atlas.ng/v1"), true);
+      assert.equal(isOfficialNAtlasEndpoint("https://n-atlas.ng/chat/completions"), true);
+      assert.equal(isOfficialNAtlasEndpoint("https://ncair.nitda.gov.ng/ai/v1"), true);
+      assert.equal(isOfficialNAtlasEndpoint("https://api.nitda.gov.ng/v1"), true);
+      assert.equal(isOfficialNAtlasEndpoint("https://subdomain.api.n-atlas.ng/v1"), true);
+
+      // Untrusted, mock, or external hosts must evaluate false
+      assert.equal(isOfficialNAtlasEndpoint("https://mock-api.n-atlas.com"), false);
+      assert.equal(isOfficialNAtlasEndpoint("https://external-proxy.example.com/v1"), false);
+      assert.equal(isOfficialNAtlasEndpoint("http://localhost:8000/v1"), false);
+      assert.equal(isOfficialNAtlasEndpoint("not-a-valid-url"), false);
+    });
+
+    it("should prioritize N_ATLAS_API_ENDPOINT over N_ATLAS_API_URL for configuration", () => {
+      const prevEndpoint = process.env.N_ATLAS_API_ENDPOINT;
+      const prevUrl = process.env.N_ATLAS_API_URL;
+      try {
+        process.env.N_ATLAS_API_ENDPOINT = "https://api.n-atlas.ng/v1";
+        process.env.N_ATLAS_API_URL = "https://legacy-url.n-atlas.ng/v1";
+
+        const adapter = new HttpNAtlasAdapter();
+        // @ts-expect-error - checking private property for assertion
+        assert.equal(adapter.apiUrl, "https://api.n-atlas.ng/v1");
+
+        delete process.env.N_ATLAS_API_ENDPOINT;
+        const adapterLegacy = new HttpNAtlasAdapter();
+        // @ts-expect-error - checking private property for assertion
+        assert.equal(adapterLegacy.apiUrl, "https://legacy-url.n-atlas.ng/v1");
+      } finally {
+        if (prevEndpoint !== undefined) process.env.N_ATLAS_API_ENDPOINT = prevEndpoint;
+        else delete process.env.N_ATLAS_API_ENDPOINT;
+        if (prevUrl !== undefined) process.env.N_ATLAS_API_URL = prevUrl;
+        else delete process.env.N_ATLAS_API_URL;
+      }
+    });
+  });
+
   describe("N-ATLAS HTTP Adapter & Fallback Engine", () => {
     it("should fallback gracefully to benchmark engine when N_ATLAS_API_KEY is omitted", async () => {
       const adapter = new HttpNAtlasAdapter("https://mock-api.n-atlas.ng", "");
@@ -49,6 +94,7 @@ describe("FRSC & Live N-ATLAS Handshake Adapters Suite", () => {
       assert.equal(res.entities._isLiveAI, false);
       assert.equal(res.entities._nAtlasFallback, true);
       assert.equal(res.entities._liveVerified, false);
+      assert.equal(res.entities._officialServiceVerified, false);
     });
 
     it("should fail fast with NAtlasConnectionError in strict mode when API key is missing", async () => {
@@ -75,7 +121,59 @@ describe("FRSC & Live N-ATLAS Handshake Adapters Suite", () => {
       assert.equal(res.entities.vehiclePlate, "ABC-123-XY");
     });
 
-    it("should sanitize prompt in _evidence and record provenance when live inference succeeds", async () => {
+    it("should distinguish live API success (_isLiveAI) from official sovereign provenance (_officialServiceVerified)", async () => {
+      const originalFetch = globalThis.fetch;
+      try {
+        globalThis.fetch = (async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    intent: "renew_policy",
+                    confidence: 0.99,
+                    entities: { policyNumber: "AUTO-2026-00182" },
+                    language: "en-NG",
+                  }),
+                },
+              },
+            ],
+          }),
+        })) as unknown as typeof fetch;
+
+        // 1. Tested against official trusted host
+        const officialAdapter = new HttpNAtlasAdapter("https://api.n-atlas.ng/v1", "test-live-key");
+        const officialRes = await officialAdapter.understand({
+          text: "Renew policy AUTO-2026-00182",
+          language: "en-NG",
+        });
+
+        assert.equal(officialRes.entities._isLiveAI, true);
+        assert.equal(officialRes.entities._liveVerified, true);
+        assert.equal(officialRes.entities._officialServiceVerified, true);
+        const officialEvidence = officialRes.entities._evidence as { isOfficialEndpoint: boolean };
+        assert.equal(officialEvidence.isOfficialEndpoint, true);
+
+        // 2. Tested against non-official or proxy host (proves response returned, but flags provenance)
+        const proxyAdapter = new HttpNAtlasAdapter("https://external-proxy.example.com/v1", "test-live-key");
+        const proxyRes = await proxyAdapter.understand({
+          text: "Renew policy AUTO-2026-00182",
+          language: "en-NG",
+        });
+
+        assert.equal(proxyRes.entities._isLiveAI, true);
+        assert.equal(proxyRes.entities._liveVerified, true);
+        assert.equal(proxyRes.entities._officialServiceVerified, false);
+        const proxyEvidence = proxyRes.entities._evidence as { isOfficialEndpoint: boolean };
+        assert.equal(proxyEvidence.isOfficialEndpoint, false);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it("should sanitize prompt in _evidence and record redacted provenance when live inference succeeds", async () => {
       const originalFetch = globalThis.fetch;
       try {
         globalThis.fetch = (async () => ({
@@ -99,28 +197,38 @@ describe("FRSC & Live N-ATLAS Handshake Adapters Suite", () => {
 
         const adapter = new HttpNAtlasAdapter("https://api.n-atlas.ng/v1", "test-live-key");
         const res = await adapter.understand({
-          text: "My card 4111222233334444 and phone 08031234567 for policy AUTO-2026-00182 with plate ABC-123-XY",
+          text: "My card 4111222233334444 and phone 08031234567 for policy AUTO-2026-00182 with plate ABC-123-XY and NIN 12345678901",
           language: "en-NG",
         });
 
         assert.equal(res.intent, "renew_policy");
         assert.equal(res.entities._isLiveAI, true);
         assert.equal(res.entities._liveVerified, true);
+        assert.equal(res.entities._officialServiceVerified, true);
         assert.ok(res.entities._evidence);
-        const evidence = res.entities._evidence as { prompt: string; endpoint: string; model: string; latencyMs: number };
+        const evidence = res.entities._evidence as {
+          sanitizedPrompt: string;
+          endpoint: string;
+          isOfficialEndpoint: boolean;
+          model: string;
+          latencyMs: number;
+        };
         assert.equal(evidence.endpoint, "https://api.n-atlas.ng/v1");
+        assert.equal(evidence.isOfficialEndpoint, true);
         assert.equal(evidence.model, "n-atlas-multilingual");
         assert.ok(typeof evidence.latencyMs === "number");
 
-        // Privacy check: raw sensitive data MUST be redacted in evidence log
-        assert.ok(!evidence.prompt.includes("4111222233334444"), "Card number must be redacted");
-        assert.ok(!evidence.prompt.includes("08031234567"), "Phone number must be redacted");
-        assert.ok(!evidence.prompt.includes("AUTO-2026-00182"), "Policy number must be redacted");
-        assert.ok(!evidence.prompt.includes("ABC-123-XY"), "Vehicle plate must be redacted");
-        assert.ok(evidence.prompt.includes("[REDACTED_CARD]"));
-        assert.ok(evidence.prompt.includes("[REDACTED_PHONE]"));
-        assert.ok(evidence.prompt.includes("[REDACTED_POLICY]"));
-        assert.ok(evidence.prompt.includes("[REDACTED_PLATE]"));
+        // Privacy check: raw sensitive customer data MUST be redacted in evidence log
+        assert.ok(!evidence.sanitizedPrompt.includes("4111222233334444"), "Card number must be redacted");
+        assert.ok(!evidence.sanitizedPrompt.includes("08031234567"), "Phone number must be redacted");
+        assert.ok(!evidence.sanitizedPrompt.includes("AUTO-2026-00182"), "Policy number must be redacted");
+        assert.ok(!evidence.sanitizedPrompt.includes("ABC-123-XY"), "Vehicle plate must be redacted");
+        assert.ok(!evidence.sanitizedPrompt.includes("12345678901"), "NIN must be redacted");
+        assert.ok(evidence.sanitizedPrompt.includes("[REDACTED_CARD]"));
+        assert.ok(evidence.sanitizedPrompt.includes("[REDACTED_PHONE]"));
+        assert.ok(evidence.sanitizedPrompt.includes("[REDACTED_POLICY]"));
+        assert.ok(evidence.sanitizedPrompt.includes("[REDACTED_PLATE]"));
+        assert.ok(evidence.sanitizedPrompt.includes("[REDACTED_IDENTIFIER]"));
       } finally {
         globalThis.fetch = originalFetch;
       }

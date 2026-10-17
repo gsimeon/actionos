@@ -118,17 +118,17 @@ describe("ActionOS Reliability Gate v2: Verifier & Invariant Testing Suite", () 
       assert.equal(result.category, "unexpected_error");
     });
 
-    it("accepts PostgREST PGRST202 (not exposed/function revoked) as valid privilege revocation", () => {
+    it("strictly rejects PostgREST PGRST202 (missing function in schema cache) from being counted as permission denial", () => {
       const result = classifyRpcResult({
         data: null,
         error: { code: "PGRST202", message: "Could not find the function public.settle_payment_webhook in the schema cache" },
         status: 404,
       });
 
-      assert.equal(result.isPermissionDenied, true);
+      assert.equal(result.isPermissionDenied, false);
       assert.equal(result.isCriticalLeak, false);
-      assert.equal(result.category, "permission_denied");
-      assert.match(result.reason, /Privilege strictly revoked/);
+      assert.equal(result.category, "function_missing");
+      assert.match(result.reason, /Function not found in schema cache/);
     });
 
     it("accepts PostgreSQL 42501 (insufficient privilege) as valid privilege revocation", () => {
