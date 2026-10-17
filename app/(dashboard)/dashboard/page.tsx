@@ -14,6 +14,7 @@ import {
   CheckCircle2,
   Clock,
   Cpu,
+  Sparkles,
 } from "lucide-react";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { StatusBadge } from "@/components/actionos/status-badge";
@@ -21,12 +22,14 @@ import { formatNaira, formatDate } from "@/lib/utils";
 import type { Renewal, Policy, Customer } from "@/types/database";
 import { useRenewalsRealtime } from "@/lib/realtime";
 import { RegulatoryWebhookSimulator } from "@/components/dashboard/regulatory-webhook-simulator";
+import { JudgeGuidedTour } from "@/components/dashboard/judge-guided-tour";
 
 export default function DashboardOverviewPage() {
   const [renewals, setRenewals] = useState<Renewal[]>([]);
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showTour, setShowTour] = useState(false);
 
   useRenewalsRealtime({
     onRenewalChange: (renewal, eventType) => {
@@ -106,11 +109,18 @@ export default function DashboardOverviewPage() {
         </div>
 
         <div className="flex flex-col sm:flex-row items-center gap-3 shrink-0">
+          <button
+            onClick={() => setShowTour(true)}
+            className="w-full sm:w-auto flex items-center justify-center gap-2 px-5 py-3 rounded-2xl bg-gradient-to-r from-amber-500 via-emerald-600 to-teal-600 hover:from-amber-600 hover:to-teal-700 text-white text-xs font-black transition-all shadow-md shadow-emerald-600/30 active:scale-95 ring-2 ring-emerald-400/50 cursor-pointer"
+          >
+            <Sparkles className="w-4 h-4 text-amber-200" />
+            <span>⚡ 1-Click Judge Tour</span>
+          </button>
           <Link
             href="/actions"
-            className="w-full sm:w-auto flex items-center justify-center gap-2 px-5 py-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-bold transition-all shadow-md shadow-emerald-600/20 active:scale-95"
+            className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-3 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-all shadow-md shadow-slate-900/20 active:scale-95"
           >
-            <Zap className="w-4 h-4" />
+            <Zap className="w-4 h-4 text-emerald-400" />
             <span>Action Console</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </Link>
@@ -435,6 +445,8 @@ export default function DashboardOverviewPage() {
           </div>
         </div>
       </div>
+
+      <JudgeGuidedTour isOpen={showTour} onClose={() => setShowTour(false)} />
     </div>
   );
 }

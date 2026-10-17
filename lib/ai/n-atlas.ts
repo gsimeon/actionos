@@ -1,5 +1,6 @@
 import type { NAtlasProvider, NAtlasUnderstanding } from "@/types/actionos";
 import { isDemoMode } from "@/lib/runtime/mode";
+import { redactSensitiveInput } from "@/lib/security/redaction";
 import { normalizeNigerianText, formatClarificationMessage } from "./nigerian-languages";
 export * from "./nigerian-languages";
 
@@ -540,7 +541,7 @@ export class HttpNAtlasAdapter implements INAtlasAdapter {
               _liveVerified: true,
               _latencyMs: latencyMs,
               _evidence: {
-                prompt: input.text,
+                prompt: redactSensitiveInput(input.text),
                 endpoint: this.apiUrl,
                 model: "n-atlas-multilingual",
                 timestamp: new Date().toISOString(),

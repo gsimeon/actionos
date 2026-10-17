@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import fs from "node:fs";
 
 /**
  * ActionOS Live Database Diagnostic Utility
@@ -8,6 +9,19 @@ import { createClient } from "@supabase/supabase-js";
  * 2. Explicit environment variable requirements (SUPABASE_URL / SUPABASE_ANON_KEY).
  * 3. Production guard: Blocks execution against production endpoints without explicit opt-in (--allow-prod or ACTIONOS_ALLOW_PROD=true).
  */
+
+// Auto-load local environment file if running locally and variables are not yet injected
+if (typeof process.loadEnvFile === "function") {
+  try {
+    if (fs.existsSync(".env.local")) {
+      process.loadEnvFile(".env.local");
+    } else if (fs.existsSync(".env")) {
+      process.loadEnvFile(".env");
+    }
+  } catch {
+    // Silently proceed if environment file is already loaded or unreadable
+  }
+}
 
 const rawUrl = process.env.SUPABASE_URL || process.env.SUPABASE_STAGING_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
 const rawKey = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_STAGING_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -68,16 +82,19 @@ async function check() {
 
   for (const table of tables) {
     try {
-      const { error, count, status } = await supabase.from(table).select("*", { count: "exact", head: true });
+      const { data, error, status } = await supabase.from(table).select("*").limit(1);
       if (error) {
         if ((status === 401 || status === 403) && error.code === "42501") {
           console.log(`🔒 Table '${table}': exists in schema (SELECT restricted for current role: 42501)`);
           verifiedTables++;
+        } else if (error.code === "PGRST205" || error.code === "42P01" || status === 404) {
+          console.error(`❌ Table '${table}': NOT FOUND in PostgREST schema cache (code: ${error.code})`);
         } else {
           console.error(`❌ Table '${table}': ${error.message} (HTTP ${status}, code: ${error.code})`);
         }
       } else {
-        console.log(`✅ Table '${table}': exists and accessible (record count = ${count ?? 0})`);
+        const countDesc = Array.isArray(data) ? `rows sample = ${data.length}` : "accessible";
+        console.log(`✅ Table '${table}': exists and accessible (${countDesc})`);
         verifiedTables++;
       }
     } catch (err) {

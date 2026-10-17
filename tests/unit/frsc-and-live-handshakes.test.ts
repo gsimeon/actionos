@@ -74,6 +74,57 @@ describe("FRSC & Live N-ATLAS Handshake Adapters Suite", () => {
       assert.equal(res.intent, "query_vehicle");
       assert.equal(res.entities.vehiclePlate, "ABC-123-XY");
     });
+
+    it("should sanitize prompt in _evidence and record provenance when live inference succeeds", async () => {
+      const originalFetch = globalThis.fetch;
+      try {
+        globalThis.fetch = (async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    intent: "renew_policy",
+                    confidence: 0.98,
+                    entities: { policyNumber: "AUTO-2026-00182" },
+                    language: "en-NG",
+                  }),
+                },
+              },
+            ],
+          }),
+        })) as unknown as typeof fetch;
+
+        const adapter = new HttpNAtlasAdapter("https://api.n-atlas.ng/v1", "test-live-key");
+        const res = await adapter.understand({
+          text: "My card 4111222233334444 and phone 08031234567 for policy AUTO-2026-00182 with plate ABC-123-XY",
+          language: "en-NG",
+        });
+
+        assert.equal(res.intent, "renew_policy");
+        assert.equal(res.entities._isLiveAI, true);
+        assert.equal(res.entities._liveVerified, true);
+        assert.ok(res.entities._evidence);
+        const evidence = res.entities._evidence as { prompt: string; endpoint: string; model: string; latencyMs: number };
+        assert.equal(evidence.endpoint, "https://api.n-atlas.ng/v1");
+        assert.equal(evidence.model, "n-atlas-multilingual");
+        assert.ok(typeof evidence.latencyMs === "number");
+
+        // Privacy check: raw sensitive data MUST be redacted in evidence log
+        assert.ok(!evidence.prompt.includes("4111222233334444"), "Card number must be redacted");
+        assert.ok(!evidence.prompt.includes("08031234567"), "Phone number must be redacted");
+        assert.ok(!evidence.prompt.includes("AUTO-2026-00182"), "Policy number must be redacted");
+        assert.ok(!evidence.prompt.includes("ABC-123-XY"), "Vehicle plate must be redacted");
+        assert.ok(evidence.prompt.includes("[REDACTED_CARD]"));
+        assert.ok(evidence.prompt.includes("[REDACTED_PHONE]"));
+        assert.ok(evidence.prompt.includes("[REDACTED_POLICY]"));
+        assert.ok(evidence.prompt.includes("[REDACTED_PLATE]"));
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
   });
 
   describe("QueryVehicleTool with FRSC Cross-Verification", () => {

@@ -543,7 +543,7 @@ export async function runValidation(envOverride = process.env, argvOverride = pr
     console.log("\n2. Verifying PostgREST Catalog & Table Schema Presence...");
     for (const table of EXPECTED_CORE_TABLES) {
       try {
-        const queryRes = await anonClient.from(table).select("*", { count: "exact", head: true });
+        const queryRes = await anonClient.from(table).select("*").limit(1);
         const classification = classifyTableExistence(queryRes, table);
         record(`table_catalog_${table}`, "schema", classification.exists, classification.reason);
       } catch (err) {
@@ -736,6 +736,26 @@ export async function runValidation(envOverride = process.env, argvOverride = pr
 // Direct execution check
 const isDirectRun = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isDirectRun) {
+  if (typeof process.loadEnvFile === "function") {
+    try {
+      if (fs.existsSync(".env.local")) {
+        process.loadEnvFile(".env.local");
+      } else if (fs.existsSync(".env")) {
+        process.loadEnvFile(".env");
+      }
+    } catch {
+      // Proceed if already loaded or missing
+    }
+  }
+
+  // Populate staging variables from standard Next.js Supabase config if omitted
+  if (!process.env.SUPABASE_STAGING_URL && process.env.NEXT_PUBLIC_SUPABASE_URL) {
+    process.env.SUPABASE_STAGING_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  }
+  if (!process.env.SUPABASE_STAGING_ANON_KEY && (process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)) {
+    process.env.SUPABASE_STAGING_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  }
+
   runValidation()
     .then(({ exitCode }) => {
       process.exit(exitCode);

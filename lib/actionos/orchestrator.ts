@@ -83,40 +83,8 @@ export interface SagaRefundOutcome {
   refundState?: "refund_confirmed" | "refund_pending" | "refund_failed" | "refund_unknown";
 }
 
-/**
- * Redacts sensitive customer details (cards, phone numbers, BVN, NIN, emails) from logged audit events.
- */
-export function redactSensitiveInput(text?: string): string {
-  if (!text) return "";
-  return text
-    .replace(/\b(?:\d[ -]*?){13,19}\b/g, "[REDACTED_CARD]")
-    .replace(/\b(?:\+?234|0)[789][01]\d{8}\b/g, "[REDACTED_PHONE]")
-    .replace(/\b\d{11}\b/g, "[REDACTED_IDENTIFIER]")
-    .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g, "[REDACTED_EMAIL]")
-    .replace(/\b(?:POL|AUTO|MOT|INS|REN)[A-Z0-9-]{4,}\b/gi, "[REDACTED_POLICY]")
-    .replace(/\b[A-Z]{3}[-\s]?\d{3}[-\s]?[A-Z]{2}\b/gi, "[REDACTED_PLATE]");
-}
-
-/**
- * Recursively redacts sensitive values (cards, phones, identifiers, emails, policies, plates)
- * from arbitrary metadata objects before audit trail persistence.
- */
-export function redactSensitiveObject<T>(obj: T): T {
-  if (typeof obj === "string") {
-    return redactSensitiveInput(obj) as unknown as T;
-  }
-  if (Array.isArray(obj)) {
-    return obj.map(redactSensitiveObject) as unknown as T;
-  }
-  if (obj && typeof obj === "object") {
-    const res: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(obj)) {
-      res[k] = redactSensitiveObject(v);
-    }
-    return res as unknown as T;
-  }
-  return obj;
-}
+import { redactSensitiveInput, redactSensitiveObject } from "@/lib/security/redaction";
+export { redactSensitiveInput, redactSensitiveObject };
 
 export { formatCurrency };
 
