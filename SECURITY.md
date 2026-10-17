@@ -90,8 +90,36 @@ Reference tickets (e.g., `ACT-20261007-00123`) are issued and logged in `human_e
 
 ---
 
-## 6. Secrets Management
+## 7. Reliability Gate & Staging Verification Invariants
+
+ActionOS enforces an automated Reliability Gate (`scripts/verify-supabase-staging.mjs`) to verify database security, RLS enforcement, and RPC isolation.
+
+### Strict Error & Denial Classifications
+Historical false-positive classifications (such as treating missing schema relations as RLS denials) are strictly eliminated:
+- **`relation_missing` (Fails Gate):** PostgREST `PGRST205`, PostgreSQL `42P01`, and HTTP `404` indicate that a table or view is missing from the database or PostgREST schema cache. These are classified as unmigrated schema errors, **never** as security passes.
+- **`server_error` & `network_failure` (Fails Gate):** HTTP `5xx` responses, socket timeouts, and connection aborts indicate infrastructure failure and fail the gate immediately.
+- **`unexpected_error` (Fails Gate):** HTTP `400` malformed syntax or unhandled errors fail the gate.
+- **`permission_denied` (Security Pass):** Only explicit PostgreSQL `42501` (insufficient privilege) or PostgREST `PGRST301` are accepted as proof that RLS or database grants actively denied anon/unprivileged access.
+- **`rls_empty_filter` (Security Pass):** An empty result array (`[]`) on authenticated RLS-filtered tables confirms row filtering is functioning without leaking unauthorized records.
+
+### Offline vs. Staging Mode Separation
+To prevent green CI runs from creating false impressions of database verification:
+1. **Offline Mode (`npm run db:verify:offline`):** Designed for local PRs where external staging credentials are not present. Invariant schemas and migrations are validated locally, while all 23 live database checks (15 tables, 2 RLS probes, 5 RPC revocations, 1 service query) are recorded as `skipped` (`liveVerified: false`) in `reliability-gate-report.json`.
+2. **Staging Required Mode (`npm run db:verify:staging`):** Executed in dedicated staging pipelines. Requires valid `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. Missing credentials, missing tables, unapplied migrations, or unexpected RPC permissions trigger an immediate hard exit (`process.exit(1)`).
+
+---
+
+## 8. N-ATLAS AI Engine & Audit Transparency
+
+- **Transparent Attribution:** Every intent analysis returns explicit provider metadata (`_aiProvider`, `_liveVerified`, and `_evidence`).
+- **Zero Silent Substitution in Strict Mode:** Setting `N_ATLAS_STRICT_MODE=true` forces the N-ATLAS adapter to fail fast with `NAtlasConnectionError` if credentials or API connections fail, preventing fallback engines from masking connectivity outages during audit evaluations.
+- **Deterministic Benchmark Engine:** When running in sandbox or unconfigured environments, responses are clearly stamped `_aiProvider: "N-ATLAS Fallback (Deterministic Benchmark Engine)"`, `_liveVerified: false`, with explicit `_fallbackReason`.
+
+---
+
+## 9. Secrets Management
 
 - `SUPABASE_SERVICE_ROLE_KEY` is never bundled into client-side code.
 - Demo mode operates securely without requiring production API keys.
 - Environment variables must be loaded via `.env.local` and never committed to source control.
+

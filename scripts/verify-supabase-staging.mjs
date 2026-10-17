@@ -262,32 +262,61 @@ export function classifyRlsDenial(result, tableName) {
     };
   }
 
-  // 3. Access denied by permissions/RLS error
-  if (error && (error.code === "PGRST205" || error.code === "42501" || status === 401 || status === 403)) {
-    return {
-      isIsolated: true,
-      isCriticalLeak: false,
-      category: "permission_denied",
-      reason: `Unauthenticated query on '${tableName}' blocked by database permissions/RLS (${error.code})`,
-    };
-  }
-
-  // 4. Network or server error
+  // 3. Network failures or thrown network-level errors
   const errMsg = (error?.message || "").toLowerCase();
   if (
     errMsg.includes("fetch failed") ||
     errMsg.includes("networkerror") ||
     errMsg.includes("econnrefused") ||
-    errMsg.includes("etimedout")
+    errMsg.includes("etimedout") ||
+    errMsg.includes("enotfound") ||
+    errMsg.includes("abort")
   ) {
     return {
       isIsolated: false,
       isCriticalLeak: false,
       category: "network_failure",
-      reason: `Network error during RLS check on '${tableName}': ${error.message}`,
+      reason: `Network/connectivity error during RLS check on '${tableName}': ${error.message}`,
     };
   }
 
+  // 4. Server errors (HTTP 5xx)
+  if (status && status >= 500) {
+    return {
+      isIsolated: false,
+      isCriticalLeak: false,
+      category: "server_error",
+      reason: `Database/server error (HTTP ${status}) during RLS check on '${tableName}': ${error?.message || "server crash"}`,
+    };
+  }
+
+  // 5. Relation missing (PGRST205, 42P01, 404)
+  // PGRST205 indicates the relation is not found in the PostgREST schema cache.
+  // This is a missing table or schema cache defect, NEVER an RLS isolation pass!
+  if (error?.code === "PGRST205" || error?.code === "42P01" || status === 404) {
+    return {
+      isIsolated: false,
+      isCriticalLeak: false,
+      category: "relation_missing",
+      reason: `Relation '${tableName}' not found in PostgREST schema cache (code: ${error?.code}, status: ${status}) - cannot verify RLS isolation!`,
+    };
+  }
+
+  // 6. Explicit PostgreSQL permission denials
+  // Postgres returns 42501 (insufficient_privilege) when table exists but role lacks SELECT.
+  // PostgREST returns PGRST301 when JWT credentials forbid access.
+  const isPostgres42501 = (status === 401 || status === 403) && error?.code === "42501";
+  const isPostgrest301 = (status === 401 || status === 403) && error?.code === "PGRST301";
+  if (isPostgres42501 || isPostgrest301) {
+    return {
+      isIsolated: true,
+      isCriticalLeak: false,
+      category: "permission_denied",
+      reason: `Unauthenticated query on '${tableName}' strictly blocked by database permissions (HTTP ${status}, code: ${error.code})`,
+    };
+  }
+
+  // 7. Unexpected error (e.g. invalid query syntax, cardinality error, bad request 400)
   return {
     isIsolated: false,
     isCriticalLeak: false,
@@ -596,8 +625,47 @@ export async function runValidation(envOverride = process.env, argvOverride = pr
       });
     }
   } else {
-    console.log("\n2. Offline Mode Active: Skipping live database network checks.");
+    console.log("\n2. Offline Mode Active: Explicitly logging skipped live database checks for transparent reporting.");
     console.log("   (To certify live database security, run with --mode=staging-required and provide staging credentials)\n");
+
+    for (const table of EXPECTED_CORE_TABLES) {
+      checks.push({
+        name: `table_catalog_${table}`,
+        category: "schema",
+        status: "skipped",
+        details: `[OFFLINE MODE] Live PostgREST catalog check skipped for '${table}'. Required staging credentials omitted.`,
+      });
+    }
+
+    checks.push({
+      name: "rls_policies_isolation",
+      category: "rls",
+      status: "skipped",
+      details: "[OFFLINE MODE] Live RLS query on 'policies' skipped. Required staging credentials omitted.",
+    });
+
+    checks.push({
+      name: "rls_ledger_isolation",
+      category: "rls",
+      status: "skipped",
+      details: "[OFFLINE MODE] Live RLS query on 'action_ledger_events' skipped. Required staging credentials omitted.",
+    });
+
+    for (const { name } of SENSITIVE_RPC_ENDPOINTS) {
+      checks.push({
+        name: `rpc_revocation_${name}`,
+        category: "rpc",
+        status: "skipped",
+        details: `[OFFLINE MODE] Live RPC execution check skipped for '${name}'. Required staging credentials omitted.`,
+      });
+    }
+
+    checks.push({
+      name: "service_role_authentication",
+      category: "service_role",
+      status: "skipped",
+      details: "[OFFLINE MODE] Live service role admin query skipped. Required staging credentials omitted.",
+    });
   }
 
   // Calculate metrics

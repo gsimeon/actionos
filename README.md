@@ -118,7 +118,7 @@ To maintain absolute credibility and transparency for NITDA competition judges a
 | **FRSC NVIS Statutory Vehicle Registry Gateway** | 🟢 **LIVE / HYBRID (Hardened Production Gateway & Sandbox Verification)** | Production mode enforces hardened FRSC NVIS gateway adapter (`lib/integrations/frsc.ts`) with mandatory `FRSC_API_KEY`, strict Nigerian plate format normalization (`validatePlateNumber`), National Driver's License verification (`validateDriverLicense`), active theft flag cross-verification in `VerifyNiidTool` preventing stolen vehicle underwriting, fail-closed live API error classification (`FrscGatewayError`), and reproducible sandbox fixtures (`tests/unit/frsc-and-lacvis-regulatory-adapters.test.ts`, `tests/unit/frsc-and-live-handshakes.test.ts`). |
 | **NIID & NAICOM Statutory Portal Gateway** | 🟢 **LIVE / HYBRID (Hardened Production Gateway & Digital E-Sticker Issuance)** | Production mode enforces hardened NIID gateway adapter (`lib/integrations/niid.ts`) with mandatory `NIID_API_KEY`, live policy registry verification preventing duplicate active insurance (`NIID_ACTIVE_POLICY_CONFLICT`), statutory NAICOM e-sticker generation (`NAICOM-STK-${year}`), digital certificate verification hash stamping (`GenerateCertificateTool`), fail-closed API error classification (`NiidGatewayError`), and test fixtures (`tests/unit/niid-statutory-adapter.test.ts`, `tests/integration/marketplace-and-niid.test.ts`). |
 | **Interactive Regulatory & Webhook Simulator** | 🟢 **LIVE (Dashboard Control Panel & API)** | Real-time simulator console embedded in the enterprise dashboard (`POST /api/simulator`, `components/dashboard/regulatory-webhook-simulator.tsx`) enabling 1-click statutory trifecta probing (FRSC/LACVIS/NIID), multi-rail payment webhook dispatch with cryptographic HMAC-SHA512 / secret hash generation and signature tampering tests, and 1-click NITDA 2026 competition scenarios (`tests/unit/interactive-simulator-api.test.ts`). |
-| **N-ATLAS Multilingual Engine** | 🟡 **SANDBOX / ADAPTER** | Model-agnostic adapter supporting English, Nigerian Pidgin (`pcm`), Yorùbá (`yo`), Hausa (`ha`), and Igbo (`ig`) with deterministic reproducible sandbox. *(Official N-ATLAS Cloud API model slot: PLANNED)* |
+| **N-ATLAS Multilingual Engine** | 🟢 **LIVE / HYBRID (Hardened HTTP Adapter & Benchmark Sandbox)** | Model-agnostic adapter (`lib/ai/n-atlas.ts`) supporting English, Nigerian Pidgin (`pcm`), Yorùbá (`yo`), Hausa (`ha`), and Igbo (`ig`). Configured for official N-ATLAS Cloud API endpoints (`N_ATLAS_API_ENDPOINT`, `N_ATLAS_API_KEY`, model: `n-atlas-multilingual`). Enforces strict verification mode (`N_ATLAS_STRICT_MODE=true` fails fast via `NAtlasConnectionError` to prevent silent fallback masking), transparent telemetry stamping (`_aiProvider`, `_liveVerified`, `_evidence` with latency and request payload, and explicit `_fallbackReason`), and reproducible offline benchmark sandbox (`tests/unit/frsc-and-live-handshakes.test.ts`). |
 
 ---
 
@@ -135,7 +135,14 @@ npm run lint
 # 3. Execute unit, integration, and security regression test suites
 npm test
 
-# 4. Compile and validate production Next.js build bundle
+# 4. Run Supabase Database Reliability Gate
+# Offline mode (local PRs / development without live credentials):
+npm run db:verify:offline
+
+# Staging-required mode (fails fast if staging database/RLS/RPCs are unavailable):
+npm run db:verify:staging
+
+# 5. Compile and validate production Next.js build bundle
 npm run build
 ```
 

@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { FrscGatewayClient } from "@/lib/integrations/frsc";
-import { HttpNAtlasAdapter, OfficialNAtlasProvider } from "@/lib/ai/n-atlas";
+import { HttpNAtlasAdapter, OfficialNAtlasProvider, NAtlasConnectionError } from "@/lib/ai/n-atlas";
 import { QueryVehicleTool } from "@/lib/actionos/tools/query-vehicle";
 import { createWorkflowExecutionContext } from "@/lib/runtime/execution-context";
 import { DEMO_CONTEXT } from "@/lib/security/auth-context";
@@ -46,6 +46,22 @@ describe("FRSC & Live N-ATLAS Handshake Adapters Suite", () => {
 
       assert.equal(res.intent, "renew_vehicle_license");
       assert.equal(res.entities.vehiclePlate, "ABC-123-XY");
+      assert.equal(res.entities._isLiveAI, false);
+      assert.equal(res.entities._nAtlasFallback, true);
+      assert.equal(res.entities._liveVerified, false);
+    });
+
+    it("should fail fast with NAtlasConnectionError in strict mode when API key is missing", async () => {
+      const adapter = new HttpNAtlasAdapter("https://mock-api.n-atlas.ng", "", true);
+      await assert.rejects(
+        () => adapter.understand({ text: "Renew my car insurance", language: "en-NG" }),
+        (err: unknown) => {
+          assert.ok(err instanceof NAtlasConnectionError);
+          assert.equal(err.status, 401);
+          assert.match(err.message, /N_ATLAS_STRICT_MODE violation/);
+          return true;
+        }
+      );
     });
 
     it("should integrate with OfficialNAtlasProvider transparently", async () => {

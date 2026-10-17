@@ -13,7 +13,9 @@
     "test:integration": "tsx --test tests/integration/**/*.test.ts",
     "test:security": "tsx --test tests/unit/*security*.test.ts tests/integration/supabase-security-and-webhooks.test.ts tests/integration/ledger-persistence-and-privacy.test.ts tests/integration/schema-migration.test.ts",
     "db:check": "node scripts/check-live.mjs",
-    "db:verify": "node scripts/verify-supabase-staging.mjs"
+    "db:verify": "node scripts/verify-supabase-staging.mjs",
+    "db:verify:offline": "node scripts/verify-supabase-staging.mjs --mode=offline",
+    "db:verify:staging": "node scripts/verify-supabase-staging.mjs --mode=staging-required"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",

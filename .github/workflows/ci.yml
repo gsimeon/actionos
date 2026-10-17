@@ -2,13 +2,23 @@ name: ActionOS Continuous Integration
 
 on:
   push:
-    branches: [main]
+    branches: [main, fix/reliability-gate-v2]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      gate_mode:
+        description: "Reliability Gate Mode (staging-required or offline)"
+        required: false
+        default: "staging-required"
+        type: choice
+        options:
+          - "staging-required"
+          - "offline"
 
 jobs:
   verify:
-    name: Typecheck, Lint, Test & Build
+    name: Typecheck, Lint, Test & Build (PR / Local Checks)
     runs-on: ubuntu-24.04
 
     env:
@@ -45,21 +55,54 @@ jobs:
       - name: Security Invariant, Ledger Privacy & Database Migration Suite
         run: npm run test:security
 
-      - name: "ActionOS Reliability Gate: Database Invariants & Migration Verification"
+      - name: "ActionOS Reliability Gate (Offline Invariant Mode)"
         env:
-          SUPABASE_STAGING_URL: ${{ secrets.SUPABASE_STAGING_URL }}
-          SUPABASE_STAGING_ANON_KEY: ${{ secrets.SUPABASE_STAGING_ANON_KEY }}
-          SUPABASE_STAGING_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_STAGING_SERVICE_ROLE_KEY }}
-          RELIABILITY_GATE_MODE: ${{ secrets.SUPABASE_STAGING_URL != '' && 'staging-required' || 'offline' }}
-        run: npm run db:verify
+          RELIABILITY_GATE_MODE: offline
+        run: npm run db:verify:offline
 
-      - name: Archive Reliability Gate Machine-Readable Report
+      - name: Archive Offline Reliability Gate Machine-Readable Report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: reliability-gate-report
+          name: reliability-gate-offline-report
           path: reliability-gate-report.json
           if-no-files-found: ignore
 
       - name: Next.js Production Build
         run: npm run build
+
+  staging-verification:
+    name: Live Supabase Staging Reliability Gate
+    needs: [verify]
+    # Designated live staging gate triggered explicitly via workflow_dispatch
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: "ActionOS Live Staging Reliability Gate (Strict Mode - Cannot Pass Offline)"
+        env:
+          SUPABASE_STAGING_URL: ${{ secrets.SUPABASE_STAGING_URL }}
+          SUPABASE_STAGING_ANON_KEY: ${{ secrets.SUPABASE_STAGING_ANON_KEY }}
+          SUPABASE_STAGING_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_STAGING_SERVICE_ROLE_KEY }}
+          RELIABILITY_GATE_MODE: ${{ github.event.inputs.gate_mode || 'staging-required' }}
+        run: npm run db:verify:staging
+
+      - name: Archive Live Staging Verification Machine-Readable Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reliability-gate-staging-report
+          path: reliability-gate-report.json
+          if-no-files-found: ignore
