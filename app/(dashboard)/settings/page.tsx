@@ -11,10 +11,6 @@ import {
   HeartPulse,
   CreditCard,
   Lock,
-  BellRing,
-  Layers,
-  FileCheck2,
-  CheckCircle2,
 } from "lucide-react";
 import { CsvImporter } from "@/components/csv-importer";
 import { LiveHandshakeHub } from "@/components/dashboard/live-handshake-hub";
@@ -290,7 +286,7 @@ export default function SettingsPage() {
           <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/50 space-y-3">
             <div className="flex items-center gap-2 font-bold text-slate-900 text-xs">
               <CreditCard className="w-3.5 h-3.5 text-amber-600" />
-              <span>FRSC Driver's License</span>
+              <span>FRSC Driver&apos;s License</span>
             </div>
             <div>
               <label className="text-[11px] text-slate-600 block mb-1 font-medium">Class B 3-Year Permit (₦)</label>

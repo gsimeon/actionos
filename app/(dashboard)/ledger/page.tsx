@@ -15,7 +15,6 @@ import {
   HeartPulse,
   FileBadge,
   Shield,
-  AlertCircle,
 } from "lucide-react";
 import type { ActionLedgerEvent } from "@/types/actionos";
 import { useLedgerRealtime } from "@/lib/realtime";

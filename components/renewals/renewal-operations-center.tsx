@@ -30,7 +30,6 @@ import {
   HeartPulse,
   CreditCard,
   QrCode,
-  FileBadge,
 } from "lucide-react";
 import { StatusBadge } from "@/components/actionos/status-badge";
 import { AuthorizationCard, type AuthorizationOptions } from "@/components/actionos/authorization-dialog";
@@ -1139,7 +1138,7 @@ export function RenewalOperationsCenter() {
           }`}
         >
           <CreditCard className="w-3.5 h-3.5 text-indigo-500" />
-          <span>Driver's License &amp; DLC (FRSC)</span>
+          <span>Driver&apos;s License &amp; DLC (FRSC)</span>
         </button>
       </div>
 
@@ -1656,7 +1655,7 @@ export function RenewalOperationsCenter() {
               <div>
                 <div className="flex items-center gap-2">
                   <h3 className="text-sm font-extrabold text-slate-900">
-                    Federal Road Safety Corps (FRSC) Driver's License Renewals
+                    Federal Road Safety Corps (FRSC) Driver&apos;s License Renewals
                   </h3>
                   <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 border border-indigo-200">
                     DLC BIOMETRIC ADAPTER

@@ -918,7 +918,7 @@ export default function TransactionsPage() {
                     <div className="flex items-center gap-2">
                       <FileBadge className="w-4 h-4 text-indigo-600" />
                       <span className="font-extrabold text-indigo-950 uppercase tracking-tight">
-                        FRSC National Driver's License Statutory Schedule
+                        FRSC National Driver&apos;s License Statutory Schedule
                       </span>
                     </div>
                     <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full">
@@ -937,6 +937,12 @@ export default function TransactionsPage() {
                       <div>
                         <span className="text-slate-500 block text-[10px] font-bold uppercase">PERMIT NUMBER</span>
                         <span className="font-mono font-bold text-indigo-800">{temporaryPermitNumber}</span>
+                      </div>
+                    )}
+                    {driverName && (
+                      <div>
+                        <span className="text-slate-500 block text-[10px] font-bold uppercase">DRIVER NAME</span>
+                        <span className="font-bold text-slate-900">{driverName}</span>
                       </div>
                     )}
                     {licenseClass && (

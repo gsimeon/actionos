@@ -13,8 +13,6 @@ import {
   Clock,
   FileCheck,
   AlertTriangle,
-  X,
-  Printer,
 } from "lucide-react";
 import { VoiceActionButton } from "@/components/voice/voice-action-button";
 import { AuthorizationCard, type AuthorizationOptions } from "./authorization-dialog";

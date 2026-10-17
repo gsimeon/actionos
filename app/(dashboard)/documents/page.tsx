@@ -405,7 +405,6 @@ export default function DocumentsPage() {
         ) : (
           <div className="space-y-4">
             {filteredDocs.map((doc) => {
-              const isCert = doc.document_type === "certificate";
               const isSimulated = doc.file_name.includes("SIMULATED") || doc.file_name.includes("DEMO");
               const fn = doc.file_name.toLowerCase();
 

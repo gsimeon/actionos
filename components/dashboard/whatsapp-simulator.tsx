@@ -1,12 +1,11 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
   Send,
   Mic,
   Smile,
   ShieldCheck,
-  Check,
   CheckCheck,
   RotateCw,
   Sparkles,
@@ -15,10 +14,6 @@ import {
   MoreVertical,
   Bot,
   Play,
-  Volume2,
-  AlertCircle,
-  FileText,
-  ExternalLink,
   CheckCircle2,
 } from "lucide-react";
 
@@ -85,6 +80,7 @@ export function WhatsAppSimulator() {
   const [loading, setLoading] = useState(false);
   const [isVoiceRecording, setIsVoiceRecording] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const messageIdRef = useRef(1);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -94,11 +90,11 @@ export function WhatsAppSimulator() {
     scrollToBottom();
   }, [messages, loading]);
 
-  const sendMessage = async (text: string, buttonPayload?: string, isVoice = false) => {
+  const sendMessage = useCallback(async (text: string, buttonPayload?: string, isVoice = false) => {
     if (!text.trim() && !buttonPayload) return;
 
     const timeStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    const userMsgId = `usr-${Date.now()}`;
+    const userMsgId = `usr-${messageIdRef.current++}`;
 
     // Append user message
     if (!buttonPayload) {
@@ -139,7 +135,7 @@ export function WhatsAppSimulator() {
         setMessages((prev) => [
           ...prev,
           {
-            id: `bot-${Date.now()}`,
+            id: `bot-${messageIdRef.current++}`,
             sender: "bot",
             text: interactive.body?.text || data.workflow?.message || "Please confirm authorization:",
             timestamp: botTime,
@@ -162,7 +158,7 @@ export function WhatsAppSimulator() {
         setMessages((prev) => [
           ...prev,
           {
-            id: `bot-${Date.now()}`,
+            id: `bot-${messageIdRef.current++}`,
             sender: "bot",
             text: botText,
             timestamp: botTime,
@@ -174,7 +170,7 @@ export function WhatsAppSimulator() {
       setMessages((prev) => [
         ...prev,
         {
-          id: `err-${Date.now()}`,
+          id: `err-${messageIdRef.current++}`,
           sender: "bot",
           text: "⚠️ Network handshake failure communicating with ActionOS WhatsApp gateway.",
           timestamp: timeStr,
@@ -184,7 +180,7 @@ export function WhatsAppSimulator() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   const handleSimulateVoice = () => {
     setIsVoiceRecording(true);

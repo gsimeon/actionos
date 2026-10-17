@@ -1,21 +1,12 @@
 "use client";
 
-import React, { useRef } from "react";
+import React from "react";
 import {
   ShieldCheck,
   CheckCircle2,
   Printer,
-  Download,
   X,
   AlertTriangle,
-  QrCode,
-  HeartPulse,
-  Car,
-  FileBadge,
-  Calendar,
-  Building,
-  CreditCard,
-  User,
 } from "lucide-react";
 import type { Document } from "@/types/database";
 import { formatDateTime, formatDate } from "@/lib/utils";

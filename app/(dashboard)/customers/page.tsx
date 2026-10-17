@@ -10,8 +10,6 @@ import {
   X,
   Shield,
   Car,
-  HeartPulse,
-  FileBadge,
   Search,
   CheckCircle2,
   FileText,

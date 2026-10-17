@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useCallback } from "react";
 import Link from "next/link";
 import {
   Shield,
@@ -301,22 +301,31 @@ export default function PoliciesPage() {
   const [loading, setLoading] = useState(true);
   const [selectedDoc, setSelectedDoc] = useState<Document | null>(null);
 
-  const fetchPolicies = () => {
+  const [refreshIndex, setRefreshIndex] = useState(0);
+
+  const fetchPolicies = useCallback(() => {
     setLoading(true);
+    setRefreshIndex((prev) => prev + 1);
+  }, []);
+
+  useEffect(() => {
+    let ignore = false;
     fetch(`/api/policies?status=${activeStatus}`)
       .then((r) => r.json())
       .then((res) => {
-        if (res.success && Array.isArray(res.data)) {
+        if (!ignore && res.success && Array.isArray(res.data)) {
           setPolicies(res.data);
         }
       })
       .catch((err) => console.error("Failed to fetch policies:", err))
-      .finally(() => setLoading(false));
-  };
+      .finally(() => {
+        if (!ignore) setLoading(false);
+      });
 
-  useEffect(() => {
-    fetchPolicies();
-  }, [activeStatus]);
+    return () => {
+      ignore = true;
+    };
+  }, [activeStatus, refreshIndex]);
 
   // Convert motor policies from API to PortfolioRecords
   const motorPortfolioRecords = useMemo<PortfolioRecord[]>(() => {
@@ -433,7 +442,7 @@ export default function PoliciesPage() {
             </span>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 mt-1 max-w-3xl">
-            Proactive tracking and 1-click renewal across Motor (NAICOM), Health HMO (NHIA), Driver's License (FRSC), and Vehicle License (MVAA).
+            Proactive tracking and 1-click renewal across Motor (NAICOM), Health HMO (NHIA), Driver&apos;s License (FRSC), and Vehicle License (MVAA).
           </p>
         </div>
 

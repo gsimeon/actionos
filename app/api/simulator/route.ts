@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { frscGateway, FrscGatewayError } from "@/lib/integrations/frsc";
 import { lacvisGateway, LacvisGatewayError } from "@/lib/integrations/lacvis";
 import { niidGateway, NiidGatewayError } from "@/lib/integrations/niid";
-import { nhiaGateway, NhiaGatewayError } from "@/lib/integrations/nhia";
+import { nhiaGateway } from "@/lib/integrations/nhia";
 import { POST as paymentWebhookHandler } from "@/app/api/webhooks/payment/route";
 import { resolveExecutionContext, DEMO_CONTEXT } from "@/lib/security/auth-context";
 import type { AuthenticatedExecutionContext } from "@/types/actionos";

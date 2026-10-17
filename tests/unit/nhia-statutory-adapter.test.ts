@@ -5,7 +5,6 @@ import {
   NhiaGatewayError,
   normalizeNhiaNumber,
   validateNhiaNumber,
-  ACCREDITED_HOSPITALS_BENCHMARK,
   TIER_ANNUAL_PREMIUMS,
   nhiaGateway,
 } from "@/lib/integrations/nhia";
