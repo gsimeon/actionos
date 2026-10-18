@@ -696,6 +696,20 @@ export async function runValidation(envOverride = process.env, argvOverride = pr
                   false,
                   `Function '${name}' does NOT exist in database schema cache (HTTP 404, code: PGRST202)`
                 );
+              } else if (adminRpcRes.error?.code === "42501") {
+                record(
+                  `service_role_rpc_exists_${name}`,
+                  "service_role",
+                  false,
+                  `Function '${name}' execution unexpectedly DENIED to service_role (PostgreSQL code: 42501)`
+                );
+              } else if (adminRpcRes.status >= 500) {
+                record(
+                  `service_role_rpc_exists_${name}`,
+                  "service_role",
+                  false,
+                  `Function '${name}' failed with unexpected server error HTTP ${adminRpcRes.status}: ${adminRpcRes.error?.message || "Internal Server Error"}`
+                );
               } else {
                 record(
                   `service_role_rpc_exists_${name}`,

@@ -92,6 +92,16 @@ export class RequestPaymentTool implements IActionOSTool<RequestPaymentInput, Pa
         },
       });
 
+      if (res.status === "failed") {
+        return {
+          success: false,
+          error: {
+            code: "PAYMENT_FAILED",
+            message: "Payment gateway declined initiation or payment failed",
+          },
+        };
+      }
+
       return {
         success: true,
         data: {

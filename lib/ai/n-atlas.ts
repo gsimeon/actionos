@@ -132,6 +132,7 @@ export class DeterministicDemoAIProvider implements NAtlasProvider {
           detectedLanguage: detectedLang,
           _aiProvider: this.name,
           _isLiveAI: false,
+          _officialServiceVerified: false,
         },
         normalizedText: origRaw || "Clarification required",
       };
@@ -405,6 +406,7 @@ export class DeterministicDemoAIProvider implements NAtlasProvider {
         urgency: raw.includes("quick") || raw.includes("sharp") ? "high" : "normal",
         _aiProvider: this.name,
         _isLiveAI: false,
+        _officialServiceVerified: false,
       },
       normalizedText: normalized,
     };

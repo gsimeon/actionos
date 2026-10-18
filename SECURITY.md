@@ -104,30 +104,37 @@ Historical false-positive classifications (such as treating missing schema relat
 
 ### Offline vs. Staging Mode Separation
 To prevent green CI runs from creating false impressions of database verification:
-1. **Offline Mode (`npm run db:verify:offline`):** Designed for local PRs where external staging credentials are not present. Invariant schemas and migrations are validated locally, while all 23 live database checks (15 tables, 2 RLS probes, 5 RPC revocations, 1 service query) are recorded as `skipped` (`liveVerified: false`) in `reliability-gate-report.json`.
-2. **Staging Required Mode (`npm run db:verify:staging`):** Executed in dedicated staging pipelines. Requires valid `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. Missing credentials, missing tables, unapplied migrations, or unexpected RPC permissions trigger an immediate hard exit (`process.exit(1)`).
+1. **Offline Mode (`npm run db:verify:offline`):** Designed for local PRs where external staging credentials are not present. Invariant schemas and migrations are validated locally, while all live database checks are recorded as `skipped` (`liveVerified: false`) in `reliability-gate-report.json`.
+2. **Staging Required Mode (`npm run db:verify:staging`):** Executed in dedicated staging pipelines. Requires valid `SUPABASE_STAGING_URL` and `SUPABASE_STAGING_ANON_KEY`.
+3. **Privileged Verification & Service-Role Hardening (`--require-service-role`):** When `--require-service-role` or `REQUIRE_SERVICE_ROLE=true` is enabled, the gate strictly requires `SUPABASE_STAGING_SERVICE_ROLE_KEY`. If the service-role key is omitted or placeholder, the gate fails immediately with exit code 1. Privileged tests verify that:
+   - The service role authenticates and queries admin catalog entities.
+   - All 5 sensitive RPCs (`settle_payment_webhook`, `reserve_refund_balance`, `release_refund_reservation`, `finalize_atomic_refund_settlement`, `claim_and_accept_quote`) exist in the PostgREST schema cache and grant execution to `service_role`.
+   - The same 5 sensitive RPCs strictly deny execution to `anon` callers (PostgreSQL code `42501`).
 
 ---
 
 ## 8. N-ATLAS AI Engine & Audit Transparency
 
-- **Transparent Attribution:** Every intent analysis returns explicit provider metadata (`_aiProvider`, `_liveVerified`, and `_evidence`).
+- **Distinction Between Simulated Benchmark & Live AI:**
+  - **Simulated Benchmark:** The test suite in `tests/unit/nigerian-languages-and-vehicle-query.test.ts` is an offline deterministic benchmark fixture demonstrating language parsing capabilities across English, Pidgin, Yorùbá, Hausa, and Igbo. It is explicitly labeled as **simulated**.
+  - **Official Integration (Awaiting Credentials):** The live adapter in `lib/ai/n-atlas.ts` connects to `https://api.n-atlas.ng/v1` targeting model `n-atlas-multilingual`. It is labeled as **awaiting institutional credentials (`N_ATLAS_API_KEY`)** from NITDA/NCAIR.
+  - **Real Integration Harness:** `tests/integration/n-atlas-live-integration.test.ts` provides a live verification test harness that automatically exercises the remote sovereign endpoint, validates JSON schemas, and records validation outcomes without exposing secrets whenever authorized credentials are supplied.
 - **Zero Silent Substitution in Strict Mode:** Setting `N_ATLAS_STRICT_MODE=true` forces the N-ATLAS adapter to fail fast with `NAtlasConnectionError` if credentials or API connections fail, preventing fallback engines from masking connectivity outages during audit evaluations.
-- **Deterministic Benchmark Engine:** When running in sandbox or unconfigured environments, responses are clearly stamped `_aiProvider: "N-ATLAS Fallback (Deterministic Benchmark Engine)"`, `_liveVerified: false`, with explicit `_fallbackReason`.
+- **Transparent Attribution:** When operating without credentials in sandbox, responses are explicitly stamped `_aiProvider: "N-ATLAS Fallback (Deterministic Benchmark Engine)"`, `_liveVerified: false`, with explicit `_fallbackReason`.
 
 ---
 
-## 9. Secrets Management
+## 9. Secrets Management & Staging Configuration
 
-- `SUPABASE_SERVICE_ROLE_KEY` is never bundled into client-side code.
-- Demo mode operates securely without requiring production API keys.
+- `SUPABASE_STAGING_SERVICE_ROLE_KEY` is a sensitive backend credential. It is configured exclusively in GitHub Actions Repository Secrets (`Settings -> Secrets and variables -> Actions`) and server-side environment variables. It is **never** prefixed with `NEXT_PUBLIC_` and is **never** bundled into client code.
+- Staging verification jobs run exclusively on trusted repository branches (e.g., `main` or repository owner workflows) to protect repository secrets from untrusted fork pull requests.
 - Environment variables must be loaded via `.env.local` and never committed to source control.
 
 ---
 
 ## 10. Dependency Security Triage & Supply Chain Integrity
 
-### Audit Findings Analysis (GHSA-vfj7-8cjw-p6xm)
+### Authoritative Audit Findings Analysis (GHSA-vfj7-8cjw-p6xm)
 A granular security audit of dependencies via `npm audit --json` identified five reported high-severity vulnerability counts. Technical investigation confirms:
 
 1. **Single Transitive Origin & Graph Impact:**  
@@ -137,36 +144,26 @@ A granular security audit of dependencies via `npm audit --json` identified five
    Because each package in the path transitively depends on `braces`, `npm audit` tallies 1 count for each layer, reporting 5 total counts.
 
 2. **Npm Advisory Registry Range Limitation (`<=3.0.3`) & Upstream Status:**  
-   The npm advisory database records the affected range as `"range": "<=3.0.3"`. Inspection of the official npm registry (`npm view braces versions`) confirms that `3.0.3` is the latest published release of `braces` (no `3.0.4` or `4.x` has been released by upstream maintainers). Consequently, any package across the JavaScript ecosystem depending transitively on `braces` triggers this advisory notice until upstream authors release a patched version.
+   The npm advisory database records the affected range as `"range": "<=3.0.3"`. Inspection of the official npm registry (`npm view braces versions --json`) confirms that `3.0.3` is the latest published release of `braces` (no `3.0.4` or `4.x` has been published by upstream maintainers). Consequently, **version 3.0.3 is NOT patched against GHSA-vfj7-8cjw-p6xm**, and no patched version currently exists anywhere in the npm ecosystem.
 
-3. **Strictly Isolated to Developer Tooling (`devDependencies`):**  
-   The entire chain resides exclusively within `devDependencies` (specifically `eslint-config-next@16.4.0`). It is executed solely during local developer linting and CI static analysis (`npm run lint`), and is **never** bundled into or exposed by runtime Next.js server endpoints, serverless handlers, or client browser distributions.
-
-4. **Rejection of Incompatible Automated Downgrade (`npm audit fix --force`):**  
-   Automated remediation suggests:
-   ```json
-   "fixAvailable": {
-     "name": "eslint-config-next",
-     "version": "14.2.35",
-     "isSemVerMajor": true
-   }
-   ```
-   Blindly executing `npm audit fix --force` downgrades `eslint-config-next` to `14.2.35`, introducing breaking semver conflicts with Next.js 16.4 and React 19.
-
-5. **Enforced Root Overrides as Dependency Pin (Not Upstream Fix):**  
+3. **Enforced Root Overrides as Dependency Pin (Not a Claimed Fix):**  
    `package.json` enforces root `"overrides": { "braces": "^3.0.3", "micromatch": "^4.0.8" }`.  
-   *Accurate scope:* This override ensures that all downstream package managers and CI environments resolve to the latest published releases (`braces@3.0.3` and `micromatch@4.0.8`), preventing resolution of older, more severely vulnerable versions (such as ReDoS in braces <3.0.3 and micromatch <4.0.8). However, because `3.0.3` falls within the advisory's `<=3.0.3` range, this override is a **dependency consistency pin and risk mitigation**, not a claim that upstream has released a patched version.
+   *Accurate Scope:* This override pins `braces` to the latest published release (`3.0.3`) and `micromatch` to `4.0.8` (which resolves the companion ReDoS advisory in older micromatch releases). It avoids resolution of older, more severely vulnerable versions (such as ReDoS in `braces <3.0.3`). **It is not an upstream fix for GHSA-vfj7-8cjw-p6xm, and ActionOS does not claim it is patched.**
 
-6. **Residual Risk Assessment (Zero Production Exposure):**  
-   - **Runtime Attack Surface:** Zero. Neither `braces` nor `micromatch` is loaded by Next.js at runtime, nor included in production output bundles.
-   - **Execution Context:** Offline build-time / CI static linting only (`npm run lint`).
-   - **Input Vector:** Pattern matching operates strictly over static repository file paths, never over untrusted user or network input.
+4. **Assessment of Developer Tooling (Isolation vs. Replacement):**  
+   - **Can `eslint-config-next` be replaced?**  
+     Replacing `eslint-config-next` would require writing standalone ESLint configurations and removing the official Next.js ESLint plugin. This would eliminate official Next.js App Router static analysis rules (e.g., React Server Component boundary rules, image optimization checks, and hydration warnings), which are essential for application correctness.
+   - **Tooling Isolation Strategy:**  
+     The entire vulnerable package graph is confined strictly to `devDependencies`. It is invoked exclusively during offline developer linting (`npm run lint`) and CI static analysis. It is never included in the Next.js production build, serverless edge functions, API routes, or client browser bundles.
+   - **Residual Risk:**  
+     Zero in production. The stack-exhaustion denial of service requires processing untrusted user-supplied string patterns. Because linting runs only on static repository file paths during local development and CI, there is no vector for untrusted input injection.
 
-7. **Automated Supply Chain Verification (`npm run deps:verify`):**  
+5. **Automated Supply Chain Verification Gate (`npm run deps:verify`):**  
    ActionOS enforces an automated dependency verification script (`scripts/verify-dependency-integrity.mjs`) in CI to:
-   - Validate that `braces` and `micromatch` are locked to intended pin versions.
-   - Assert that neither package appears in production `dependencies`.
-   - Prevent accidental introduction of unvetted runtime dependencies.
+   - Validate that `braces` is pinned to `^3.0.3` and `micromatch` to `^4.0.8`.
+   - Assert that `package-lock.json` resolves `braces` strictly to `3.0.3` and `micromatch` to `>=4.0.8`.
+   - Strictly guarantee that `braces`, `micromatch`, and `fast-glob` are completely absent from production runtime `dependencies`.
+   - Fail CI if any vulnerable package leaks into production runtime dependencies.
 
 
 

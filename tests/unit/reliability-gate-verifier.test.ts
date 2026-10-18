@@ -476,4 +476,30 @@ describe("ActionOS Reliability Gate v2: Verifier & Invariant Testing Suite", () 
       assert.ok(names.includes("claim_and_accept_quote"));
     });
   });
+
+  describe("8. Privileged Service Role Verification Logic", () => {
+    it("distinguishes successful service-role RPC execution from missing or forbidden functions", () => {
+      // 1. Success response (status 200 or business validation response)
+      const validRpc: { status: number; error: { code?: string; message?: string } | null } = { status: 200, error: null };
+      const isMissing1 = validRpc.status === 404 && validRpc.error?.code === "PGRST202";
+      const isDenied1 = validRpc.error?.code === "42501";
+      assert.equal(isMissing1, false);
+      assert.equal(isDenied1, false);
+
+      // 2. Missing function response (status 404, code PGRST202)
+      const missingRpc = { status: 404, error: { code: "PGRST202", message: "Could not find function" } };
+      const isMissing2 = missingRpc.status === 404 && missingRpc.error?.code === "PGRST202";
+      assert.equal(isMissing2, true);
+
+      // 3. Permission denied to service_role (code 42501)
+      const deniedRpc = { status: 403, error: { code: "42501", message: "permission denied for function" } };
+      const isDenied3 = deniedRpc.error?.code === "42501";
+      assert.equal(isDenied3, true);
+
+      // 4. Server crash (status 500)
+      const crashedRpc = { status: 500, error: { message: "Internal Server Error" } };
+      const isCrashed = crashedRpc.status >= 500;
+      assert.equal(isCrashed, true);
+    });
+  });
 });

@@ -100,7 +100,7 @@ jobs:
           SUPABASE_STAGING_ANON_KEY: ${{ secrets.SUPABASE_STAGING_ANON_KEY }}
           SUPABASE_STAGING_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_STAGING_SERVICE_ROLE_KEY }}
           RELIABILITY_GATE_MODE: ${{ github.event.inputs.gate_mode || 'staging-required' }}
-        run: node scripts/verify-supabase-staging.mjs --mode=${{ github.event.inputs.gate_mode || 'staging-required' }}
+        run: node scripts/verify-supabase-staging.mjs --mode=${{ github.event.inputs.gate_mode || 'staging-required' }} --require-service-role
 
       - name: Archive Live Staging Verification Machine-Readable Report
         if: always()

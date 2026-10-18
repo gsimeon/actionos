@@ -24,12 +24,26 @@ export class MockPaymentProvider implements IPaymentProvider {
   public simulateRefundPending = false;
   public simulateRefundUnknown = false;
   public simulateRefundFailure = false;
+  public simulatePaymentFailure = false;
+  public simulatePaymentTimeout = false;
 
   async requestPayment(input: PaymentInitiationInput): Promise<PaymentInitiationResult> {
     if (isProductionMode()) {
       throw new Error(
         "Production isolation violation: Mock payment provider simulation is strictly disabled in production runtime mode."
       );
+    }
+
+    if (this.simulatePaymentTimeout) {
+      throw new Error("Payment gateway connection timed out (ETIMEDOUT)");
+    }
+
+    if (this.simulatePaymentFailure) {
+      return {
+        status: "failed",
+        reference: input.reference,
+        gatewayUrl: undefined,
+      };
     }
 
     // Idempotency check: if payment with this reference was already processed, return existing record
@@ -114,6 +128,22 @@ export class MockPaymentProvider implements IPaymentProvider {
       throw new Error(
         "Production isolation violation: Mock payment provider simulation is strictly disabled in production runtime mode."
       );
+    }
+
+    if (this.simulatePaymentTimeout) {
+      throw new Error("Payment verification connection timed out (ETIMEDOUT)");
+    }
+
+    if (this.simulatePaymentFailure) {
+      return {
+        status: "failed",
+        amount: 0,
+        currency: "NGN",
+        reference,
+        providerReference: "",
+        paidAt: undefined,
+        verifiedAt: new Date().toISOString(),
+      };
     }
 
     let record = this.simulatedPayments.get(reference);
