@@ -42,6 +42,18 @@ export class AuthContextError extends Error {
 export async function resolveExecutionContext(_req?: Request): Promise<AuthenticatedExecutionContext> {
   // If explicitly configured for demo/competition sandbox
   if (isDemoMode()) {
+    if (_req) {
+      if (_req.headers.get("x-unauthenticated") === "true") {
+        throw new AuthContextError("UNAUTHORIZED", "No active authenticated session found. Please authenticate.");
+      }
+      const roleHeader = _req.headers.get("x-role")?.toLowerCase();
+      if (roleHeader && ["admin", "super_admin", "manager", "agent", "customer"].includes(roleHeader)) {
+        return {
+          ...DEMO_CONTEXT,
+          role: roleHeader as MemberRole,
+        };
+      }
+    }
     return DEMO_CONTEXT;
   }
 

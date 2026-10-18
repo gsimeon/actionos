@@ -3,7 +3,10 @@ async function testLiveApi() {
   console.log("=== Testing ActionOS Live Endpoints on http://localhost:3000 ===");
 
   // 0. Reset to clean benchmark state
-  await fetch("http://localhost:3000/api/dev/reset", { method: "POST" });
+  await fetch("http://localhost:3000/api/dev/reset", {
+    method: "POST",
+    headers: { "x-role": "admin" },
+  });
   console.log("0. Mock Store reset to clean benchmark state");
 
   // 1. Dispatch renewal action
@@ -54,7 +57,10 @@ async function testLiveApi() {
   // 3. Test Saga Compensating Rollback Simulation
   console.log("\n3. Testing Saga Rollback Fault Injection...");
   // Reset store again so policy is eligible
-  await fetch("http://localhost:3000/api/dev/reset", { method: "POST" });
+  await fetch("http://localhost:3000/api/dev/reset", {
+    method: "POST",
+    headers: { "x-role": "admin" },
+  });
 
   const sagaDispatch = await fetch("http://localhost:3000/api/actions", {
     method: "POST",
@@ -90,7 +96,10 @@ async function testLiveApi() {
   console.log("   WhatsApp Hub Verification:", waChallengeText === "CHALLENGE_ACCEPTED_777");
 
   // Reset store for WhatsApp message
-  await fetch("http://localhost:3000/api/dev/reset", { method: "POST" });
+  await fetch("http://localhost:3000/api/dev/reset", {
+    method: "POST",
+    headers: { "x-role": "admin" },
+  });
 
   const waPost = await fetch("http://localhost:3000/api/webhooks/whatsapp", {
     method: "POST",

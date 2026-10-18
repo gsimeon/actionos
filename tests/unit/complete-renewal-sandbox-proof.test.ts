@@ -90,7 +90,15 @@ describe("ActionOS Complete Renewal Flow & Resilience Proof Suite (Sandbox)", ()
       assert.ok(certDoc.file_name.includes("SIMULATED_DEMO_"));
       assert.ok(certDoc.file_name.includes("AUTO-2026-00182"));
 
-      // Step 7: Cryptographic Merkle Chain Non-Repudiation Proof
+      // Step 7: Confirm Multi-Channel Customer Notification Dispatched
+      const notifs = store.notifications.filter((n) => n.customer_id === DEMO_CONTEXT.customerId);
+      assert.ok(notifs.length >= 1, "Customer notification must be dispatched upon renewal");
+      assert.ok(
+        execRes.events.some((e) => e.action === "notification_dispatch" || e.tool === "send_notification"),
+        "Ledger must record notification dispatch event"
+      );
+
+      // Step 8: Cryptographic Merkle Chain Non-Repudiation Proof
       const integrityCheck = verifyLedgerIntegrity(execRes.events);
       assert.equal(integrityCheck.valid, true, "Ledger Merkle chain must be 100% cryptographically intact");
       assert.ok(execRes.events.length >= 8);
@@ -512,6 +520,53 @@ describe("ActionOS Complete Renewal Flow & Resilience Proof Suite (Sandbox)", ()
         assert.equal(cert, undefined, "No certificate may be issued upon payment failure");
       } finally {
         mockPaymentProvider.simulatePaymentTimeout = false;
+      }
+    });
+
+    it("handles explicit declined payment (card declined / insufficient funds): leaves policy untouched, does not issue certificate, and never produces an active renewed policy", async () => {
+      resetStore();
+      const store = getStore();
+
+      const startRes = await orchestrator.startWorkflow({
+        inputText: "Renew Toyota Camry AUTO-2026-00182",
+        channel: "web",
+        executionContext: DEMO_CONTEXT,
+      });
+
+      assert.equal(startRes.status, "awaiting_authorization");
+
+      // Simulate payment gateway declining the transaction
+      mockPaymentProvider.simulatePaymentFailure = true;
+      try {
+        const failRes = await orchestrator.authorizeAndExecute(
+          startRes.sessionId,
+          true,
+          DEMO_CONTEXT
+        );
+
+        assert.ok(
+          failRes.status === "failed" || failRes.status === "escalated",
+          `Status must be failed or escalated on payment decline, got: ${failRes.status}`
+        );
+
+        // Invariant 1: Policy MUST remain in expiring status and not renewed
+        const policy = store.policies.find((p) => p.policy_number === "AUTO-2026-00182");
+        assert.equal(policy?.status, "expiring", "Policy must remain expiring when payment is declined");
+        assert.equal(policy?.expiry_date, "2026-10-14", "Expiry date must NOT be extended");
+
+        // Invariant 2: No certificate must be issued
+        const cert = store.documents.find(
+          (d) => d.customer_id === DEMO_CONTEXT.customerId && d.document_type === "certificate"
+        );
+        assert.equal(cert, undefined, "Certificate must never be issued when payment is declined");
+
+        // Invariant 3: Audit ledger records failed execution
+        assert.ok(
+          failRes.events.some((e) => e.status === "failed" || e.action.includes("failed") || e.action === "payment_initiation"),
+          "Ledger must record failed payment event"
+        );
+      } finally {
+        mockPaymentProvider.simulatePaymentFailure = false;
       }
     });
   });

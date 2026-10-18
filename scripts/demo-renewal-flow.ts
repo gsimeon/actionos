@@ -2,6 +2,9 @@ import { orchestrator } from "@/lib/actionos/orchestrator";
 import { getStore, resetStore } from "@/lib/actionos/mock-store";
 import { DEMO_CONTEXT } from "@/lib/security/auth-context";
 import { verifyLedgerIntegrity } from "@/lib/actionos/crypto-ledger";
+import { mockPaymentProvider } from "@/lib/payments/mock";
+import { POST as paymentWebhookHandler, resetProcessedWebhookMemoryCache } from "@/app/api/webhooks/payment/route";
+import { getRepositoryContainer } from "@/lib/repositories";
 
 async function runDemo() {
   console.log("================================================================================");
@@ -71,6 +74,7 @@ async function runDemo() {
   const renewalRecord = store.renewals.find((r) => r.policy_id === initialPolicy?.id);
   const paymentTx = store.transactions.find((t) => t.customer_id === DEMO_CONTEXT.customerId && t.transaction_type === "renewal_premium");
   const certDoc = store.documents.find((d) => d.customer_id === DEMO_CONTEXT.customerId && d.document_type === "certificate");
+  const notifications = store.notifications.filter((n) => n.customer_id === DEMO_CONTEXT.customerId);
 
   console.log("\n6. INDEPENDENT SETTLEMENT & STATUTORY POLICY TRANSITION:");
   console.log(`   - Payment Ref:        ${paymentTx?.reference}`);
@@ -80,6 +84,10 @@ async function runDemo() {
   console.log(`   - Statutory Expiry:   ${initialPolicy?.expiry_date} ➔ ${updatedPolicy?.expiry_date} (+1 statutory year)`);
   console.log(`   - Renewal Record:     ${renewalRecord?.id} (status: ${renewalRecord?.status})`);
   console.log(`   - Certificate Issued: ${certDoc?.file_name}`);
+  console.log(`   - Multi-Channel Notifications (${notifications.length} dispatched):`);
+  for (const n of notifications) {
+    console.log(`     * [${n.channel.toUpperCase()}] ${n.title} — "${n.message.substring(0, 60)}..."`);
+  }
 
   // 6. Non-Repudiation Cryptographic Merkle Chain
   console.log("\n7. NON-REPUDIATION MERKLE CHAIN AUDIT TRAIL:");
@@ -109,8 +117,83 @@ async function runDemo() {
   );
   console.log(`   - Succeeded Debits:   ${debits.length} (Strictly 1 debit allowed, duplicate prevented)`);
 
-  // 8. Saga Rollback Proof
-  console.log("\n9. FAULT TOLERANCE: AUTOMATED SAGA ROLLBACK PROOF:");
+  // 8. Payment Webhook Replay & Idempotency Proof
+  console.log("\n9. WEBHOOK REPLAY & IDEMPOTENCY PROOF:");
+  resetProcessedWebhookMemoryCache();
+  const repos = getRepositoryContainer();
+  const testRef = "DEMO_PSTK_WEBHOOK_001";
+  await repos.transactions.create(
+    {
+      customer_id: DEMO_CONTEXT.customerId!,
+      amount: 87500,
+      currency: "NGN",
+      reference: testRef,
+      status: "pending",
+      transaction_type: "renewal_premium",
+    },
+    DEMO_CONTEXT
+  );
+  const webhookBody = JSON.stringify({
+    event: "charge.success",
+    data: {
+      id: "evt_demo_wh_001",
+      reference: testRef,
+      amount: 8750000,
+      currency: "NGN",
+      status: "success",
+      paid_at: new Date().toISOString(),
+      customer: { id: DEMO_CONTEXT.customerId, email: "adebayo.ogundimu@example.ng" },
+    },
+  });
+  const whRes1 = await paymentWebhookHandler(
+    new Request("http://localhost:3000/api/webhooks/payment", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-paystack-signature": "dev-bypass" },
+      body: webhookBody,
+    })
+  );
+  const whJson1 = await whRes1.json() as { data: { duplicate: boolean; acknowledged: boolean } };
+  console.log(`   - First Webhook Delivery:   Status ${whRes1.status} | duplicate: ${whJson1.data.duplicate} | acknowledged: ${whJson1.data.acknowledged}`);
+  const whRes2 = await paymentWebhookHandler(
+    new Request("http://localhost:3000/api/webhooks/payment", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-paystack-signature": "dev-bypass" },
+      body: webhookBody,
+    })
+  );
+  const whJson2 = await whRes2.json() as { data: { duplicate: boolean; acknowledged: boolean } };
+  console.log(`   - Replayed Webhook Delivery: Status ${whRes2.status} | duplicate: ${whJson2.data.duplicate} | acknowledged: ${whJson2.data.acknowledged}`);
+  const webhookTxCount = store.transactions.filter((t) => t.reference === testRef).length;
+  console.log(`   - Total Transaction Rows:   ${webhookTxCount} (Strictly 1 row, zero double credit)`);
+
+  // 9. Fail-Closed Proof: Declined Payment Never Produces Active Renewed Policy
+  console.log("\n10. FAIL-CLOSED PROOF: DECLINED PAYMENT / TIMEOUT SCENARIOS:");
+  resetStore();
+  const storePostDecline = getStore();
+  const declinedSession = await orchestrator.startWorkflow({
+    inputText: "Renew Toyota Camry AUTO-2026-00182",
+    channel: "web",
+    executionContext: DEMO_CONTEXT,
+  });
+  mockPaymentProvider.simulatePaymentFailure = true;
+  try {
+    const declinedExec = await orchestrator.authorizeAndExecute(
+      declinedSession.sessionId,
+      true,
+      DEMO_CONTEXT
+    );
+    const policyAfterDecline = storePostDecline.policies.find((p) => p.policy_number === "AUTO-2026-00182");
+    const certAfterDecline = storePostDecline.documents.find((d) => d.customer_id === DEMO_CONTEXT.customerId && d.document_type === "certificate");
+    console.log(`   - Declined Execution Status: ${declinedExec.status.toUpperCase()} (${declinedExec.message})`);
+    console.log(`   - Policy Status Post-Decline: ${policyAfterDecline?.status.toUpperCase()} (Never renewed)`);
+    console.log(`   - Policy Expiry Post-Decline: ${policyAfterDecline?.expiry_date} (Unchanged: 2026-10-14)`);
+    console.log(`   - Certificate Issued:        ${certAfterDecline ? "YES (FAILED INVARIANT)" : "NONE (Secure fail-closed)"}`);
+  } finally {
+    mockPaymentProvider.simulatePaymentFailure = false;
+  }
+
+  // 10. Saga Rollback Proof
+  console.log("\n11. FAULT TOLERANCE: AUTOMATED SAGA ROLLBACK PROOF:");
   resetStore();
   const faultSession = await orchestrator.startWorkflow({
     inputText: "Renew Toyota Camry AUTO-2026-00182",

@@ -449,7 +449,7 @@ describe("Renewals & Multi-Rail Transactions REST API Suite", () => {
     });
   });
 
-  describe("GET & POST /api/dev/reset (State-Mutation Protection)", () => {
+  describe("GET & POST /api/dev/reset (State-Mutation Protection & Authorization)", () => {
     it("should strictly reject state mutation on GET with 405 Method Not Allowed", async () => {
       const res = await getDevReset();
       assert.equal(res.status, 405);
@@ -461,13 +461,109 @@ describe("Renewals & Multi-Rail Transactions REST API Suite", () => {
       assert.match(json.error.message, /strictly prohibited via GET/i);
     });
 
-    it("should permit clean state reset on POST in demo mode", async () => {
-      const res = await postDevReset();
-      assert.equal(res.status, 200);
+    it("should strictly reject reset when ENABLE_DEMO_RESET feature flag is not enabled (403)", async () => {
+      const previousFlag = process.env.ENABLE_DEMO_RESET;
+      const previousAllow = process.env.ACTIONOS_ALLOW_DEV_RESET;
+      delete process.env.ENABLE_DEMO_RESET;
+      delete process.env.ACTIONOS_ALLOW_DEV_RESET;
 
-      const json = await res.json();
-      assert.equal(json.success, true);
-      assert.match(json.message, /reset to clean benchmark state/i);
+      try {
+        const req = new Request("http://localhost:3000/api/dev/reset", {
+          method: "POST",
+          headers: { "x-role": "admin" },
+        });
+        const res = await postDevReset(req);
+        assert.equal(res.status, 403);
+        const json = await res.json();
+        assert.equal(json.success, false);
+        assert.equal(json.error.code, "FORBIDDEN");
+        assert.match(json.error.message, /Dev reset endpoint is disabled/i);
+      } finally {
+        if (previousFlag !== undefined) process.env.ENABLE_DEMO_RESET = previousFlag;
+        if (previousAllow !== undefined) process.env.ACTIONOS_ALLOW_DEV_RESET = previousAllow;
+      }
+    });
+
+    it("should strictly reject unauthenticated reset request with 401 Unauthorized", async () => {
+      const previousFlag = process.env.ENABLE_DEMO_RESET;
+      process.env.ENABLE_DEMO_RESET = "true";
+
+      try {
+        const req = new Request("http://localhost:3000/api/dev/reset", {
+          method: "POST",
+          headers: { "x-unauthenticated": "true" },
+        });
+        const res = await postDevReset(req);
+        assert.equal(res.status, 401);
+        const json = await res.json();
+        assert.equal(json.success, false);
+        assert.equal(json.error.code, "UNAUTHORIZED");
+      } finally {
+        if (previousFlag !== undefined) process.env.ENABLE_DEMO_RESET = previousFlag;
+      }
+    });
+
+    it("should strictly reject unauthorized customer role with 403 Forbidden", async () => {
+      const previousFlag = process.env.ENABLE_DEMO_RESET;
+      process.env.ENABLE_DEMO_RESET = "true";
+
+      try {
+        const req = new Request("http://localhost:3000/api/dev/reset", {
+          method: "POST",
+          headers: { "x-role": "customer" },
+        });
+        const res = await postDevReset(req);
+        assert.equal(res.status, 403);
+        const json = await res.json();
+        assert.equal(json.success, false);
+        assert.equal(json.error.code, "FORBIDDEN");
+        assert.match(json.error.message, /requires administrator or operator privileges/i);
+      } finally {
+        if (previousFlag !== undefined) process.env.ENABLE_DEMO_RESET = previousFlag;
+      }
+    });
+
+    it("should permit clean state reset on POST for verified admin role with flag enabled", async () => {
+      const previousFlag = process.env.ENABLE_DEMO_RESET;
+      process.env.ENABLE_DEMO_RESET = "true";
+
+      try {
+        const req = new Request("http://localhost:3000/api/dev/reset", {
+          method: "POST",
+          headers: { "x-role": "admin" },
+        });
+        const res = await postDevReset(req);
+        assert.equal(res.status, 200);
+
+        const json = await res.json();
+        assert.equal(json.success, true);
+        assert.match(json.message, /reset to clean benchmark state/i);
+        assert.ok(json.operator);
+        assert.equal(json.operator.role, "admin");
+        assert.ok(json.operator.resetAt);
+      } finally {
+        if (previousFlag !== undefined) process.env.ENABLE_DEMO_RESET = previousFlag;
+      }
+    });
+
+    it("should permit clean state reset on POST for verified manager role with flag enabled", async () => {
+      const previousFlag = process.env.ENABLE_DEMO_RESET;
+      process.env.ENABLE_DEMO_RESET = "true";
+
+      try {
+        const req = new Request("http://localhost:3000/api/dev/reset", {
+          method: "POST",
+          headers: { "x-role": "manager" },
+        });
+        const res = await postDevReset(req);
+        assert.equal(res.status, 200);
+
+        const json = await res.json();
+        assert.equal(json.success, true);
+        assert.equal(json.operator.role, "manager");
+      } finally {
+        if (previousFlag !== undefined) process.env.ENABLE_DEMO_RESET = previousFlag;
+      }
     });
   });
 });
