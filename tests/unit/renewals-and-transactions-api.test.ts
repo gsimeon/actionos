@@ -618,6 +618,63 @@ describe("Renewals & Multi-Rail Transactions REST API Suite", () => {
         if (prevSecret !== undefined) process.env.ACTIONOS_DEV_RESET_SECRET = prevSecret;
       }
     });
+
+    it("SECURITY REGRESSION: strictly rejects reset when server has no operator secret configured (401)", async () => {
+      const prevFlag = process.env.ENABLE_DEMO_RESET;
+      const prevSecret = process.env.ACTIONOS_DEV_RESET_SECRET;
+      const prevRootSecret = process.env.ACTIONOS_RESET_SECRET;
+      process.env.ENABLE_DEMO_RESET = "true";
+      delete process.env.ACTIONOS_DEV_RESET_SECRET;
+      delete process.env.ACTIONOS_RESET_SECRET;
+
+      try {
+        const req = new Request("http://localhost:3000/api/dev/reset", {
+          method: "POST",
+          headers: {
+            "x-actionos-reset-key": "any_client_supplied_key",
+          },
+        });
+
+        const res = await postDevReset(req);
+        assert.equal(res.status, 401, "Missing server-side secret configuration must fail secure with 401 Unauthorized");
+
+        const json = await res.json();
+        assert.equal(json.success, false);
+        assert.equal(json.error.code, "UNAUTHORIZED");
+        assert.match(json.error.message, /valid operator secret key or verified administrator session is required/i);
+      } finally {
+        if (prevFlag !== undefined) process.env.ENABLE_DEMO_RESET = prevFlag;
+        if (prevSecret !== undefined) process.env.ACTIONOS_DEV_RESET_SECRET = prevSecret;
+        if (prevRootSecret !== undefined) process.env.ACTIONOS_RESET_SECRET = prevRootSecret;
+      }
+    });
+
+    it("SECURITY REGRESSION: strictly prevents non-admin caller or client context from resetting store without operator secret (401)", async () => {
+      const prevFlag = process.env.ENABLE_DEMO_RESET;
+      const prevSecret = process.env.ACTIONOS_DEV_RESET_SECRET;
+      process.env.ENABLE_DEMO_RESET = "true";
+      process.env.ACTIONOS_DEV_RESET_SECRET = TEST_RESET_SECRET;
+
+      try {
+        const req = new Request("http://localhost:3000/api/dev/reset", {
+          method: "POST",
+          headers: {
+            "x-customer-id": CUSTOMER_TENANT.customerId,
+            "x-role": "customer",
+          },
+        });
+
+        const res = await postDevReset(req);
+        assert.equal(res.status, 401, "Non-admin context without operator secret must be rejected with 401");
+
+        const json = await res.json();
+        assert.equal(json.success, false);
+        assert.equal(json.error.code, "UNAUTHORIZED");
+      } finally {
+        if (prevFlag !== undefined) process.env.ENABLE_DEMO_RESET = prevFlag;
+        if (prevSecret !== undefined) process.env.ACTIONOS_DEV_RESET_SECRET = prevSecret;
+      }
+    });
   });
 });
 
