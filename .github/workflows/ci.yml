@@ -91,13 +91,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: "ActionOS Live Staging Reliability Gate (Strict Mode - Cannot Pass Offline)"
+      - name: "ActionOS Reliability Gate (Enforced Mode)"
         env:
           SUPABASE_STAGING_URL: ${{ secrets.SUPABASE_STAGING_URL }}
           SUPABASE_STAGING_ANON_KEY: ${{ secrets.SUPABASE_STAGING_ANON_KEY }}
           SUPABASE_STAGING_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_STAGING_SERVICE_ROLE_KEY }}
           RELIABILITY_GATE_MODE: ${{ github.event.inputs.gate_mode || 'staging-required' }}
-        run: npm run db:verify:staging
+        run: node scripts/verify-supabase-staging.mjs --mode=${{ github.event.inputs.gate_mode || 'staging-required' }}
 
       - name: Archive Live Staging Verification Machine-Readable Report
         if: always()

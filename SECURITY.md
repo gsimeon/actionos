@@ -123,3 +123,16 @@ To prevent green CI runs from creating false impressions of database verificatio
 - Demo mode operates securely without requiring production API keys.
 - Environment variables must be loaded via `.env.local` and never committed to source control.
 
+---
+
+## 10. Dependency Security Triage & Supply Chain Integrity
+
+### Audit Findings Analysis (GHSA-vfj7-8cjw-p6xm)
+A security audit of dependencies (`npm audit`) identified five reported high-severity vulnerability counts. Technical investigation confirms:
+1. **Single Transitive Origin:** All five reported instances stem from a single upstream advisory: `GHSA-vfj7-8cjw-p6xm` affecting `braces` prior to version `3.0.3` (stack-exhaustion DoS with deeply nested patterns).
+2. **Strictly Isolated to Developer Tooling:** The affected package chain (`eslint-config-next` -> `@next/eslint-plugin-next` -> `fast-glob` -> `micromatch` -> `braces`) resides exclusively within `devDependencies`. It is utilized strictly during local linting/build tasks and is **never** bundled into or exposed by runtime server endpoints or client browser distributions.
+3. **Local Resolution Integrity:** Inspection of `node_modules/braces/package.json` confirms version `3.0.3` is installed on disk, which contains the upstream vendor patch.
+4. **Rejection of `npm audit fix --force`:** Automated remediation proposes downgrading `eslint-config-next` to `14.2.35`, which introduces severe breaking changes with Next.js 16 and React 19.
+5. **Enforced Remediation:** `package.json` enforces root `"overrides": { "braces": "^3.0.3", "micromatch": "^4.0.8" }` to guarantee that all downstream package managers and CI environments resolve to patched, safe versions.
+
+
