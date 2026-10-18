@@ -15,5 +15,18 @@ export async function POST() {
 }
 
 export async function GET() {
-  return POST();
+  return NextResponse.json(
+    {
+      success: false,
+      error: {
+        code: "METHOD_NOT_ALLOWED",
+        message: "State-mutating reset is strictly prohibited via GET. Use POST with proper authorization.",
+      },
+    },
+    {
+      status: 405,
+      headers: { Allow: "POST" },
+    }
+  );
 }
+

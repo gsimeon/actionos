@@ -48,7 +48,7 @@ ActionOS autonomously:
 - **Frontend:** Next.js (App Router), TypeScript, Tailwind CSS, Lucide Icons
 - **Backend & Database:** Supabase PostgreSQL with `pgcrypto`, Row Level Security (RLS) on all tables, Supabase Edge Functions
 - **AI Engine:** N-ATLAS Provider Adapter with deterministic fallback and multilingual normalization
-- **Payment Gateway:** Provider adapter architecture (`lib/payments`) selecting production Paystack (`PAYSTACK_SECRET_KEY`) with fail-closed security, out-of-band settlement verification, and HMAC-SHA512 webhook verification; Flutterwave gateway adapter is scheduled on the integration roadmap
+- **Payment Gateway:** Multi-rail provider adapter architecture (`lib/payments`) supporting Paystack (`PAYSTACK_SECRET_KEY`, HMAC-SHA512 webhook signatures) and Flutterwave (`FLUTTERWAVE_SECRET_KEY`, constant-time `verif-hash` header verification). Both adapters are fully implemented with fail-closed security, out-of-band settlement verification, and authoritative 4-state refund lifecycle modeling; currently validated against sandbox and test suites, awaiting verified live production merchant credentials.
 - **Testing:** Node.js native test runner (`tsx --test`) with automated unit, integration, and security regression suites (validated via continuous verification)
 
 ---

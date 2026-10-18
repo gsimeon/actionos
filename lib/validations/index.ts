@@ -122,3 +122,23 @@ export const renewDriverLicenseSchema = z.object({
   language: z.string().default("en-NG"),
 });
 
+export const createRenewalSchema = z.object({
+  policy_id: z.string().min(1, "policy_id is required"),
+  customer_id: z.string().min(1).optional(),
+  scheduled_for: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "scheduled_for must be in YYYY-MM-DD format")
+    .refine((val) => !isNaN(Date.parse(val)), "scheduled_for must be a valid calendar date")
+    .optional(),
+  days_before_expiry: z.coerce
+    .number()
+    .int()
+    .min(1, "days_before_expiry must be at least 1 day")
+    .max(90, "days_before_expiry must not exceed 90 days")
+    .default(7),
+  quote_amount: z.coerce.number().positive("quote_amount must be positive").max(100_000_000).nullable().optional(),
+  currency: z.literal("NGN").default("NGN"),
+  status: z.enum(["scheduled"]).default("scheduled"),
+});
+
+

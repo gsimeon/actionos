@@ -48,7 +48,13 @@ These records may only be inserted or mutated by trusted server-side code or Sup
 
 ---
 
-## 4. Payment Rail Hardening & Authoritative Refund Lifecycle
+## 4. Multi-Rail Payment Hardening & Authoritative Refund Lifecycle
+
+ActionOS implements multi-rail payment adapters for domestic policy settlement:
+- **Paystack (`lib/payments/paystack.ts`)**: Activated by `PAYSTACK_SECRET_KEY`, verifying webhook deliveries via HMAC-SHA512 (`x-paystack-signature`).
+- **Flutterwave (`lib/payments/flutterwave.ts`)**: Activated by `FLUTTERWAVE_SECRET_KEY`, verifying webhook deliveries via constant-time `verif-hash` header comparison (`crypto.timingSafeEqual`).
+
+Both adapters are categorized as **Implemented Adapters (Awaiting Production Credentials)**. In demo/test modes, transactions run against mock and sandbox fixtures. When live credentials are provided, both adapters enforce identical security controls:
 
 - **Strict Live Payment Initiation Validation:**
   - Mandatory customer identity (`customerId`) and verified customer email format matching `EMAIL_REGEX`. Silent fallback to generic email (`customer@actionos.ng`) is strictly prohibited.
@@ -59,11 +65,12 @@ These records may only be inserted or mutated by trusted server-side code or Sup
   - Preserves provider payment timestamp (`paid_at`) as optional rather than fabricating current system time.
   - Separately records authoritative local verification timestamp (`verifiedAt`).
 - **Authoritative 4-State Refund Lifecycle:**
-  - Initial `POST /refund` acceptance maps strictly to `refund_pending` (as Paystack queues requests for processing). Never prematurely marked as complete.
+  - Initial `POST /refund` acceptance maps strictly to `refund_pending` (as domestic payment rails queue requests asynchronously). Never prematurely marked as complete.
   - Settlement reversal is only marked `refund_confirmed` once authoritative provider proof (`processed` / `success`) is confirmed via `GET /refund/:id` or webhook.
   - Terminal declinations map to `refund_failed`.
   - Gateway timeouts, HTTP 500+, and malformed or ambiguous responses map to `refund_unknown`.
-  - **Zero Synthetic Fallbacks:** When provider identifiers (`data.id`) are omitted or network errors occur, the adapter never invents dummy references (e.g. `ref_${Date.now()}`); `refundReference` is left `undefined` and flagged for supervisor reconciliation.
+  - **Zero Synthetic Fallbacks:** When provider identifiers (`data.id`) are omitted or network errors occur, adapters never invent dummy references (e.g. `ref_${Date.now()}`); `refundReference` is left `undefined` and flagged for supervisor reconciliation.
+
 
 ---
 

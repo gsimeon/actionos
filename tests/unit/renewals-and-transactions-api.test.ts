@@ -4,6 +4,7 @@ import { getRepositoryContainer } from "@/lib/repositories";
 import { resetStore } from "@/lib/actionos/mock-store";
 import { GET as getRenewals, POST as postRenewals } from "@/app/api/renewals/route";
 import { GET as getTransactions } from "@/app/api/transactions/route";
+import { GET as getDevReset, POST as postDevReset } from "@/app/api/dev/reset/route";
 
 const CUSTOMER_TENANT = {
   organizationId: "a0000000-0000-0000-0000-000000000001",
@@ -154,6 +155,121 @@ describe("Renewals & Multi-Rail Transactions REST API Suite", () => {
       const json = await res.json();
       assert.equal(json.success, false);
       assert.equal(json.error.code, "FORBIDDEN");
+    });
+
+    it("should reject request with non-existent policy_id (404)", async () => {
+      const req = new Request("http://localhost:3000/api/renewals", {
+        method: "POST",
+        headers: {
+          "x-organization-id": CUSTOMER_TENANT.organizationId,
+          "x-customer-id": CUSTOMER_TENANT.customerId,
+          "x-role": CUSTOMER_TENANT.role,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          policy_id: "20000000-0000-0000-0000-999999999999",
+          quote_amount: 87500,
+        }),
+      });
+
+      const res = await postRenewals(req);
+      assert.equal(res.status, 404);
+      const json = await res.json();
+      assert.equal(json.success, false);
+      assert.equal(json.error.code, "POLICY_NOT_FOUND");
+    });
+
+    it("should reject request when customer attempts to renew another customer's policy (403)", async () => {
+      // Policy 20000000-0000-0000-0000-000000000002 belongs to OTHER_CUSTOMER_ID
+      const req = new Request("http://localhost:3000/api/renewals", {
+        method: "POST",
+        headers: {
+          "x-organization-id": CUSTOMER_TENANT.organizationId,
+          "x-customer-id": CUSTOMER_TENANT.customerId,
+          "x-role": CUSTOMER_TENANT.role,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          policy_id: "20000000-0000-0000-0000-000000000002",
+        }),
+      });
+
+      const res = await postRenewals(req);
+      // Either 403 or 404 is returned because the tenant filter denies access to the other customer's policy
+      assert.ok(res.status === 403 || res.status === 404);
+      const json = await res.json();
+      assert.equal(json.success, false);
+    });
+
+    it("should reject request with unallowed status or non-NGN currency (400 validation error)", async () => {
+      const req = new Request("http://localhost:3000/api/renewals", {
+        method: "POST",
+        headers: {
+          "x-organization-id": CUSTOMER_TENANT.organizationId,
+          "x-customer-id": CUSTOMER_TENANT.customerId,
+          "x-role": CUSTOMER_TENANT.role,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          policy_id: "20000000-0000-0000-0000-000000000001",
+          status: "completed", // Illegal: client cannot inject completed status
+          currency: "USD", // Illegal: only statutory NGN allowed
+        }),
+      });
+
+      const res = await postRenewals(req);
+      assert.equal(res.status, 400);
+      const json = await res.json();
+      assert.equal(json.success, false);
+      assert.equal(json.error.code, "VALIDATION_ERROR");
+    });
+
+    it("should reject request with malformed scheduled_for date format (400 validation error)", async () => {
+      const req = new Request("http://localhost:3000/api/renewals", {
+        method: "POST",
+        headers: {
+          "x-organization-id": CUSTOMER_TENANT.organizationId,
+          "x-customer-id": CUSTOMER_TENANT.customerId,
+          "x-role": CUSTOMER_TENANT.role,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          policy_id: "20000000-0000-0000-0000-000000000001",
+          scheduled_for: "14/10/2026", // Invalid format (must be YYYY-MM-DD)
+        }),
+      });
+
+      const res = await postRenewals(req);
+      assert.equal(res.status, 400);
+      const json = await res.json();
+      assert.equal(json.success, false);
+      assert.equal(json.error.code, "VALIDATION_ERROR");
+    });
+
+    it("should strictly enforce server-determined status and payment_status on creation", async () => {
+      const req = new Request("http://localhost:3000/api/renewals", {
+        method: "POST",
+        headers: {
+          "x-organization-id": CUSTOMER_TENANT.organizationId,
+          "x-customer-id": CUSTOMER_TENANT.customerId,
+          "x-role": CUSTOMER_TENANT.role,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          policy_id: "20000000-0000-0000-0000-000000000001",
+          days_before_expiry: 14,
+        }),
+      });
+
+      const res = await postRenewals(req);
+      assert.equal(res.status, 200);
+      const json = await res.json();
+      assert.equal(json.success, true);
+      assert.equal(json.data.status, "scheduled");
+      assert.equal(json.data.payment_status, "pending");
+      assert.equal(json.data.currency, "NGN");
+      assert.equal(json.data.days_before_expiry, 14);
+      assert.equal(json.data.customer_id, CUSTOMER_TENANT.customerId);
     });
   });
 
@@ -332,4 +448,27 @@ describe("Renewals & Multi-Rail Transactions REST API Suite", () => {
       }
     });
   });
+
+  describe("GET & POST /api/dev/reset (State-Mutation Protection)", () => {
+    it("should strictly reject state mutation on GET with 405 Method Not Allowed", async () => {
+      const res = await getDevReset();
+      assert.equal(res.status, 405);
+      assert.equal(res.headers.get("Allow"), "POST");
+
+      const json = await res.json();
+      assert.equal(json.success, false);
+      assert.equal(json.error.code, "METHOD_NOT_ALLOWED");
+      assert.match(json.error.message, /strictly prohibited via GET/i);
+    });
+
+    it("should permit clean state reset on POST in demo mode", async () => {
+      const res = await postDevReset();
+      assert.equal(res.status, 200);
+
+      const json = await res.json();
+      assert.equal(json.success, true);
+      assert.match(json.message, /reset to clean benchmark state/i);
+    });
+  });
 });
+

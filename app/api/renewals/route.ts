@@ -60,6 +60,8 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   try {
     const { resolveExecutionContext } = await import("@/lib/security/auth-context");
+    const { createRenewalSchema } = await import("@/lib/validations");
+
     const context = await resolveExecutionContext(req);
     const tenant = {
       organizationId: context.organizationId,
@@ -67,9 +69,35 @@ export async function POST(req: Request) {
       role: context.role,
     };
 
-    const json = await req.json();
+    let json: unknown;
+    try {
+      json = await req.json();
+    } catch {
+      return NextResponse.json(
+        { success: false, error: { code: "BAD_REQUEST", message: "Malformed JSON payload" } },
+        { status: 400 }
+      );
+    }
 
-    if (context.role === "customer" && context.customerId && json.customer_id !== context.customerId) {
+    const validated = createRenewalSchema.safeParse(json);
+    if (!validated.success) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: "VALIDATION_ERROR",
+            message: validated.error.issues[0]?.message || "Invalid renewal creation request",
+            details: validated.error.issues,
+          },
+        },
+        { status: 400 }
+      );
+    }
+
+    const { data } = validated;
+
+    // Enforce customer boundary: customer cannot submit another customer's ID
+    if (context.role === "customer" && context.customerId && data.customer_id && data.customer_id !== context.customerId) {
       return NextResponse.json(
         { success: false, error: { code: "FORBIDDEN", message: "Cannot create renewal for another customer" } },
         { status: 403 }
@@ -78,16 +106,44 @@ export async function POST(req: Request) {
 
     const repos = getRepositoryContainer();
 
-    const newRenewal = await repos.renewals.create({
-      policy_id: json.policy_id,
-      customer_id: json.customer_id || context.customerId,
-      scheduled_for: json.scheduled_for || new Date().toISOString().split("T")[0],
-      days_before_expiry: json.days_before_expiry || 7,
-      status: json.status || "scheduled",
-      quote_amount: typeof json.quote_amount === "number" ? json.quote_amount : null,
-      currency: json.currency || "NGN",
-      payment_status: "pending",
-    }, tenant);
+    // Verify policy existence and tenant accessibility
+    let policy = await repos.policies.findById(data.policy_id, tenant);
+    if (!policy) {
+      policy = await repos.policies.findByNumber(data.policy_id, tenant);
+    }
+
+    if (!policy) {
+      return NextResponse.json(
+        { success: false, error: { code: "POLICY_NOT_FOUND", message: "Policy not found or access denied within tenant scope" } },
+        { status: 404 }
+      );
+    }
+
+    // Verify policy ownership for customer role
+    if (context.role === "customer" && context.customerId && policy.customer_id !== context.customerId) {
+      return NextResponse.json(
+        { success: false, error: { code: "FORBIDDEN", message: "Cannot create renewal for a policy belonging to another customer" } },
+        { status: 403 }
+      );
+    }
+
+    // Authoritative target customer derived strictly from policy or authenticated context
+    const targetCustomerId = policy.customer_id;
+
+    // Create renewal: status, currency, and payment_status are strictly server-determined
+    const newRenewal = await repos.renewals.create(
+      {
+        policy_id: policy.id,
+        customer_id: targetCustomerId,
+        scheduled_for: data.scheduled_for || new Date().toISOString().split("T")[0],
+        days_before_expiry: data.days_before_expiry ?? 7,
+        status: "scheduled", // Server strictly controls initial state (prevents client injecting 'completed' or 'bypassed')
+        quote_amount: typeof data.quote_amount === "number" ? data.quote_amount : policy.premium ?? null,
+        currency: "NGN", // Server strictly enforces statutory currency
+        payment_status: "pending", // Server strictly initializes payment status
+      },
+      tenant
+    );
 
     return NextResponse.json({
       success: true,
@@ -108,3 +164,4 @@ export async function POST(req: Request) {
     );
   }
 }
+
