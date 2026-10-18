@@ -128,11 +128,33 @@ To prevent green CI runs from creating false impressions of database verificatio
 ## 10. Dependency Security Triage & Supply Chain Integrity
 
 ### Audit Findings Analysis (GHSA-vfj7-8cjw-p6xm)
-A security audit of dependencies (`npm audit`) identified five reported high-severity vulnerability counts. Technical investigation confirms:
-1. **Single Transitive Origin:** All five reported instances stem from a single upstream advisory: `GHSA-vfj7-8cjw-p6xm` affecting `braces` prior to version `3.0.3` (stack-exhaustion DoS with deeply nested patterns).
-2. **Strictly Isolated to Developer Tooling:** The affected package chain (`eslint-config-next` -> `@next/eslint-plugin-next` -> `fast-glob` -> `micromatch` -> `braces`) resides exclusively within `devDependencies`. It is utilized strictly during local linting/build tasks and is **never** bundled into or exposed by runtime server endpoints or client browser distributions.
-3. **Local Resolution Integrity:** Inspection of `node_modules/braces/package.json` confirms version `3.0.3` is installed on disk, which contains the upstream vendor patch.
-4. **Rejection of `npm audit fix --force`:** Automated remediation proposes downgrading `eslint-config-next` to `14.2.35`, which introduces severe breaking changes with Next.js 16 and React 19.
-5. **Enforced Remediation:** `package.json` enforces root `"overrides": { "braces": "^3.0.3", "micromatch": "^4.0.8" }` to guarantee that all downstream package managers and CI environments resolve to patched, safe versions.
+A granular security audit of dependencies via `npm audit --json` identified five reported high-severity vulnerability counts. Technical investigation confirms:
+
+1. **Single Transitive Origin & Graph Impact:**  
+   All five reported counts stem from a single upstream advisory: `GHSA-vfj7-8cjw-p6xm` (`braces` vulnerable to stack-exhaustion denial of service through deeply nested patterns, advisory ID `1240992`).
+   The dependency effect graph is:  
+   `braces` $\rightarrow$ `micromatch` $\rightarrow$ `fast-glob` $\rightarrow$ `@next/eslint-plugin-next` $\rightarrow$ `eslint-config-next`.  
+   Because each package in the path transitively depends on `braces`, `npm audit` tallies 1 count for each layer, reporting 5 total counts.
+
+2. **Npm Advisory Registry Range Limitation (`<=3.0.3`):**  
+   The npm advisory database records the affected range as `"range": "<=3.0.3"`. Inspection of the official npm registry (`npm view braces versions`) confirms that `3.0.3` is the latest published release of `braces` (no `3.0.4` or `4.x` exists on npm). Consequently, any package in the entire JavaScript ecosystem depending transitively on `braces` triggers this advisory notice.
+
+3. **Strictly Isolated to Developer Tooling (`devDependencies`):**  
+   The entire chain resides exclusively within `devDependencies` (specifically `eslint-config-next@16.4.0`). It is executed solely during local developer linting and CI static analysis (`npm run lint`), and is **never** bundled into or exposed by runtime Next.js server endpoints, serverless handlers, or client browser distributions.
+
+4. **Rejection of Incompatible Automated Downgrade (`npm audit fix --force`):**  
+   Automated remediation suggests:
+   ```json
+   "fixAvailable": {
+     "name": "eslint-config-next",
+     "version": "14.2.35",
+     "isSemVerMajor": true
+   }
+   ```
+   Blindly executing `npm audit fix --force` downgrades `eslint-config-next` to `14.2.35`, introducing breaking semver conflicts with Next.js 16.4 and React 19.
+
+5. **Enforced Root Overrides:**  
+   `package.json` enforces root `"overrides": { "braces": "^3.0.3", "micromatch": "^4.0.8" }` to guarantee that all downstream package managers and CI environments resolve to patched, safe versions.
+
 
 

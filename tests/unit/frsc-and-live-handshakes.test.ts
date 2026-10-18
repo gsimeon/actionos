@@ -4,6 +4,8 @@ import { FrscGatewayClient } from "@/lib/integrations/frsc";
 import {
   HttpNAtlasAdapter,
   OfficialNAtlasProvider,
+  DeterministicDemoAIProvider,
+  createNAtlasProvider,
   NAtlasConnectionError,
   isOfficialNAtlasEndpoint,
   TRUSTED_N_ATLAS_HOSTS,
@@ -112,15 +114,158 @@ describe("FRSC & Live N-ATLAS Handshake Adapters Suite", () => {
       );
     });
 
-    it("should integrate with OfficialNAtlasProvider transparently", async () => {
-      const provider = new OfficialNAtlasProvider();
-      const res = await provider.understand({
-        text: "Check my car ABC-123-XY in vehicle database",
-        language: "en-NG",
-      });
+    it("should fail closed on OfficialNAtlasProvider in strict mode when credentials are missing", async () => {
+      const origKey = process.env.N_ATLAS_API_KEY;
+      delete process.env.N_ATLAS_API_KEY;
+      try {
+        const provider = new OfficialNAtlasProvider(undefined, true);
+        await assert.rejects(
+          () => provider.understand({ text: "Check my car ABC-123-XY in vehicle database", language: "en-NG" }),
+          (err: unknown) => {
+            assert.ok(err instanceof NAtlasConnectionError);
+            assert.equal(err.status, 401);
+            assert.match(err.message, /N_ATLAS_STRICT_MODE violation/);
+            return true;
+          }
+        );
+      } finally {
+        if (origKey) process.env.N_ATLAS_API_KEY = origKey;
+      }
+    });
 
-      assert.equal(res.intent, "query_vehicle");
-      assert.equal(res.entities.vehiclePlate, "ABC-123-XY");
+    it("should safely bridge to benchmark engine on OfficialNAtlasProvider in non-strict mode with explicit metadata", async () => {
+      const origKey = process.env.N_ATLAS_API_KEY;
+      delete process.env.N_ATLAS_API_KEY;
+      try {
+        const provider = new OfficialNAtlasProvider(undefined, false);
+        const res = await provider.understand({
+          text: "Check my car ABC-123-XY in vehicle database",
+          language: "en-NG",
+        });
+
+        assert.equal(res.intent, "query_vehicle");
+        assert.equal(res.entities.vehiclePlate, "ABC-123-XY");
+        assert.equal(res.entities._isLiveAI, false);
+        assert.equal(res.entities._liveVerified, false);
+        assert.equal(res.entities._officialServiceVerified, false);
+        assert.equal(res.entities._nAtlasFallback, true);
+        assert.equal(res.entities._aiProvider, "N-ATLAS Fallback (Deterministic Benchmark Engine)");
+        assert.match(String(res.entities._fallbackReason), /Missing official adapter and N_ATLAS_API_KEY/);
+      } finally {
+        if (origKey) process.env.N_ATLAS_API_KEY = origKey;
+      }
+    });
+
+    it("should fail fast with NAtlasConnectionError in strict mode when HTTP endpoint returns 500 error", async () => {
+      const originalFetch = globalThis.fetch;
+      try {
+        globalThis.fetch = (async () => ({
+          ok: false,
+          status: 500,
+          statusText: "Internal Server Error",
+        })) as unknown as typeof fetch;
+
+        const adapter = new HttpNAtlasAdapter("https://api.n-atlas.ng/v1", "test-live-key", true);
+        await assert.rejects(
+          () => adapter.understand({ text: "Renew car insurance", language: "en-NG" }),
+          (err: unknown) => {
+            assert.ok(err instanceof NAtlasConnectionError);
+            assert.equal(err.status, 500);
+            return true;
+          }
+        );
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it("should fallback with explicit reason in non-strict mode when HTTP endpoint returns 500 error", async () => {
+      const originalFetch = globalThis.fetch;
+      try {
+        globalThis.fetch = (async () => ({
+          ok: false,
+          status: 500,
+          statusText: "Internal Server Error",
+        })) as unknown as typeof fetch;
+
+        const adapter = new HttpNAtlasAdapter("https://api.n-atlas.ng/v1", "test-live-key", false);
+        const res = await adapter.understand({ text: "Renew car insurance ABC-123-XY", language: "en-NG" });
+        assert.equal(res.entities._isLiveAI, false);
+        assert.equal(res.entities._nAtlasFallback, true);
+        assert.match(String(res.entities._fallbackReason), /HTTP 500/);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it("should fail fast in strict mode and fallback in non-strict mode when response JSON is invalid or message content is empty", async () => {
+      const originalFetch = globalThis.fetch;
+      try {
+        // 1. Unparseable non-JSON content
+        globalThis.fetch = (async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            choices: [{ message: { content: "this is not valid json content" } }],
+          }),
+        })) as unknown as typeof fetch;
+
+        const strictAdapter = new HttpNAtlasAdapter("https://api.n-atlas.ng/v1", "test-live-key", true);
+        await assert.rejects(
+          () => strictAdapter.understand({ text: "Renew car insurance", language: "en-NG" }),
+          (err: unknown) => {
+            assert.ok(err instanceof NAtlasConnectionError);
+            assert.equal(err.status, 502);
+            assert.match(err.message, /invalid non-JSON payload/);
+            return true;
+          }
+        );
+
+        const nonStrictAdapter = new HttpNAtlasAdapter("https://api.n-atlas.ng/v1", "test-live-key", false);
+        const fallbackRes = await nonStrictAdapter.understand({ text: "Renew car insurance ABC-123-XY", language: "en-NG" });
+        assert.equal(fallbackRes.entities._nAtlasFallback, true);
+        assert.match(String(fallbackRes.entities._fallbackReason), /invalid non-JSON payload/);
+
+        // 2. Empty message content
+        globalThis.fetch = (async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            choices: [{ message: { content: "" } }],
+          }),
+        })) as unknown as typeof fetch;
+
+        await assert.rejects(
+          () => strictAdapter.understand({ text: "Renew car insurance", language: "en-NG" }),
+          (err: unknown) => {
+            assert.ok(err instanceof NAtlasConnectionError);
+            assert.equal(err.status, 502);
+            assert.match(err.message, /empty or missing/);
+            return true;
+          }
+        );
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it("should preserve independent demo mode operation via createNAtlasProvider", () => {
+      const origMode = process.env.ACTIONOS_RUNTIME_MODE;
+      const origDemo = process.env.DEMO_MODE;
+      const origKey = process.env.N_ATLAS_API_KEY;
+      try {
+        process.env.ACTIONOS_RUNTIME_MODE = "demo";
+        process.env.DEMO_MODE = "true";
+        delete process.env.N_ATLAS_API_KEY;
+
+        const provider = createNAtlasProvider();
+        assert.ok(provider instanceof DeterministicDemoAIProvider);
+        assert.equal(provider.name, "Demo AI Adapter (Multilingual Nigeria)");
+      } finally {
+        if (origMode) process.env.ACTIONOS_RUNTIME_MODE = origMode;
+        if (origDemo) process.env.DEMO_MODE = origDemo;
+        if (origKey) process.env.N_ATLAS_API_KEY = origKey;
+      }
     });
 
     it("should distinguish live API success (_isLiveAI) from official sovereign provenance (_officialServiceVerified)", async () => {

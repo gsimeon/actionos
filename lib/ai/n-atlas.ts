@@ -547,39 +547,69 @@ export class HttpNAtlasAdapter implements INAtlasAdapter {
       if (response.ok) {
         const json = await response.json();
         const content = json.choices?.[0]?.message?.content;
-        if (content) {
-          const parsed = JSON.parse(content);
-          const latencyMs = Math.round(performance.now() - start);
-          const isOfficial = isOfficialNAtlasEndpoint(this.apiUrl);
-          return {
-            intent: parsed.intent || "unknown",
-            confidence: parsed.confidence || 0.95,
-            entities: {
-              vehiclePlate: parsed.entities?.vehiclePlate || parsed.vehiclePlate,
-              policyNumber: parsed.entities?.policyNumber || parsed.policyNumber,
-              vin: parsed.entities?.vin || parsed.vin,
-              nhiaNumber: parsed.entities?.nhiaNumber || parsed.nhiaNumber,
-              dlNumber: parsed.entities?.dlNumber || parsed.dlNumber,
-              detectedLanguage: parsed.language || input.language,
-              suggestedAction: parsed.suggestedAction,
-              _nAtlasLive: true,
-              _aiProvider: this.name,
-              _model: "n-atlas-multilingual",
-              _isLiveAI: true,
-              _liveVerified: true,
-              _officialServiceVerified: isOfficial,
-              _latencyMs: latencyMs,
-              _evidence: {
-                sanitizedPrompt: redactSensitiveInput(input.text),
-                endpoint: this.apiUrl,
-                isOfficialEndpoint: isOfficial,
-                model: "n-atlas-multilingual",
-                timestamp: new Date().toISOString(),
-                latencyMs,
+        if (!content) {
+          fetchError = new NAtlasConnectionError(
+            "N-ATLAS API returned HTTP 200 but message content was empty or missing",
+            502,
+            this.apiUrl
+          );
+        } else {
+          let parsed: {
+            intent?: string;
+            confidence?: number;
+            entities?: Record<string, unknown>;
+            vehiclePlate?: string;
+            policyNumber?: string;
+            vin?: string;
+            nhiaNumber?: string;
+            dlNumber?: string;
+            language?: string;
+            suggestedAction?: string;
+            [key: string]: unknown;
+          } | null = null;
+          try {
+            parsed = JSON.parse(content);
+          } catch (jsonErr: unknown) {
+            fetchError = new NAtlasConnectionError(
+              `N-ATLAS API returned invalid non-JSON payload: ${jsonErr instanceof Error ? jsonErr.message : String(jsonErr)}`,
+              502,
+              this.apiUrl
+            );
+          }
+
+          if (parsed) {
+            const latencyMs = Math.round(performance.now() - start);
+            const isOfficial = isOfficialNAtlasEndpoint(this.apiUrl);
+            return {
+              intent: parsed.intent || "unknown",
+              confidence: parsed.confidence || 0.95,
+              entities: {
+                vehiclePlate: (parsed.entities?.vehiclePlate as string | undefined) || parsed.vehiclePlate,
+                policyNumber: (parsed.entities?.policyNumber as string | undefined) || parsed.policyNumber,
+                vin: (parsed.entities?.vin as string | undefined) || parsed.vin,
+                nhiaNumber: (parsed.entities?.nhiaNumber as string | undefined) || parsed.nhiaNumber,
+                dlNumber: (parsed.entities?.dlNumber as string | undefined) || parsed.dlNumber,
+                detectedLanguage: parsed.language || input.language,
+                suggestedAction: parsed.suggestedAction,
+                _nAtlasLive: true,
+                _aiProvider: this.name,
+                _model: "n-atlas-multilingual",
+                _isLiveAI: true,
+                _liveVerified: true,
+                _officialServiceVerified: isOfficial,
+                _latencyMs: latencyMs,
+                _evidence: {
+                  sanitizedPrompt: redactSensitiveInput(input.text),
+                  endpoint: this.apiUrl,
+                  isOfficialEndpoint: isOfficial,
+                  model: "n-atlas-multilingual",
+                  timestamp: new Date().toISOString(),
+                  latencyMs,
+                },
               },
-            },
-            normalizedText: input.text || "",
-          };
+              normalizedText: input.text || "",
+            };
+          }
         }
       } else {
         fetchError = new NAtlasConnectionError(
@@ -624,13 +654,14 @@ export class HttpNAtlasAdapter implements INAtlasAdapter {
  * Holds the official integration boundary contract for ActionOS.
  * Delegates to a registered INAtlasAdapter (e.g. official SDK or verified API client)
  * when available. In the absence of an official driver, checks for N_ATLAS_API_KEY
- * or safely bridges to the benchmark understanding engine.
+ * or safely bridges to the benchmark understanding engine in non-strict mode.
  */
 export class OfficialNAtlasProvider implements NAtlasProvider {
   public readonly name = "Official N-ATLAS Integration Boundary";
 
   constructor(
-    private customAdapter?: INAtlasAdapter
+    private customAdapter?: INAtlasAdapter,
+    private strictMode: boolean = process.env.N_ATLAS_STRICT_MODE === "true"
   ) {}
 
   async understand(input: NAtlasInput): Promise<NAtlasUnderstanding> {
@@ -641,11 +672,20 @@ export class OfficialNAtlasProvider implements NAtlasProvider {
     }
 
     if (process.env.N_ATLAS_API_KEY) {
-      const httpAdapter = new HttpNAtlasAdapter();
+      const httpAdapter = new HttpNAtlasAdapter(undefined, undefined, this.strictMode);
       return await httpAdapter.understand(input);
     }
 
-    // Bridge via benchmark engine when N_ATLAS_API_KEY is not set
+    // Fail closed in strict mode if neither official adapter nor API key is configured
+    if (this.strictMode) {
+      throw new NAtlasConnectionError(
+        "N_ATLAS_STRICT_MODE violation: No official N-ATLAS adapter registered and N_ATLAS_API_KEY is not configured.",
+        401,
+        process.env.N_ATLAS_API_ENDPOINT || process.env.N_ATLAS_API_URL || "https://api.n-atlas.ng/v1"
+      );
+    }
+
+    // Bridge via benchmark engine when N_ATLAS_API_KEY is not set and not in strict mode
     const benchmarkEngine = new DeterministicDemoAIProvider();
     const result = await benchmarkEngine.understand(input);
 
@@ -654,6 +694,13 @@ export class OfficialNAtlasProvider implements NAtlasProvider {
       entities: {
         ...result.entities,
         _nAtlasBoundary: "Awaiting official N-ATLAS competition SDK/contract; bridged via benchmark engine",
+        _aiProvider: "N-ATLAS Fallback (Deterministic Benchmark Engine)",
+        _model: "rule_based_benchmark",
+        _isLiveAI: false,
+        _liveVerified: false,
+        _officialServiceVerified: false,
+        _nAtlasFallback: true,
+        _fallbackReason: "Missing official adapter and N_ATLAS_API_KEY (non-strict mode fallback)",
       },
     };
   }
