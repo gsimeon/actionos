@@ -13,11 +13,13 @@ import {
   Check,
   Gauge,
   HeartPulse,
+  Layers,
 } from "lucide-react";
+import { IntegrationStatusMatrix } from "@/components/dashboard/integration-status-matrix";
 
 export function LiveHandshakeHub() {
   const [activeTab, setActiveTab] = useState<
-    "frsc" | "lacvis" | "nhia" | "n_atlas" | "paystack" | "flutterwave" | "supabase"
+    "frsc" | "lacvis" | "nhia" | "n_atlas" | "paystack" | "flutterwave" | "supabase" | "matrix"
   >("frsc");
 
   // FRSC State
@@ -209,7 +211,7 @@ export function LiveHandshakeHub() {
       </div>
 
       {/* Tabs */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 xl:grid-cols-8 gap-2">
         <button
           type="button"
           onClick={() => setActiveTab("frsc")}
@@ -354,6 +356,27 @@ export function LiveHandshakeHub() {
           <div>
             <div className="text-xs font-bold text-slate-900">7. Supabase DB</div>
             <div className="text-[10px] text-slate-500">Realtime Streams</div>
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab("matrix")}
+          className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
+            activeTab === "matrix"
+              ? "bg-emerald-50/70 border-emerald-300 ring-2 ring-emerald-400/20 shadow-xs"
+              : "bg-slate-50 hover:bg-slate-100 border-slate-200"
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <Layers className={`w-4 h-4 ${activeTab === "matrix" ? "text-indigo-700" : "text-slate-500"}`} />
+            <span className="text-[10px] font-mono font-bold text-indigo-800 bg-indigo-100 px-1.5 py-0.5 rounded">
+              AUDIT
+            </span>
+          </div>
+          <div>
+            <div className="text-xs font-bold text-slate-900">8. Reality Matrix</div>
+            <div className="text-[10px] text-slate-500">Live vs Sandbox</div>
           </div>
         </button>
       </div>
@@ -799,6 +822,13 @@ export function LiveHandshakeHub() {
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* 8. Full Reality & Integration Status Matrix */}
+      {activeTab === "matrix" && (
+        <div className="space-y-4 animate-in fade-in duration-150">
+          <IntegrationStatusMatrix />
         </div>
       )}
     </div>

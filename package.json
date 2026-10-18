@@ -12,6 +12,7 @@
     "test:unit": "tsx --test tests/unit/**/*.test.ts",
     "test:integration": "tsx --test tests/integration/**/*.test.ts",
     "test:security": "tsx --test tests/unit/*security*.test.ts tests/integration/supabase-security-and-webhooks.test.ts tests/integration/ledger-persistence-and-privacy.test.ts tests/integration/schema-migration.test.ts",
+    "test:e2e": "node tests/live-e2e.mjs",
     "db:check": "node scripts/check-live.mjs",
     "db:verify": "node scripts/verify-supabase-staging.mjs",
     "db:verify:offline": "node scripts/verify-supabase-staging.mjs --mode=offline",

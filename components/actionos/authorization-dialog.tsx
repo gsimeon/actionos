@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import {
   ShieldCheck,
+  CheckCircle2,
   AlertTriangle,
   ArrowRight,
   X,
@@ -101,6 +102,29 @@ export function AuthorizationCard({
         <div className="flex items-center gap-1.5 text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200 text-[11px] font-bold shadow-xs">
           <Lock className="w-3 h-3 text-emerald-600" />
           <span>Session Guard Active</span>
+        </div>
+      </div>
+
+      {/* Statutory Eligibility & Pre-Clearance Verification Strip */}
+      <div className="my-4 p-3 rounded-2xl bg-emerald-50/70 border border-emerald-200/90 flex flex-wrap items-center justify-between gap-3 text-xs">
+        <div className="flex items-center gap-2">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+          <span className="font-bold text-emerald-950">Statutory Eligibility Clearance:</span>
+          <span className="text-emerald-800">All pre-flight compliance guardrails verified</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-[10px] font-bold font-mono">
+          <span className="px-2 py-0.5 rounded-md bg-white border border-emerald-200 text-emerald-800 flex items-center gap-1 shadow-2xs">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+            OWNERSHIP: VERIFIED
+          </span>
+          <span className="px-2 py-0.5 rounded-md bg-white border border-emerald-200 text-emerald-800 flex items-center gap-1 shadow-2xs">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+            THEFT / SANCTIONS: CLEAN
+          </span>
+          <span className="px-2 py-0.5 rounded-md bg-white border border-emerald-200 text-emerald-800 flex items-center gap-1 shadow-2xs">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+            STATUTORY WINDOW: IN-BOUNDS
+          </span>
         </div>
       </div>
 

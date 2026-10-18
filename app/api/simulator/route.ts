@@ -4,10 +4,12 @@ import { frscGateway, FrscGatewayError } from "@/lib/integrations/frsc";
 import { lacvisGateway, LacvisGatewayError } from "@/lib/integrations/lacvis";
 import { niidGateway, NiidGatewayError } from "@/lib/integrations/niid";
 import { nhiaGateway } from "@/lib/integrations/nhia";
-import { POST as paymentWebhookHandler } from "@/app/api/webhooks/payment/route";
+import { POST as paymentWebhookHandler, resetProcessedWebhookMemoryCache } from "@/app/api/webhooks/payment/route";
 import { resolveExecutionContext, DEMO_CONTEXT } from "@/lib/security/auth-context";
 import type { AuthenticatedExecutionContext } from "@/types/actionos";
 import { getRepositoryContainer } from "@/lib/repositories";
+import { orchestrator } from "@/lib/actionos/orchestrator";
+import { mockPaymentProvider } from "@/lib/payments/mock";
 import { VerifyNiidTool } from "@/lib/actionos/tools/verify-niid";
 import { VerifyVehicleInspectionTool } from "@/lib/actionos/tools/verify-vehicle-inspection";
 import { QueryHmoPlanTool } from "@/lib/actionos/tools/query-hmo-plan";
@@ -314,6 +316,137 @@ export async function POST(req: Request) {
           latencyMs: Math.round(performance.now() - start),
           outcome: toolRes.data?.verified ? "VERIFIED_FOR_RENEWAL" : "DENIED",
           details: toolRes.data,
+        });
+      }
+
+      if (scenarioId === "declined_payment") {
+        const repos = getRepositoryContainer();
+        const startWf = await orchestrator.startWorkflow({
+          inputText: "Renew Toyota Camry AUTO-2026-00182",
+          channel: "web",
+          executionContext: context,
+        });
+
+        mockPaymentProvider.simulatePaymentFailure = true;
+        let execRes;
+        try {
+          execRes = await orchestrator.authorizeAndExecute(
+            startWf.sessionId,
+            true,
+            context
+          );
+        } finally {
+          mockPaymentProvider.simulatePaymentFailure = false;
+        }
+
+        const policy = await repos.policies.findByNumber("AUTO-2026-00182", context);
+        const customerId = context.customerId || "f0000000-0000-0000-0000-000000000001";
+        const docs = await repos.documents.findByCustomerId(customerId, context);
+        const certIssued = docs.some(
+          (d) =>
+            d.document_type === "certificate" &&
+            d.file_name?.includes("AUTO-2026-00182") &&
+            d.created_at > new Date(Date.now() - 5000).toISOString()
+        );
+
+        return NextResponse.json({
+          success: true,
+          action,
+          scenarioId,
+          title: "Declined Payment Fail-Closed Proof",
+          description: "Simulated payment provider card decline / insufficient funds. System halted execution; policy remains strictly expiring (never renewed); zero statutory certificate issued.",
+          latencyMs: Math.round(performance.now() - start),
+          outcome: execRes.status === "failed" || execRes.status === "escalated" ? "SAFE_FAIL_CLOSED" : "UNEXPECTED_PASS",
+          details: {
+            workflowStatus: execRes.status,
+            message: execRes.message,
+            policyStatus: policy?.status,
+            policyExpiry: policy?.expiry_date,
+            statutoryCertificateIssued: certIssued,
+            failClosedInvariantMet: policy?.status !== "renewed" && !certIssued,
+            actionLedgerEventsRecorded: execRes.events?.length,
+          },
+        });
+      }
+
+      if (scenarioId === "webhook_replay") {
+        resetProcessedWebhookMemoryCache();
+        const repos = getRepositoryContainer();
+        const testRef = `REPLAY_DEMO_${Date.now()}`;
+        const customerId = context.customerId || "f0000000-0000-0000-0000-000000000001";
+
+        // Seed pending transaction
+        await repos.transactions.create(
+          {
+            customer_id: customerId,
+            amount: 87500,
+            currency: "NGN",
+            reference: testRef,
+            status: "pending",
+            transaction_type: "renewal_premium",
+          },
+          context
+        );
+
+        const webhookBody = JSON.stringify({
+          event: "charge.success",
+          data: {
+            id: `evt_replay_${Date.now()}`,
+            reference: testRef,
+            amount: 8750000,
+            currency: "NGN",
+            status: "success",
+            paid_at: new Date().toISOString(),
+            customer: { id: customerId, email: "babatunde.adeleke@example.ng" },
+          },
+        });
+
+        // Delivery 1: Initial settlement
+        const res1 = await paymentWebhookHandler(
+          new Request("http://localhost:3000/api/webhooks/payment", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-paystack-signature": "dev-bypass" },
+            body: webhookBody,
+          })
+        );
+        const json1 = (await res1.json()) as { data: { duplicate: boolean; acknowledged: boolean } };
+
+        // Delivery 2: Immediate replayed delivery
+        const res2 = await paymentWebhookHandler(
+          new Request("http://localhost:3000/api/webhooks/payment", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-paystack-signature": "dev-bypass" },
+            body: webhookBody,
+          })
+        );
+        const json2 = (await res2.json()) as { data: { duplicate: boolean; acknowledged: boolean } };
+
+        const allTx = await repos.transactions.findAll({ customerId, tenant: context });
+        const matchingTx = allTx.filter((t) => t.reference === testRef);
+
+        return NextResponse.json({
+          success: true,
+          action,
+          scenarioId,
+          title: "Payment Webhook Replay & Idempotency Proof",
+          description: "Delivered identical Paystack charge.success webhook twice. First delivery settled transaction; replayed delivery recognized duplicate; strictly 1 database transaction row (zero duplicate credit).",
+          latencyMs: Math.round(performance.now() - start),
+          outcome: json1.data?.duplicate === false && json2.data?.duplicate === true && matchingTx.length === 1 ? "IDEMPOTENT_DEDUPLICATION_VERIFIED" : "IDEMPOTENCY_FAILED",
+          details: {
+            initialDelivery: {
+              status: res1.status,
+              acknowledged: json1.data?.acknowledged,
+              duplicate: json1.data?.duplicate,
+            },
+            replayedDelivery: {
+              status: res2.status,
+              acknowledged: json2.data?.acknowledged,
+              duplicate: json2.data?.duplicate,
+            },
+            transactionReference: testRef,
+            matchingDatabaseTransactionsCount: matchingTx.length,
+            idempotencyInvariantPreserved: matchingTx.length === 1 && json2.data?.duplicate === true,
+          },
         });
       }
 

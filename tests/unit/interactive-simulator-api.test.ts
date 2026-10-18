@@ -222,5 +222,47 @@ describe("ActionOS Interactive Regulatory & Webhook Simulator API Suite", () => 
       assert.equal(json.outcome, "DUPLICATE_RENEWAL_PREVENTED");
       assert.equal(json.details?.activeExistingPolicy, true);
     });
+
+    it("should execute declined_payment scenario and observe SAFE_FAIL_CLOSED invariant", async () => {
+      resetStore();
+      const req = new Request("http://localhost:3000/api/simulator", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "run_scenario", scenarioId: "declined_payment" }),
+      });
+
+      const res = await simulatorHandler(req);
+      const json = await res.json();
+
+      assert.equal(res.status, 200);
+      assert.equal(json.success, true);
+      assert.equal(json.scenarioId, "declined_payment");
+      assert.equal(json.outcome, "SAFE_FAIL_CLOSED");
+      assert.equal(json.details?.failClosedInvariantMet, true);
+      assert.notEqual(json.details?.policyStatus, "renewed");
+      assert.equal(json.details?.statutoryCertificateIssued, false);
+    });
+
+    it("should execute webhook_replay scenario and observe IDEMPOTENT_DEDUPLICATION_VERIFIED", async () => {
+      resetStore();
+      resetProcessedWebhookMemoryCache();
+      const req = new Request("http://localhost:3000/api/simulator", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "run_scenario", scenarioId: "webhook_replay" }),
+      });
+
+      const res = await simulatorHandler(req);
+      const json = await res.json();
+
+      assert.equal(res.status, 200);
+      assert.equal(json.success, true);
+      assert.equal(json.scenarioId, "webhook_replay");
+      assert.equal(json.outcome, "IDEMPOTENT_DEDUPLICATION_VERIFIED");
+      assert.equal(json.details?.idempotencyInvariantPreserved, true);
+      assert.equal(json.details?.matchingDatabaseTransactionsCount, 1);
+      assert.equal(json.details?.initialDelivery?.duplicate, false);
+      assert.equal(json.details?.replayedDelivery?.duplicate, true);
+    });
   });
 });

@@ -835,6 +835,66 @@ export function RegulatoryWebhookSimulator() {
                 <span>Launch Driver&apos;s License Scenario</span>
               </button>
             </div>
+
+            {/* Scenario 6: Declined Payment Fail-Closed Proof */}
+            <div className="p-4 rounded-2xl border border-rose-200 bg-rose-50/40 hover:bg-rose-50/70 transition-all flex flex-col justify-between space-y-3">
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="px-2 py-0.5 rounded-md bg-rose-200 text-rose-900 text-[10px] font-bold font-mono">
+                    FAIL-CLOSED PROOF
+                  </span>
+                  <ShieldAlert className="w-4 h-4 text-rose-600" />
+                </div>
+                <h3 className="text-sm font-bold text-slate-900">Declined Payment Fail-Closed Proof</h3>
+                <p className="text-xs text-slate-600 mt-1">
+                  Injects card decline / insufficient funds on motor renewal. Proves policy remains <code className="text-rose-800 font-bold">expiring</code> (never renewed) and zero certificate is issued.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                disabled={Boolean(scenarioLoading)}
+                onClick={() => handleRunScenario("declined_payment")}
+                className="w-full py-2 px-3 rounded-xl bg-rose-700 hover:bg-rose-800 text-white text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2"
+              >
+                {scenarioLoading === "declined_payment" ? (
+                  <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                )}
+                <span>Launch Declined Payment Scenario</span>
+              </button>
+            </div>
+
+            {/* Scenario 7: Duplicate Webhook Replay & Idempotency Proof */}
+            <div className="p-4 rounded-2xl border border-blue-200 bg-blue-50/40 hover:bg-blue-50/70 transition-all flex flex-col justify-between space-y-3">
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="px-2 py-0.5 rounded-md bg-blue-200 text-blue-900 text-[10px] font-bold font-mono">
+                    IDEMPOTENCY PROOF
+                  </span>
+                  <RotateCw className="w-4 h-4 text-blue-600" />
+                </div>
+                <h3 className="text-sm font-bold text-slate-900">Webhook Replay &amp; Deduplication</h3>
+                <p className="text-xs text-slate-600 mt-1">
+                  Delivers identical Paystack webhook twice. Initial delivery settles; replayed delivery is deduplicated; strictly 1 ledger transaction created (zero double credit).
+                </p>
+              </div>
+
+              <button
+                type="button"
+                disabled={Boolean(scenarioLoading)}
+                onClick={() => handleRunScenario("webhook_replay")}
+                className="w-full py-2 px-3 rounded-xl bg-blue-700 hover:bg-blue-800 text-white text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2"
+              >
+                {scenarioLoading === "webhook_replay" ? (
+                  <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                )}
+                <span>Launch Webhook Replay Scenario</span>
+              </button>
+            </div>
           </div>
 
           {/* Scenario Execution Log */}
