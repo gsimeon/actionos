@@ -539,6 +539,33 @@ export async function runValidation(envOverride = process.env, argvOverride = pr
       };
       return { exitCode: 1, report: failedReport };
     }
+
+    const requireServiceRole =
+      argvOverride.includes("--require-service-role") ||
+      env.REQUIRE_SERVICE_ROLE === "true";
+
+    if (requireServiceRole && (!serviceRoleKey || serviceRoleKey.includes("placeholder") || serviceRoleKey.includes("demo-service-role"))) {
+      const errMessage = "STAGING-REQUIRED FAILURE: Missing valid SUPABASE_STAGING_SERVICE_ROLE_KEY for privileged staging checks (--require-service-role enforced).";
+      console.error(`\n❌ [FATAL] ${errMessage}`);
+      const failedReport = {
+        timestamp: new Date().toISOString(),
+        mode,
+        targetUrl: stagingUrl,
+        liveVerified: false,
+        status: "failed",
+        error: errMessage,
+        summary: { total: 1, passed: 0, failed: 1, skipped: 0, passPercentage: 0 },
+        checks: [
+          {
+            name: "staging_service_role_key_presence",
+            category: "configuration",
+            status: "failed",
+            details: errMessage,
+          },
+        ],
+      };
+      return { exitCode: 1, report: failedReport };
+    }
   }
 
   console.log("================================================================================");

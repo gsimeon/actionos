@@ -623,9 +623,18 @@ export class HttpNAtlasAdapter implements INAtlasAdapter {
     }
 
     if (this.strictMode) {
-      throw (
-        fetchError ||
-        new NAtlasConnectionError("N-ATLAS inference failed in strict mode", 500, this.apiUrl)
+      if (fetchError instanceof NAtlasConnectionError) {
+        throw fetchError;
+      }
+      const isTimeout =
+        fetchError?.name === "AbortError" ||
+        fetchError?.message?.toLowerCase().includes("timeout") ||
+        fetchError?.message?.toLowerCase().includes("timed out");
+      throw new NAtlasConnectionError(
+        `N-ATLAS connection failure in strict mode: ${fetchError?.message || "Inference failed"}`,
+        isTimeout ? 504 : 503,
+        this.apiUrl,
+        isTimeout
       );
     }
 
@@ -710,8 +719,13 @@ export class OfficialNAtlasProvider implements NAtlasProvider {
  * Factory creating either official N-ATLAS boundary provider or deterministic demo provider.
  */
 export function createNAtlasProvider(): NAtlasProvider {
-  if (customNAtlasAdapter || process.env.N_ATLAS_API_KEY || !isDemoMode()) {
-    return new OfficialNAtlasProvider();
+  if (
+    process.env.N_ATLAS_STRICT_MODE === "true" ||
+    customNAtlasAdapter ||
+    process.env.N_ATLAS_API_KEY ||
+    !isDemoMode()
+  ) {
+    return new OfficialNAtlasProvider(undefined, process.env.N_ATLAS_STRICT_MODE === "true");
   }
 
   return new DeterministicDemoAIProvider();

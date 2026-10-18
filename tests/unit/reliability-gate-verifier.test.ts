@@ -395,6 +395,23 @@ describe("ActionOS Reliability Gate v2: Verifier & Invariant Testing Suite", () 
       assert.match(result.report.error, /STAGING-REQUIRED FAILURE: Missing valid SUPABASE_STAGING_URL/);
     });
 
+    it("fails immediately in staging-required mode if --require-service-role is set and service role key is missing", async () => {
+      const result = await runValidation(
+        {
+          RELIABILITY_GATE_MODE: "staging-required",
+          SUPABASE_STAGING_URL: "https://real-staging.supabase.co",
+          SUPABASE_STAGING_ANON_KEY: "valid-anon-key-12345",
+          SUPABASE_STAGING_SERVICE_ROLE_KEY: "",
+          REQUIRE_SERVICE_ROLE: "true",
+        },
+        []
+      );
+
+      assert.equal(result.exitCode, 1);
+      assert.equal(result.report.status, "failed");
+      assert.match(result.report.error, /SUPABASE_STAGING_SERVICE_ROLE_KEY/);
+    });
+
     it("passes deterministically in offline mode and explicitly records liveVerified: false", async () => {
       const result = await runValidation(
         {

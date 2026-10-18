@@ -136,8 +136,8 @@ A granular security audit of dependencies via `npm audit --json` identified five
    `braces` $\rightarrow$ `micromatch` $\rightarrow$ `fast-glob` $\rightarrow$ `@next/eslint-plugin-next` $\rightarrow$ `eslint-config-next`.  
    Because each package in the path transitively depends on `braces`, `npm audit` tallies 1 count for each layer, reporting 5 total counts.
 
-2. **Npm Advisory Registry Range Limitation (`<=3.0.3`):**  
-   The npm advisory database records the affected range as `"range": "<=3.0.3"`. Inspection of the official npm registry (`npm view braces versions`) confirms that `3.0.3` is the latest published release of `braces` (no `3.0.4` or `4.x` exists on npm). Consequently, any package in the entire JavaScript ecosystem depending transitively on `braces` triggers this advisory notice.
+2. **Npm Advisory Registry Range Limitation (`<=3.0.3`) & Upstream Status:**  
+   The npm advisory database records the affected range as `"range": "<=3.0.3"`. Inspection of the official npm registry (`npm view braces versions`) confirms that `3.0.3` is the latest published release of `braces` (no `3.0.4` or `4.x` has been released by upstream maintainers). Consequently, any package across the JavaScript ecosystem depending transitively on `braces` triggers this advisory notice until upstream authors release a patched version.
 
 3. **Strictly Isolated to Developer Tooling (`devDependencies`):**  
    The entire chain resides exclusively within `devDependencies` (specifically `eslint-config-next@16.4.0`). It is executed solely during local developer linting and CI static analysis (`npm run lint`), and is **never** bundled into or exposed by runtime Next.js server endpoints, serverless handlers, or client browser distributions.
@@ -153,8 +153,20 @@ A granular security audit of dependencies via `npm audit --json` identified five
    ```
    Blindly executing `npm audit fix --force` downgrades `eslint-config-next` to `14.2.35`, introducing breaking semver conflicts with Next.js 16.4 and React 19.
 
-5. **Enforced Root Overrides:**  
-   `package.json` enforces root `"overrides": { "braces": "^3.0.3", "micromatch": "^4.0.8" }` to guarantee that all downstream package managers and CI environments resolve to patched, safe versions.
+5. **Enforced Root Overrides as Dependency Pin (Not Upstream Fix):**  
+   `package.json` enforces root `"overrides": { "braces": "^3.0.3", "micromatch": "^4.0.8" }`.  
+   *Accurate scope:* This override ensures that all downstream package managers and CI environments resolve to the latest published releases (`braces@3.0.3` and `micromatch@4.0.8`), preventing resolution of older, more severely vulnerable versions (such as ReDoS in braces <3.0.3 and micromatch <4.0.8). However, because `3.0.3` falls within the advisory's `<=3.0.3` range, this override is a **dependency consistency pin and risk mitigation**, not a claim that upstream has released a patched version.
+
+6. **Residual Risk Assessment (Zero Production Exposure):**  
+   - **Runtime Attack Surface:** Zero. Neither `braces` nor `micromatch` is loaded by Next.js at runtime, nor included in production output bundles.
+   - **Execution Context:** Offline build-time / CI static linting only (`npm run lint`).
+   - **Input Vector:** Pattern matching operates strictly over static repository file paths, never over untrusted user or network input.
+
+7. **Automated Supply Chain Verification (`npm run deps:verify`):**  
+   ActionOS enforces an automated dependency verification script (`scripts/verify-dependency-integrity.mjs`) in CI to:
+   - Validate that `braces` and `micromatch` are locked to intended pin versions.
+   - Assert that neither package appears in production `dependencies`.
+   - Prevent accidental introduction of unvetted runtime dependencies.
 
 
 
