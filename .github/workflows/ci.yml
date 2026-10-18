@@ -74,8 +74,8 @@ jobs:
   staging-verification:
     name: Live Supabase Staging Reliability Gate
     needs: [verify]
-    # Designated live staging gate triggered explicitly via workflow_dispatch
-    if: github.event_name == 'workflow_dispatch'
+    # Executes automatically when staging credentials are present in repository, or via manual dispatch
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || (github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork)
     runs-on: ubuntu-24.04
 
     steps:

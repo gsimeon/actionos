@@ -44,6 +44,8 @@ describe("FRSC & Live N-ATLAS Handshake Adapters Suite", () => {
 
   describe("N-ATLAS Sovereign Endpoint Validation & Trust Boundary", () => {
     it("should validate trusted N-ATLAS official sovereign domains vs untrusted endpoints", () => {
+      assert.ok(TRUSTED_N_ATLAS_HOSTS.includes("api.n-atlas.ng"));
+      assert.ok(TRUSTED_N_ATLAS_HOSTS.includes("ncair.nitda.gov.ng"));
       assert.equal(isOfficialNAtlasEndpoint("https://api.n-atlas.ng/v1"), true);
       assert.equal(isOfficialNAtlasEndpoint("https://n-atlas.ng/chat/completions"), true);
       assert.equal(isOfficialNAtlasEndpoint("https://ncair.nitda.gov.ng/ai/v1"), true);
