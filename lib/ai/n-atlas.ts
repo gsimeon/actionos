@@ -1,5 +1,6 @@
 import type { NAtlasProvider, NAtlasUnderstanding } from "@/types/actionos";
 import { isDemoMode } from "@/lib/runtime/mode";
+import { redactSensitiveInput } from "@/lib/security/redaction";
 import { normalizeNigerianText, formatClarificationMessage } from "./nigerian-languages";
 export * from "./nigerian-languages";
 
@@ -430,24 +431,92 @@ export function registerNAtlasAdapter(adapter: INAtlasAdapter | null): void {
 }
 
 /**
+ * Custom error thrown when live N-ATLAS inference fails in strict mode or network connectivity fails.
+ */
+export class NAtlasConnectionError extends Error {
+  constructor(
+    message: string,
+    public readonly status?: number,
+    public readonly endpoint?: string,
+    public readonly isTimeout?: boolean
+  ) {
+    super(message);
+    this.name = "NAtlasConnectionError";
+  }
+}
+
+/**
+ * Trusted official sovereign domains for NITDA / NCAIR N-ATLAS endpoints.
+ */
+export const TRUSTED_N_ATLAS_HOSTS: readonly string[] = [
+  "api.n-atlas.ng",
+  "n-atlas.ng",
+  "ncair.nitda.gov.ng",
+  "api.nitda.gov.ng",
+];
+
+/**
+ * Validates whether a given endpoint URL belongs to an explicitly trusted N-ATLAS host.
+ */
+export function isOfficialNAtlasEndpoint(urlStr: string): boolean {
+  try {
+    const parsed = new URL(urlStr);
+    const hostname = parsed.hostname.toLowerCase();
+    return TRUSTED_N_ATLAS_HOSTS.some(
+      (trusted) => hostname === trusted || hostname.endsWith(`.${trusted}`)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Live N-ATLAS Foundation Model HTTP Adapter (NITDA / NCAIR)
  * Connects to N-ATLAS OpenAI-compatible chat completions or native inference endpoints.
+ * Prioritizes N_ATLAS_API_ENDPOINT with backward compatibility for N_ATLAS_API_URL.
  */
 export class HttpNAtlasAdapter implements INAtlasAdapter {
   public readonly name = "Live N-ATLAS Foundation Model (NITDA / NCAIR)";
 
   constructor(
-    private apiUrl: string = process.env.N_ATLAS_API_URL || "https://api.n-atlas.ng/v1",
-    private apiKey: string = process.env.N_ATLAS_API_KEY || ""
+    private apiUrl: string = process.env.N_ATLAS_API_ENDPOINT || process.env.N_ATLAS_API_URL || "https://api.n-atlas.ng/v1",
+    private apiKey: string = process.env.N_ATLAS_API_KEY || "",
+    private strictMode: boolean = process.env.N_ATLAS_STRICT_MODE === "true"
   ) {}
 
   async understand(input: NAtlasInput): Promise<NAtlasUnderstanding> {
+    const start = performance.now();
+
     if (!this.apiKey) {
+      if (this.strictMode) {
+        throw new NAtlasConnectionError(
+          "N_ATLAS_STRICT_MODE violation: N_ATLAS_API_KEY is omitted. Live inference cannot be verified.",
+          401,
+          this.apiUrl
+        );
+      }
       const benchmark = new DeterministicDemoAIProvider();
-      return await benchmark.understand(input);
+      const res = await benchmark.understand(input);
+      return {
+        ...res,
+        entities: {
+          ...res.entities,
+          _aiProvider: "N-ATLAS Fallback (Deterministic Benchmark Engine)",
+          _model: "rule_based_benchmark",
+          _isLiveAI: false,
+          _nAtlasFallback: true,
+          _fallbackReason: "Missing N_ATLAS_API_KEY",
+          _liveVerified: false,
+          _officialServiceVerified: false,
+        },
+      };
     }
 
+    let fetchError: Error | null = null;
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s SLA
+
       const response = await fetch(`${this.apiUrl}/chat/completions`, {
         method: "POST",
         headers: {
@@ -460,7 +529,7 @@ export class HttpNAtlasAdapter implements INAtlasAdapter {
             {
               role: "system",
               content:
-                "You are N-ATLAS, Nigeria's sovereign multilingual foundation AI. Extract intent (renew_policy, renew_vehicle_license, query_vehicle, register_vehicle), language, and entities (plate, policy, vin) as JSON.",
+                "You are N-ATLAS, Nigeria's sovereign multilingual foundation AI. Extract intent (renew_policy, renew_vehicle_license, query_vehicle, register_vehicle, renew_hmo, renew_drivers_license), language, and entities (plate, policy, vin, nhia, dl) as JSON.",
             },
             {
               role: "user",
@@ -470,13 +539,18 @@ export class HttpNAtlasAdapter implements INAtlasAdapter {
           response_format: { type: "json_object" },
           temperature: 0.1,
         }),
+        signal: controller.signal,
       });
+
+      clearTimeout(timeoutId);
 
       if (response.ok) {
         const json = await response.json();
         const content = json.choices?.[0]?.message?.content;
         if (content) {
           const parsed = JSON.parse(content);
+          const latencyMs = Math.round(performance.now() - start);
+          const isOfficial = isOfficialNAtlasEndpoint(this.apiUrl);
           return {
             intent: parsed.intent || "unknown",
             confidence: parsed.confidence || 0.95,
@@ -484,19 +558,48 @@ export class HttpNAtlasAdapter implements INAtlasAdapter {
               vehiclePlate: parsed.entities?.vehiclePlate || parsed.vehiclePlate,
               policyNumber: parsed.entities?.policyNumber || parsed.policyNumber,
               vin: parsed.entities?.vin || parsed.vin,
+              nhiaNumber: parsed.entities?.nhiaNumber || parsed.nhiaNumber,
+              dlNumber: parsed.entities?.dlNumber || parsed.dlNumber,
               detectedLanguage: parsed.language || input.language,
               suggestedAction: parsed.suggestedAction,
               _nAtlasLive: true,
               _aiProvider: this.name,
+              _model: "n-atlas-multilingual",
               _isLiveAI: true,
+              _liveVerified: true,
+              _officialServiceVerified: isOfficial,
+              _latencyMs: latencyMs,
+              _evidence: {
+                sanitizedPrompt: redactSensitiveInput(input.text),
+                endpoint: this.apiUrl,
+                isOfficialEndpoint: isOfficial,
+                model: "n-atlas-multilingual",
+                timestamp: new Date().toISOString(),
+                latencyMs,
+              },
             },
             normalizedText: input.text || "",
           };
         }
+      } else {
+        fetchError = new NAtlasConnectionError(
+          `N-ATLAS API HTTP ${response.status}: ${response.statusText}`,
+          response.status,
+          this.apiUrl
+        );
       }
-    } catch (err) {
-      console.warn("N-ATLAS live inference call failed, falling back to benchmark engine:", err);
+    } catch (err: unknown) {
+      fetchError = err instanceof Error ? err : new Error(String(err));
     }
+
+    if (this.strictMode) {
+      throw (
+        fetchError ||
+        new NAtlasConnectionError("N-ATLAS inference failed in strict mode", 500, this.apiUrl)
+      );
+    }
+
+    console.warn("N-ATLAS live inference call failed, falling back to benchmark engine:", fetchError?.message);
 
     const fallbackEngine = new DeterministicDemoAIProvider();
     const result = await fallbackEngine.understand(input);
@@ -505,8 +608,12 @@ export class HttpNAtlasAdapter implements INAtlasAdapter {
       entities: {
         ...result.entities,
         _nAtlasFallback: true,
-        _aiProvider: this.name,
+        _aiProvider: "N-ATLAS Fallback (Deterministic Benchmark Engine)",
+        _model: "rule_based_benchmark",
         _isLiveAI: false,
+        _liveVerified: false,
+        _officialServiceVerified: false,
+        _fallbackReason: fetchError?.message || "Unknown error",
       },
     };
   }

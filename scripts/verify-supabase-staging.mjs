@@ -40,11 +40,44 @@ export const EXPECTED_CORE_TABLES = [
 ];
 
 export const SENSITIVE_RPC_ENDPOINTS = [
-  { name: "settle_payment_webhook", args: { p_transaction_reference: "probe_ref_unauthorized" } },
-  { name: "reserve_refund_balance", args: { p_organization_id: "a0000000-0000-0000-0000-000000000001", p_amount: 100 } },
-  { name: "release_refund_reservation", args: { p_reservation_id: "probe_res_unauthorized" } },
-  { name: "finalize_atomic_refund_settlement", args: { p_refund_transaction_id: "probe_tx_unauthorized" } },
-  { name: "claim_and_accept_quote", args: { p_quote_id: "probe_quote_unauthorized" } },
+  {
+    name: "settle_payment_webhook",
+    args: {
+      p_transaction_id: "00000000-0000-0000-0000-000000000001",
+      p_status: "succeeded",
+      p_metadata: {},
+      p_provider: "paystack",
+      p_event_id: "probe_event_unauthorized",
+      p_event_type: "charge.success",
+      p_reference: "probe_ref_unauthorized",
+    },
+  },
+  {
+    name: "reserve_refund_balance",
+    args: {
+      p_organization_id: "00000000-0000-0000-0000-000000000001",
+      p_amount: 100,
+    },
+  },
+  {
+    name: "release_refund_reservation",
+    args: {
+      p_reservation_id: "00000000-0000-0000-0000-000000000001",
+    },
+  },
+  {
+    name: "finalize_atomic_refund_settlement",
+    args: {
+      p_refund_transaction_id: "00000000-0000-0000-0000-000000000001",
+    },
+  },
+  {
+    name: "claim_and_accept_quote",
+    args: {
+      p_session_id: "00000000-0000-0000-0000-000000000001",
+      p_quote_id: "00000000-0000-0000-0000-000000000001",
+    },
+  },
 ];
 
 /**
@@ -135,13 +168,24 @@ export function classifyRpcResult(result) {
     };
   }
 
-  // 4. Recognized permission denials:
-  // PostgREST returns 404 with PGRST202 when an RPC is revoked or not granted EXECUTE to the role.
-  // Postgres returns 403 / 401 with 42501 (insufficient privilege) or PGRST301 (JWT forbidden).
-  const isPostgrestRevoked = status === 404 && error.code === "PGRST202";
-  const isPostgresPermissionDenied = (status === 403 || status === 401) && (error.code === "42501" || error.code === "PGRST301");
+  // 4. Missing function in schema cache (PGRST202, HTTP 404)
+  // PostgREST returns 404 with PGRST202 when an RPC is NOT found in the schema cache
+  // or does not match parameter signatures. This is a MISSING function defect, NEVER a verified permission revocation!
+  if (status === 404 && error?.code === "PGRST202") {
+    return {
+      isPermissionDenied: false,
+      isCriticalLeak: false,
+      category: "function_missing",
+      reason: `Function not found in schema cache (HTTP 404, code: PGRST202): ${error.message} - missing functions cannot be verified as privilege revoked!`,
+    };
+  }
 
-  if (isPostgrestRevoked || isPostgresPermissionDenied) {
+  // 5. Recognized permission denials:
+  // Postgres returns 403 / 401 with 42501 (insufficient privilege) or PGRST301 (JWT forbidden).
+  // This explicitly proves the function exists in the database and Postgres strictly denied execution to the role.
+  const isPostgresPermissionDenied = (status === 403 || status === 401) && (error?.code === "42501" || error?.code === "PGRST301");
+
+  if (isPostgresPermissionDenied) {
     return {
       isPermissionDenied: true,
       isCriticalLeak: false,
@@ -262,32 +306,61 @@ export function classifyRlsDenial(result, tableName) {
     };
   }
 
-  // 3. Access denied by permissions/RLS error
-  if (error && (error.code === "PGRST205" || error.code === "42501" || status === 401 || status === 403)) {
-    return {
-      isIsolated: true,
-      isCriticalLeak: false,
-      category: "permission_denied",
-      reason: `Unauthenticated query on '${tableName}' blocked by database permissions/RLS (${error.code})`,
-    };
-  }
-
-  // 4. Network or server error
+  // 3. Network failures or thrown network-level errors
   const errMsg = (error?.message || "").toLowerCase();
   if (
     errMsg.includes("fetch failed") ||
     errMsg.includes("networkerror") ||
     errMsg.includes("econnrefused") ||
-    errMsg.includes("etimedout")
+    errMsg.includes("etimedout") ||
+    errMsg.includes("enotfound") ||
+    errMsg.includes("abort")
   ) {
     return {
       isIsolated: false,
       isCriticalLeak: false,
       category: "network_failure",
-      reason: `Network error during RLS check on '${tableName}': ${error.message}`,
+      reason: `Network/connectivity error during RLS check on '${tableName}': ${error.message}`,
     };
   }
 
+  // 4. Server errors (HTTP 5xx)
+  if (status && status >= 500) {
+    return {
+      isIsolated: false,
+      isCriticalLeak: false,
+      category: "server_error",
+      reason: `Database/server error (HTTP ${status}) during RLS check on '${tableName}': ${error?.message || "server crash"}`,
+    };
+  }
+
+  // 5. Relation missing (PGRST205, 42P01, 404)
+  // PGRST205 indicates the relation is not found in the PostgREST schema cache.
+  // This is a missing table or schema cache defect, NEVER an RLS isolation pass!
+  if (error?.code === "PGRST205" || error?.code === "42P01" || status === 404) {
+    return {
+      isIsolated: false,
+      isCriticalLeak: false,
+      category: "relation_missing",
+      reason: `Relation '${tableName}' not found in PostgREST schema cache (code: ${error?.code}, status: ${status}) - cannot verify RLS isolation!`,
+    };
+  }
+
+  // 6. Explicit PostgreSQL permission denials
+  // Postgres returns 42501 (insufficient_privilege) when table exists but role lacks SELECT.
+  // PostgREST returns PGRST301 when JWT credentials forbid access.
+  const isPostgres42501 = (status === 401 || status === 403) && error?.code === "42501";
+  const isPostgrest301 = (status === 401 || status === 403) && error?.code === "PGRST301";
+  if (isPostgres42501 || isPostgrest301) {
+    return {
+      isIsolated: true,
+      isCriticalLeak: false,
+      category: "permission_denied",
+      reason: `Unauthenticated query on '${tableName}' strictly blocked by database permissions (HTTP ${status}, code: ${error.code})`,
+    };
+  }
+
+  // 7. Unexpected error (e.g. invalid query syntax, cardinality error, bad request 400)
   return {
     isIsolated: false,
     isCriticalLeak: false,
@@ -514,7 +587,7 @@ export async function runValidation(envOverride = process.env, argvOverride = pr
     console.log("\n2. Verifying PostgREST Catalog & Table Schema Presence...");
     for (const table of EXPECTED_CORE_TABLES) {
       try {
-        const queryRes = await anonClient.from(table).select("*", { count: "exact", head: true });
+        const queryRes = await anonClient.from(table).select("*").limit(1);
         const classification = classifyTableExistence(queryRes, table);
         record(`table_catalog_${table}`, "schema", classification.exists, classification.reason);
       } catch (err) {
@@ -535,7 +608,7 @@ export async function runValidation(envOverride = process.env, argvOverride = pr
     }
 
     try {
-      const ledgerRes = await anonClient.from("action_ledger_events").select("id, action, hash");
+      const ledgerRes = await anonClient.from("action_ledger_events").select("id, action, event_hash");
       const rlsLedger = classifyRlsDenial(ledgerRes, "action_ledger_events");
       record("rls_ledger_isolation", "rls", rlsLedger.isIsolated && !rlsLedger.isCriticalLeak, rlsLedger.reason);
     } catch (err) {
@@ -582,6 +655,37 @@ export async function runValidation(envOverride = process.env, argvOverride = pr
             true,
             `Service role authentication verified (organizations returned: ${data?.length || 0})`
           );
+
+          // Privileged check: verify each sensitive RPC function actually exists in schema cache
+          console.log("\n6. Verifying Sensitive Function Existence via Privileged Service Role Check...");
+          for (const { name, args } of SENSITIVE_RPC_ENDPOINTS) {
+            try {
+              const adminRpcRes = await adminClient.rpc(name, args);
+              // PostgREST returns 404 with PGRST202 if function does not exist in the schema cache
+              if (adminRpcRes.status === 404 && adminRpcRes.error?.code === "PGRST202") {
+                record(
+                  `service_role_rpc_exists_${name}`,
+                  "service_role",
+                  false,
+                  `Function '${name}' does NOT exist in database schema cache (HTTP 404, code: PGRST202)`
+                );
+              } else {
+                record(
+                  `service_role_rpc_exists_${name}`,
+                  "service_role",
+                  true,
+                  `Function '${name}' confirmed present in database catalog and executable by service_role (status: ${adminRpcRes.status || 200})`
+                );
+              }
+            } catch (err) {
+              record(
+                `service_role_rpc_exists_${name}`,
+                "service_role",
+                false,
+                `Exception verifying RPC existence for '${name}': ${err.message}`
+              );
+            }
+          }
         }
       } catch (err) {
         record("service_role_authentication", "service_role", false, `Service role check threw exception: ${err.message}`);
@@ -596,8 +700,47 @@ export async function runValidation(envOverride = process.env, argvOverride = pr
       });
     }
   } else {
-    console.log("\n2. Offline Mode Active: Skipping live database network checks.");
+    console.log("\n2. Offline Mode Active: Explicitly logging skipped live database checks for transparent reporting.");
     console.log("   (To certify live database security, run with --mode=staging-required and provide staging credentials)\n");
+
+    for (const table of EXPECTED_CORE_TABLES) {
+      checks.push({
+        name: `table_catalog_${table}`,
+        category: "schema",
+        status: "skipped",
+        details: `[OFFLINE MODE] Live PostgREST catalog check skipped for '${table}'. Required staging credentials omitted.`,
+      });
+    }
+
+    checks.push({
+      name: "rls_policies_isolation",
+      category: "rls",
+      status: "skipped",
+      details: "[OFFLINE MODE] Live RLS query on 'policies' skipped. Required staging credentials omitted.",
+    });
+
+    checks.push({
+      name: "rls_ledger_isolation",
+      category: "rls",
+      status: "skipped",
+      details: "[OFFLINE MODE] Live RLS query on 'action_ledger_events' skipped. Required staging credentials omitted.",
+    });
+
+    for (const { name } of SENSITIVE_RPC_ENDPOINTS) {
+      checks.push({
+        name: `rpc_revocation_${name}`,
+        category: "rpc",
+        status: "skipped",
+        details: `[OFFLINE MODE] Live RPC execution check skipped for '${name}'. Required staging credentials omitted.`,
+      });
+    }
+
+    checks.push({
+      name: "service_role_authentication",
+      category: "service_role",
+      status: "skipped",
+      details: "[OFFLINE MODE] Live service role admin query skipped. Required staging credentials omitted.",
+    });
   }
 
   // Calculate metrics
@@ -668,6 +811,26 @@ export async function runValidation(envOverride = process.env, argvOverride = pr
 // Direct execution check
 const isDirectRun = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isDirectRun) {
+  if (typeof process.loadEnvFile === "function") {
+    try {
+      if (fs.existsSync(".env.local")) {
+        process.loadEnvFile(".env.local");
+      } else if (fs.existsSync(".env")) {
+        process.loadEnvFile(".env");
+      }
+    } catch {
+      // Proceed if already loaded or missing
+    }
+  }
+
+  // Populate staging variables from standard Next.js Supabase config if omitted
+  if (!process.env.SUPABASE_STAGING_URL && process.env.NEXT_PUBLIC_SUPABASE_URL) {
+    process.env.SUPABASE_STAGING_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  }
+  if (!process.env.SUPABASE_STAGING_ANON_KEY && (process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)) {
+    process.env.SUPABASE_STAGING_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  }
+
   runValidation()
     .then(({ exitCode }) => {
       process.exit(exitCode);

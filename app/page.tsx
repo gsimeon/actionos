@@ -1,6 +1,6 @@
 "use client";
 
-import React, { Suspense } from "react";
+import React, { Suspense, useState } from "react";
 import Link from "next/link";
 import {
   ShieldCheck,
@@ -15,8 +15,10 @@ import {
   Play,
 } from "lucide-react";
 import { ActionConsole } from "@/components/actionos/action-console";
+import { JudgeGuidedTour } from "@/components/dashboard/judge-guided-tour";
 
 export default function HomePage() {
+  const [showTour, setShowTour] = useState(false);
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 selection:bg-emerald-500 selection:text-white">
       {/* Top Navbar */}
@@ -100,20 +102,28 @@ export default function HomePage() {
 
           {/* Action CTAs */}
           <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3">
+            <button
+              onClick={() => setShowTour(true)}
+              className="w-full sm:w-auto px-8 py-3.5 rounded-2xl bg-gradient-to-r from-amber-500 via-emerald-600 to-teal-600 hover:from-amber-600 hover:to-teal-700 text-white font-black text-sm shadow-xl shadow-emerald-600/30 hover:shadow-emerald-600/40 transition-all flex items-center justify-center gap-2 active:scale-95 ring-2 ring-emerald-400/50 cursor-pointer"
+            >
+              <Sparkles className="w-4 h-4 text-amber-200" />
+              <span>⚡ 1-Click NITDA Judge Tour</span>
+            </button>
+
             <a
               href="#demo"
-              className="w-full sm:w-auto px-8 py-3.5 rounded-2xl bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-700 hover:to-teal-700 text-white font-bold text-sm shadow-xl shadow-emerald-600/20 hover:shadow-emerald-600/30 transition-all flex items-center justify-center gap-2 active:scale-95"
+              className="w-full sm:w-auto px-6 py-3.5 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm shadow-lg shadow-slate-900/20 transition-all flex items-center justify-center gap-2 active:scale-95"
             >
-              <Zap className="w-4 h-4" />
+              <Zap className="w-4 h-4 text-emerald-400" />
               <span>Try Interactive Renewal</span>
             </a>
 
             <Link
               href="/dashboard"
-              className="w-full sm:w-auto px-6 py-3.5 rounded-2xl bg-white hover:bg-slate-50 text-slate-800 font-bold text-sm border border-slate-300 shadow-sm transition-all flex items-center justify-center gap-2"
+              className="w-full sm:w-auto px-6 py-3.5 rounded-2xl bg-white hover:bg-slate-50 text-slate-800 font-bold text-sm border border-slate-300 shadow-xs transition-all flex items-center justify-center gap-2"
             >
               <Play className="w-4 h-4 text-emerald-600" />
-              <span>View Enterprise Dashboard</span>
+              <span>Enterprise Dashboard</span>
             </Link>
           </div>
         </div>
@@ -305,6 +315,8 @@ export default function HomePage() {
           </div>
         </div>
       </footer>
+
+      <JudgeGuidedTour isOpen={showTour} onClose={() => setShowTour(false)} />
     </div>
   );
 }
