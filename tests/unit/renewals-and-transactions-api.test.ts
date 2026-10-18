@@ -449,7 +449,9 @@ describe("Renewals & Multi-Rail Transactions REST API Suite", () => {
     });
   });
 
-  describe("GET & POST /api/dev/reset (State-Mutation Protection & Authorization)", () => {
+  describe("GET & POST /api/dev/reset (State-Mutation Protection & Operator Authentication)", () => {
+    const TEST_RESET_SECRET = "test_actionos_dev_secret_xyz789";
+
     it("should strictly reject state mutation on GET with 405 Method Not Allowed", async () => {
       const res = await getDevReset();
       assert.equal(res.status, 405);
@@ -470,7 +472,7 @@ describe("Renewals & Multi-Rail Transactions REST API Suite", () => {
       try {
         const req = new Request("http://localhost:3000/api/dev/reset", {
           method: "POST",
-          headers: { "x-role": "admin" },
+          headers: { "x-actionos-reset-key": TEST_RESET_SECRET },
         });
         const res = await postDevReset(req);
         assert.equal(res.status, 403);
@@ -484,54 +486,97 @@ describe("Renewals & Multi-Rail Transactions REST API Suite", () => {
       }
     });
 
-    it("should strictly reject unauthenticated reset request with 401 Unauthorized", async () => {
-      const previousFlag = process.env.ENABLE_DEMO_RESET;
-      process.env.ENABLE_DEMO_RESET = "true";
+    it("should strictly reject reset in production environment mode (403)", async () => {
+      const env = process.env as Record<string, string | undefined>;
+      const prevNodeEnv = env.NODE_ENV;
+      env.NODE_ENV = "production";
+      env.ENABLE_DEMO_RESET = "true";
 
       try {
         const req = new Request("http://localhost:3000/api/dev/reset", {
           method: "POST",
-          headers: { "x-unauthenticated": "true" },
-        });
-        const res = await postDevReset(req);
-        assert.equal(res.status, 401);
-        const json = await res.json();
-        assert.equal(json.success, false);
-        assert.equal(json.error.code, "UNAUTHORIZED");
-      } finally {
-        if (previousFlag !== undefined) process.env.ENABLE_DEMO_RESET = previousFlag;
-      }
-    });
-
-    it("should strictly reject unauthorized customer role with 403 Forbidden", async () => {
-      const previousFlag = process.env.ENABLE_DEMO_RESET;
-      process.env.ENABLE_DEMO_RESET = "true";
-
-      try {
-        const req = new Request("http://localhost:3000/api/dev/reset", {
-          method: "POST",
-          headers: { "x-role": "customer" },
+          headers: { "x-actionos-reset-key": TEST_RESET_SECRET },
         });
         const res = await postDevReset(req);
         assert.equal(res.status, 403);
         const json = await res.json();
         assert.equal(json.success, false);
         assert.equal(json.error.code, "FORBIDDEN");
-        assert.match(json.error.message, /requires administrator or operator privileges/i);
+        assert.match(json.error.message, /strictly disabled in production/i);
       } finally {
-        if (previousFlag !== undefined) process.env.ENABLE_DEMO_RESET = previousFlag;
+        env.NODE_ENV = prevNodeEnv;
       }
     });
 
-    it("should permit clean state reset on POST for verified admin role with flag enabled", async () => {
-      const previousFlag = process.env.ENABLE_DEMO_RESET;
+    it("SECURITY REGRESSION: strictly rejects spoofed 'x-role: admin' header without valid authentication (401)", async () => {
+      const prevFlag = process.env.ENABLE_DEMO_RESET;
+      const prevSecret = process.env.ACTIONOS_DEV_RESET_SECRET;
       process.env.ENABLE_DEMO_RESET = "true";
+      process.env.ACTIONOS_DEV_RESET_SECRET = TEST_RESET_SECRET;
+
+      try {
+        // Attacker attempts to spoof admin privileges using client header 'x-role: admin'
+        const req = new Request("http://localhost:3000/api/dev/reset", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-role": "admin",
+          },
+        });
+
+        const res = await postDevReset(req);
+        assert.equal(res.status, 401, "Spoofed x-role header must be rejected with 401 Unauthorized");
+
+        const json = await res.json();
+        assert.equal(json.success, false);
+        assert.equal(json.error.code, "UNAUTHORIZED");
+        assert.match(json.error.message, /valid operator secret key or verified administrator session is required/i);
+        assert.match(json.error.message, /Client-supplied role headers are untrusted/i);
+      } finally {
+        if (prevFlag !== undefined) process.env.ENABLE_DEMO_RESET = prevFlag;
+        if (prevSecret !== undefined) process.env.ACTIONOS_DEV_RESET_SECRET = prevSecret;
+      }
+    });
+
+    it("should strictly reject invalid or incorrect operator secret key (401)", async () => {
+      const prevFlag = process.env.ENABLE_DEMO_RESET;
+      const prevSecret = process.env.ACTIONOS_DEV_RESET_SECRET;
+      process.env.ENABLE_DEMO_RESET = "true";
+      process.env.ACTIONOS_DEV_RESET_SECRET = TEST_RESET_SECRET;
 
       try {
         const req = new Request("http://localhost:3000/api/dev/reset", {
           method: "POST",
-          headers: { "x-role": "admin" },
+          headers: {
+            "x-actionos-reset-key": "wrong_invalid_secret_key_999",
+          },
         });
+
+        const res = await postDevReset(req);
+        assert.equal(res.status, 401);
+        const json = await res.json();
+        assert.equal(json.success, false);
+        assert.equal(json.error.code, "UNAUTHORIZED");
+      } finally {
+        if (prevFlag !== undefined) process.env.ENABLE_DEMO_RESET = prevFlag;
+        if (prevSecret !== undefined) process.env.ACTIONOS_DEV_RESET_SECRET = prevSecret;
+      }
+    });
+
+    it("should permit clean state reset with verified operator secret key via x-actionos-reset-key (200)", async () => {
+      const prevFlag = process.env.ENABLE_DEMO_RESET;
+      const prevSecret = process.env.ACTIONOS_DEV_RESET_SECRET;
+      process.env.ENABLE_DEMO_RESET = "true";
+      process.env.ACTIONOS_DEV_RESET_SECRET = TEST_RESET_SECRET;
+
+      try {
+        const req = new Request("http://localhost:3000/api/dev/reset", {
+          method: "POST",
+          headers: {
+            "x-actionos-reset-key": TEST_RESET_SECRET,
+          },
+        });
+
         const res = await postDevReset(req);
         assert.equal(res.status, 200);
 
@@ -540,29 +585,37 @@ describe("Renewals & Multi-Rail Transactions REST API Suite", () => {
         assert.match(json.message, /reset to clean benchmark state/i);
         assert.ok(json.operator);
         assert.equal(json.operator.role, "admin");
+        assert.equal(json.operator.authMethod, "operator_secret");
         assert.ok(json.operator.resetAt);
       } finally {
-        if (previousFlag !== undefined) process.env.ENABLE_DEMO_RESET = previousFlag;
+        if (prevFlag !== undefined) process.env.ENABLE_DEMO_RESET = prevFlag;
+        if (prevSecret !== undefined) process.env.ACTIONOS_DEV_RESET_SECRET = prevSecret;
       }
     });
 
-    it("should permit clean state reset on POST for verified manager role with flag enabled", async () => {
-      const previousFlag = process.env.ENABLE_DEMO_RESET;
+    it("should permit clean state reset with verified operator secret key via Authorization Bearer (200)", async () => {
+      const prevFlag = process.env.ENABLE_DEMO_RESET;
+      const prevSecret = process.env.ACTIONOS_DEV_RESET_SECRET;
       process.env.ENABLE_DEMO_RESET = "true";
+      process.env.ACTIONOS_DEV_RESET_SECRET = TEST_RESET_SECRET;
 
       try {
         const req = new Request("http://localhost:3000/api/dev/reset", {
           method: "POST",
-          headers: { "x-role": "manager" },
+          headers: {
+            Authorization: `Bearer ${TEST_RESET_SECRET}`,
+          },
         });
+
         const res = await postDevReset(req);
         assert.equal(res.status, 200);
 
         const json = await res.json();
         assert.equal(json.success, true);
-        assert.equal(json.operator.role, "manager");
+        assert.equal(json.operator.authMethod, "operator_secret");
       } finally {
-        if (previousFlag !== undefined) process.env.ENABLE_DEMO_RESET = previousFlag;
+        if (prevFlag !== undefined) process.env.ENABLE_DEMO_RESET = prevFlag;
+        if (prevSecret !== undefined) process.env.ACTIONOS_DEV_RESET_SECRET = prevSecret;
       }
     });
   });

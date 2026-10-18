@@ -5,7 +5,7 @@ async function testLiveApi() {
   // 0. Reset to clean benchmark state
   await fetch("http://localhost:3000/api/dev/reset", {
     method: "POST",
-    headers: { "x-role": "admin" },
+    headers: { "x-actionos-reset-key": process.env.ACTIONOS_DEV_RESET_SECRET || "actionos_dev_operator_secret_2026" },
   });
   console.log("0. Mock Store reset to clean benchmark state");
 
@@ -59,7 +59,7 @@ async function testLiveApi() {
   // Reset store again so policy is eligible
   await fetch("http://localhost:3000/api/dev/reset", {
     method: "POST",
-    headers: { "x-role": "admin" },
+    headers: { "x-actionos-reset-key": process.env.ACTIONOS_DEV_RESET_SECRET || "actionos_dev_operator_secret_2026" },
   });
 
   const sagaDispatch = await fetch("http://localhost:3000/api/actions", {
@@ -98,7 +98,7 @@ async function testLiveApi() {
   // Reset store for WhatsApp message
   await fetch("http://localhost:3000/api/dev/reset", {
     method: "POST",
-    headers: { "x-role": "admin" },
+    headers: { "x-actionos-reset-key": process.env.ACTIONOS_DEV_RESET_SECRET || "actionos_dev_operator_secret_2026" },
   });
 
   const waPost = await fetch("http://localhost:3000/api/webhooks/whatsapp", {
