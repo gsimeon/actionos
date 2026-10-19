@@ -31,6 +31,7 @@ const NAV_ITEMS = [
   { name: "Customers", href: "/customers", icon: Users },
   { name: "Transactions", href: "/transactions", icon: Receipt },
   { name: "Documents", href: "/documents", icon: FileText },
+  { name: "Public Verifier", href: "/verify", icon: ShieldCheck },
   { name: "Settings & Import", href: "/settings", icon: Settings },
 ];
 

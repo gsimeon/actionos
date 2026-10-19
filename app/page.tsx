@@ -51,9 +51,13 @@ export default function HomePage() {
             <a href="#differentiator" className="hover:text-emerald-700 transition-colors">
               The Action Layer
             </a>
-            <a href="#features" className="hover:text-emerald-700 transition-colors">
-              Capabilities
-            </a>
+            <Link
+              href="/verify"
+              className="text-emerald-800 hover:text-emerald-700 transition-colors flex items-center gap-1.5 font-bold"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span>Public Verifier</span>
+            </Link>
           </div>
 
           <div className="flex items-center gap-3">

@@ -16,6 +16,7 @@ import {
   FileCheck2,
   AlertCircle,
   ExternalLink,
+  Download,
 } from "lucide-react";
 import { QrCodeSvg } from "@/components/actionos/qr-code";
 import { formatNaira } from "@/lib/utils";
@@ -813,9 +814,20 @@ export function JudgeGuidedTour({ isOpen, onClose }: JudgeGuidedTourProps) {
                     </div>
                   </div>
 
-                  <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 text-emerald-800 text-xs flex items-center justify-between">
-                    <span>Scan QR code with any phone camera to verify statutory database authenticity.</span>
-                    <ExternalLink className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                  <div className="flex flex-col sm:flex-row gap-2 pt-1">
+                    <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 text-emerald-800 text-xs flex-1 flex items-center justify-between">
+                      <span>Scan QR code with any camera or click download for the official PDF-1.4 statutory vector certificate.</span>
+                      <ExternalLink className="w-3.5 h-3.5 text-emerald-700 shrink-0 ml-2" />
+                    </div>
+                    <a
+                      href="/api/documents/demo_auto_cert/download"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-3.5 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1.5 shrink-0 cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Download Official PDF</span>
+                    </a>
                   </div>
                 </div>
               </div>
