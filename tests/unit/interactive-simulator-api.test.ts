@@ -5,7 +5,7 @@ import { resetStore } from "@/lib/actionos/mock-store";
 import { resetProcessedWebhookMemoryCache } from "@/app/api/webhooks/payment/route";
 
 describe("ActionOS Interactive Regulatory & Webhook Simulator API Suite", () => {
-  describe("1. Statutory Regulatory Trifecta Probes", () => {
+  describe("1. Statutory Regulatory 5-Agency Probes", () => {
     it("should probe FRSC NVIS for clean benchmark vehicle ABC-123-XY", async () => {
       resetStore();
       const req = new Request("http://localhost:3000/api/simulator", {
@@ -111,6 +111,96 @@ describe("ActionOS Interactive Regulatory & Webhook Simulator API Suite", () => 
       assert.equal(json.success, true);
       assert.equal(json.data?.activePolicy, true, "Must detect active unexpired coverage");
       assert.ok(typeof json.data?.daysUntilExpiry === "number" && json.data.daysUntilExpiry > 30);
+    });
+
+    it("should probe NHIA and retrieve verified silver enrollee data for NHIA-2026-00812", async () => {
+      resetStore();
+      const req = new Request("http://localhost:3000/api/simulator", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "probe_nhia", nhiaNumber: "NHIA-2026-00812" }),
+      });
+
+      const res = await simulatorHandler(req);
+      const json = await res.json();
+
+      assert.equal(res.status, 200);
+      assert.equal(json.success, true);
+      assert.equal(json.data?.found, true);
+      assert.equal(json.data?.verified, true);
+      assert.equal(json.data?.tier, "silver");
+      assert.equal(json.data?.eligibleForRenewal, true);
+      assert.ok(json.data?.preclearanceToken);
+    });
+
+    it("should probe NHIA for non-existent enrollee NOT-FOUND-HMO and return unverified", async () => {
+      resetStore();
+      const req = new Request("http://localhost:3000/api/simulator", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "probe_nhia", nhiaNumber: "NOT-FOUND-HMO" }),
+      });
+
+      const res = await simulatorHandler(req);
+      const json = await res.json();
+
+      assert.equal(res.status, 200);
+      assert.equal(json.success, true);
+      assert.equal(json.data?.found, false);
+      assert.equal(json.data?.verified, false);
+      assert.equal(json.data?.eligibleForRenewal, false);
+    });
+
+    it("should probe NHIA for suspended enrollee NHIA-2026-SUSPENDED and return 500 error", async () => {
+      resetStore();
+      const req = new Request("http://localhost:3000/api/simulator", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "probe_nhia", nhiaNumber: "NHIA-2026-SUSPENDED" }),
+      });
+
+      const res = await simulatorHandler(req);
+      const json = await res.json();
+
+      assert.equal(res.status, 500);
+      assert.equal(json.success, false);
+      assert.equal(json.error?.code, "NHIA_POLICY_SUSPENDED");
+      assert.ok(json.error?.message?.includes("suspended"));
+    });
+
+    it("should probe FRSC Driver's License Registry for valid license ABC12345678", async () => {
+      resetStore();
+      const req = new Request("http://localhost:3000/api/simulator", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "probe_dl", dlNumber: "ABC12345678" }),
+      });
+
+      const res = await simulatorHandler(req);
+      const json = await res.json();
+
+      assert.equal(res.status, 200);
+      assert.equal(json.success, true);
+      assert.equal(json.data?.valid, true);
+      assert.equal(json.data?.dlNumber, "ABC12345678");
+      assert.ok(json.data?.expiryDate);
+    });
+
+    it("should probe FRSC Driver's License Registry for revoked license REVOKED1234 and flag invalid", async () => {
+      resetStore();
+      const req = new Request("http://localhost:3000/api/simulator", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "probe_dl", dlNumber: "REVOKED1234" }),
+      });
+
+      const res = await simulatorHandler(req);
+      const json = await res.json();
+
+      assert.equal(res.status, 200);
+      assert.equal(json.success, true);
+      assert.equal(json.data?.valid, false);
+      assert.equal(json.data?.dlNumber, "REVOKED1234");
     });
   });
 
@@ -264,5 +354,84 @@ describe("ActionOS Interactive Regulatory & Webhook Simulator API Suite", () => 
       assert.equal(json.details?.initialDelivery?.duplicate, false);
       assert.equal(json.details?.replayedDelivery?.duplicate, true);
     });
+
+    it("should execute hmo_statutory_renewal scenario and verify ELIGIBLE_FOR_RENEWAL outcome", async () => {
+      resetStore();
+      const req = new Request("http://localhost:3000/api/simulator", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "run_scenario", scenarioId: "hmo_statutory_renewal" }),
+      });
+
+      const res = await simulatorHandler(req);
+      const json = await res.json();
+
+      assert.equal(res.status, 200);
+      assert.equal(json.success, true);
+      assert.equal(json.scenarioId, "hmo_statutory_renewal");
+      assert.equal(json.outcome, "ELIGIBLE_FOR_RENEWAL");
+      assert.ok(json.details?.enrollee);
+      assert.equal(json.details?.enrollee?.nhiaNumber, "NHIA-2026-00812");
+    });
+
+    it("should execute driver_license_renewal scenario and verify VERIFIED_FOR_RENEWAL outcome", async () => {
+      resetStore();
+      const req = new Request("http://localhost:3000/api/simulator", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "run_scenario", scenarioId: "driver_license_renewal" }),
+      });
+
+      const res = await simulatorHandler(req);
+      const json = await res.json();
+
+      assert.equal(res.status, 200);
+      assert.equal(json.success, true);
+      assert.equal(json.scenarioId, "driver_license_renewal");
+      assert.equal(json.outcome, "VERIFIED_FOR_RENEWAL");
+      assert.equal(json.details?.verified, true);
+      assert.equal(json.details?.dlNumber, "ABC12345678");
+    });
+
+    it("should execute nhia_suspended_lock scenario and verify STATUTORY_LOCK_HALTED safety gate", async () => {
+      resetStore();
+      const req = new Request("http://localhost:3000/api/simulator", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "run_scenario", scenarioId: "nhia_suspended_lock" }),
+      });
+
+      const res = await simulatorHandler(req);
+      const json = await res.json();
+
+      assert.equal(res.status, 200);
+      assert.equal(json.success, true);
+      assert.equal(json.scenarioId, "nhia_suspended_lock");
+      assert.equal(json.outcome, "STATUTORY_LOCK_HALTED");
+      assert.equal(json.details?.statutoryGuardrailEnforced, true);
+      assert.equal(json.details?.success, false);
+      assert.ok(json.details?.error?.message?.includes("suspended"));
+    });
+
+    it("should execute driver_license_revoked scenario and verify DISQUALIFIED_DRIVER_HALTED safety gate", async () => {
+      resetStore();
+      const req = new Request("http://localhost:3000/api/simulator", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "run_scenario", scenarioId: "driver_license_revoked" }),
+      });
+
+      const res = await simulatorHandler(req);
+      const json = await res.json();
+
+      assert.equal(res.status, 200);
+      assert.equal(json.success, true);
+      assert.equal(json.scenarioId, "driver_license_revoked");
+      assert.equal(json.outcome, "DISQUALIFIED_DRIVER_HALTED");
+      assert.equal(json.details?.statutoryGuardrailEnforced, true);
+      assert.equal(json.details?.success, false);
+      assert.ok(json.details?.error?.message?.includes("revoked") || json.details?.error?.message?.includes("disqualified") || json.details?.error?.message?.includes("invalid"));
+    });
   });
 });
+

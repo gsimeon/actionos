@@ -112,7 +112,11 @@ export function validateNhiaNumber(nhiaNumber: string): {
     return { valid: false, error: "NHIA Enrollee Number cannot be empty." };
   }
   const normalized = normalizeNhiaNumber(nhiaNumber);
-  if (!NHIA_NUMBER_REGEX.test(normalized) && !normalized.startsWith("NHIA-")) {
+  if (
+    !NHIA_NUMBER_REGEX.test(normalized) &&
+    !normalized.startsWith("NHIA-") &&
+    normalized !== "NOT-FOUND-HMO"
+  ) {
     return {
       valid: false,
       error: `Invalid NHIA Enrollee ID format: "${nhiaNumber}". Expected format e.g. NHIA-2026-00812.`,

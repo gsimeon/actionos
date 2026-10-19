@@ -20,7 +20,7 @@ import {
 import { QrCodeSvg } from "@/components/actionos/qr-code";
 import { formatDate } from "@/lib/utils";
 
-interface VerificationRecord {
+export interface VerificationRecord {
   found: boolean;
   valid: boolean;
   vertical: "motor" | "vehicle_license" | "hmo" | "driver_license";
@@ -40,7 +40,7 @@ interface VerificationRecord {
   theftFlag?: boolean;
 }
 
-const PRESET_QUERIES = [
+export const PRESET_QUERIES = [
   {
     label: "Motor Insurance (Camry)",
     id: "ABC-123-XY",
@@ -73,7 +73,7 @@ const PRESET_QUERIES = [
   },
 ];
 
-function resolveQueryToRecord(query: string): VerificationRecord | null {
+export function resolveQueryToRecord(query: string): VerificationRecord | null {
   const clean = query.trim().toUpperCase();
 
   if (clean === "STOLEN-999-XX" || clean.includes("STOLEN")) {
