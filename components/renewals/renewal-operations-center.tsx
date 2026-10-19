@@ -30,10 +30,12 @@ import {
   HeartPulse,
   CreditCard,
   QrCode,
+  Building2,
 } from "lucide-react";
 import { StatusBadge } from "@/components/actionos/status-badge";
 import { AuthorizationCard, type AuthorizationOptions } from "@/components/actionos/authorization-dialog";
 import { StatutoryDocumentViewer } from "@/components/actionos/statutory-document-viewer";
+import { CorporateFleetManager } from "./corporate-fleet-manager";
 import { formatNaira, formatDate } from "@/lib/utils";
 import type { Renewal, Policy, Customer, Document } from "@/types/database";
 import type { AuthorizationDetails, UnderwriterQuote, ActionLedgerEvent } from "@/types/actionos";
@@ -293,7 +295,7 @@ export function RenewalOperationsCenter() {
 
   // Regulatory Vertical Navigation Tab
   const [verticalTab, setVerticalTab] = useState<
-    "all" | "motor_insurance" | "vehicle_license" | "health_hmo" | "driver_license"
+    "all" | "motor_insurance" | "vehicle_license" | "health_hmo" | "driver_license" | "corporate_fleet"
   >("all");
 
   // Health HMO Operational Pipeline State
@@ -1140,6 +1142,19 @@ export function RenewalOperationsCenter() {
           <CreditCard className="w-3.5 h-3.5 text-indigo-500" />
           <span>Driver&apos;s License &amp; DLC (FRSC)</span>
         </button>
+
+        <button
+          type="button"
+          onClick={() => setVerticalTab("corporate_fleet")}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+            verticalTab === "corporate_fleet"
+              ? "bg-emerald-800 text-white shadow-xs"
+              : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
+          }`}
+        >
+          <Building2 className="w-3.5 h-3.5 text-emerald-600" />
+          <span>Corporate Fleet (Batch Renewals)</span>
+        </button>
       </div>
 
       {/* 3. Search & Filter Bar */}
@@ -1792,6 +1807,12 @@ export function RenewalOperationsCenter() {
         </div>
       )}
 
+      {/* Corporate Fleet Batch Renewals Vertical */}
+      {verticalTab === "corporate_fleet" && (
+        <div className="animate-in fade-in duration-150">
+          <CorporateFleetManager />
+        </div>
+      )}
 
       {/* 5. In-Page AI Renewal Saga Execution Modal / Drawer */}
       {sagaState.isOpen && (

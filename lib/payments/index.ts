@@ -2,6 +2,7 @@ import { isProductionMode } from "@/lib/runtime/mode";
 import { mockPaymentProvider } from "./mock";
 import { PaystackPaymentProvider } from "./paystack";
 import { FlutterwavePaymentProvider } from "./flutterwave";
+import { nibssPaymentProvider } from "./nibss";
 import type { IPaymentProvider } from "./provider";
 
 let currentPaymentProvider: IPaymentProvider | null = null;
@@ -65,6 +66,10 @@ export function getPaymentProvider(): IPaymentProvider {
     return new PaystackPaymentProvider(paystackKey);
   }
 
+  if (requestedProvider === "nibss") {
+    return nibssPaymentProvider;
+  }
+
   return mockPaymentProvider;
 }
 
@@ -79,4 +84,5 @@ export * from "./provider";
 export * from "./mock";
 export * from "./paystack";
 export * from "./flutterwave";
+export * from "./nibss";
 

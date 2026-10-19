@@ -17,10 +17,12 @@ import {
   HeartPulse,
   CreditCard,
   MessageSquare,
+  Phone,
 } from "lucide-react";
 import { WhatsAppSimulator } from "./whatsapp-simulator";
+import { UssdSimulator } from "./ussd-simulator-modal";
 
-type SimulatorTab = "regulatory" | "webhooks" | "scenarios" | "whatsapp";
+type SimulatorTab = "regulatory" | "webhooks" | "scenarios" | "whatsapp" | "ussd";
 type RegulatorySubAgency = "frsc" | "lacvis" | "niid" | "nhia" | "dl";
 type PaymentProvider = "paystack" | "flutterwave";
 
@@ -279,6 +281,16 @@ export function RegulatoryWebhookSimulator() {
           >
             <MessageSquare className="w-3.5 h-3.5 text-emerald-600" />
             <span>WhatsApp Bot</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("ussd")}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+              tab === "ussd" ? "bg-white text-emerald-800 shadow-xs" : "text-slate-600 hover:text-slate-900"
+            }`}
+          >
+            <Phone className="w-3.5 h-3.5 text-emerald-600" />
+            <span>USSD (*384*2026#)</span>
           </button>
         </div>
       </div>
@@ -1198,6 +1210,13 @@ export function RegulatoryWebhookSimulator() {
       {tab === "whatsapp" && (
         <div className="animate-in fade-in duration-150">
           <WhatsAppSimulator />
+        </div>
+      )}
+
+      {/* TAB 5: INTERACTIVE USSD FEATURE PHONE SIMULATOR (*384*2026#) */}
+      {tab === "ussd" && (
+        <div className="animate-in fade-in duration-150">
+          <UssdSimulator isInline={true} />
         </div>
       )}
     </div>

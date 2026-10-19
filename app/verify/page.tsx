@@ -16,9 +16,11 @@ import {
   Lock,
   Copy,
   Check,
+  Camera,
 } from "lucide-react";
 import { QrCodeSvg } from "@/components/actionos/qr-code";
 import { formatDate } from "@/lib/utils";
+import { CameraQrScannerModal } from "@/components/verify/camera-qr-scanner-modal";
 
 export interface VerificationRecord {
   found: boolean;
@@ -196,6 +198,7 @@ function VerificationPortalContent() {
   const [activeRecord, setActiveRecord] = useState<VerificationRecord | null>(null);
   const [isPending, startTransition] = useTransition();
   const [copiedHash, setCopiedHash] = useState(false);
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
 
   useEffect(() => {
     if (initialQuery) {
@@ -221,6 +224,16 @@ function VerificationPortalContent() {
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col justify-between selection:bg-emerald-500 selection:text-white">
+      {/* Officer Camera QR Scanner Modal */}
+      <CameraQrScannerModal
+        isOpen={isCameraOpen}
+        onClose={() => setIsCameraOpen(false)}
+        onScan={(scannedId) => {
+          setInputVal(scannedId);
+          handleSearch(scannedId);
+        }}
+      />
+
       {/* Top Header */}
       <header className="border-b border-slate-800 bg-slate-950/80 backdrop-blur-xl sticky top-0 z-50 px-4 sm:px-8 py-3.5">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
@@ -269,7 +282,7 @@ function VerificationPortalContent() {
           </p>
         </div>
 
-        {/* Search Bar */}
+        {/* Search Bar & Camera Trigger */}
         <div className="space-y-3">
           <form
             onSubmit={(e) => {
@@ -288,6 +301,17 @@ function VerificationPortalContent() {
                 className="w-full pl-12 pr-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-white placeholder:text-slate-500 text-sm font-mono font-bold focus:outline-hidden focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 uppercase"
               />
             </div>
+
+            <button
+              type="button"
+              onClick={() => setIsCameraOpen(true)}
+              className="px-4 py-3 rounded-2xl bg-slate-800 hover:bg-slate-700 text-emerald-400 hover:text-emerald-300 border border-slate-700 text-xs font-bold transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
+              title="Activate Camera Scanner for Windshield QR E-Sticker"
+            >
+              <Camera className="w-4 h-4" />
+              <span>Scan QR</span>
+            </button>
+
             <button
               type="submit"
               disabled={isPending || !inputVal.trim()}

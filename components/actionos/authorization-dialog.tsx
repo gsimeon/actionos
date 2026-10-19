@@ -11,6 +11,8 @@ import {
   Fingerprint,
   RotateCcw,
   Sparkles,
+  Building2,
+  CreditCard,
 } from "lucide-react";
 import { formatNaira, formatDate } from "@/lib/utils";
 import type { AuthorizationDetails, UnderwriterQuote } from "@/types/actionos";
@@ -21,6 +23,7 @@ export interface AuthorizationOptions {
   authorizedQuoteId?: string;
   quoteId?: string;
   authMethod?: "pin" | "biometric_webauthn";
+  paymentRail?: "paystack" | "nibss_nip" | "flutterwave";
   simulateSagaFailure?: boolean;
 }
 
@@ -40,6 +43,7 @@ export function AuthorizationCard({
     details.quotes?.find((q) => q.isRecommended) || details.quotes?.[0] || null
   );
   const [authMethod, setAuthMethod] = useState<"pin" | "biometric_webauthn">("pin");
+  const [paymentRail, setPaymentRail] = useState<"paystack" | "nibss_nip" | "flutterwave">("paystack");
   const [simulateSagaFailure, setSimulateSagaFailure] = useState(false);
   const [biometricScanning, setBiometricScanning] = useState(false);
 
@@ -85,6 +89,7 @@ export function AuthorizationCard({
           authorizedQuoteId: targetQuoteId,
           quoteId: targetQuoteId,
           authMethod: "biometric_webauthn",
+          paymentRail,
           simulateSagaFailure,
         });
       }, 700);
@@ -95,6 +100,7 @@ export function AuthorizationCard({
         authorizedQuoteId: targetQuoteId,
         quoteId: targetQuoteId,
         authMethod: "pin",
+        paymentRail,
         simulateSagaFailure,
       });
     }
@@ -264,6 +270,91 @@ export function AuthorizationCard({
             Includes VAT & statutory NAICOM documentation
           </div>
         </div>
+      </div>
+
+      {/* Payment Settlement Rail Selection */}
+      <div className="mb-5 p-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-xs">
+        <div className="flex items-center justify-between mb-2">
+          <span className="font-bold text-slate-800 flex items-center gap-1.5">
+            <Building2 className="w-3.5 h-3.5 text-emerald-600" />
+            <span>Settlement Payment Rail</span>
+          </span>
+          <span className="text-[10px] text-slate-500 font-mono">CBN NIP & Card Interoperability</span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <button
+            type="button"
+            onClick={() => setPaymentRail("paystack")}
+            className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+              paymentRail === "paystack"
+                ? "bg-white border-emerald-500 shadow-xs ring-1 ring-emerald-500"
+                : "bg-white/60 border-slate-200 hover:bg-white text-slate-600"
+            }`}
+          >
+            <div className="font-bold text-slate-900 flex items-center gap-1">
+              <CreditCard className="w-3 h-3 text-emerald-600" />
+              <span>Paystack Rail</span>
+            </div>
+            <div className="text-[10px] text-slate-500 mt-1">Cards, Bank App, Apple Pay</div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setPaymentRail("nibss_nip")}
+            className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+              paymentRail === "nibss_nip"
+                ? "bg-emerald-50/70 border-emerald-600 shadow-xs ring-1 ring-emerald-600"
+                : "bg-white/60 border-slate-200 hover:bg-white text-slate-600"
+            }`}
+          >
+            <div className="font-bold text-emerald-950 flex items-center justify-between">
+              <div className="flex items-center gap-1">
+                <Building2 className="w-3 h-3 text-emerald-700" />
+                <span>NIBSS NIP Direct</span>
+              </div>
+              <span className="text-[8px] bg-emerald-200 text-emerald-900 px-1 rounded font-bold">FAST</span>
+            </div>
+            <div className="text-[10px] text-emerald-800 mt-1">Dynamic Dedicated Virtual Acct</div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setPaymentRail("flutterwave")}
+            className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+              paymentRail === "flutterwave"
+                ? "bg-white border-amber-500 shadow-xs ring-1 ring-amber-500"
+                : "bg-white/60 border-slate-200 hover:bg-white text-slate-600"
+            }`}
+          >
+            <div className="font-bold text-slate-900 flex items-center gap-1">
+              <Sparkles className="w-3 h-3 text-amber-600" />
+              <span>Flutterwave</span>
+            </div>
+            <div className="text-[10px] text-slate-500 mt-1">Multi-currency & Direct Debit</div>
+          </button>
+        </div>
+
+        {/* Dynamic NIBSS NIP Virtual Account Card when selected */}
+        {paymentRail === "nibss_nip" && (
+          <div className="mt-3 p-3 rounded-xl bg-white border border-emerald-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-2xs">
+            <div>
+              <div className="text-[10px] text-emerald-800 font-bold uppercase tracking-wider">
+                Dedicated NIP Virtual Account (CBN NUBAN)
+              </div>
+              <div className="text-sm font-mono font-black text-slate-900 mt-0.5">
+                992-026-{details.assetIdentifier?.replace(/\D/g, "").slice(0, 4) || "8812"}
+              </div>
+              <div className="text-[10px] text-slate-500">
+                Bank: <span className="font-semibold text-slate-700">Wema Bank (ALAT)</span> &bull; Beneficiary:{" "}
+                <span className="font-semibold text-slate-700">ActionOS / {details.assetIdentifier}</span>
+              </div>
+            </div>
+            <div className="bg-emerald-50 border border-emerald-200 px-2 py-1 rounded-lg text-[10px] text-emerald-900 font-mono font-medium">
+              Real-time Inbound Credit Listener Active
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Auth Method Selector (PIN vs WebAuthn Biometric) */}

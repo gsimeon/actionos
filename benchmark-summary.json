@@ -1,26 +1,26 @@
 {
-  "timestamp": "2026-10-19T11:28:36.283Z",
+  "timestamp": "2026-10-19T12:21:32.198Z",
   "environment": "test",
   "benchmarks": [
     {
       "title": "1. Supply-Chain & Dependency Integrity Check",
       "status": "PASSED",
-      "durationMs": 140
+      "durationMs": 151
     },
     {
       "title": "2. Supabase Staging & Security Invariants Gate",
       "status": "PASSED",
-      "durationMs": 218
+      "durationMs": 273
     },
     {
       "title": "3. Comprehensive 730-Test Verification Suite",
       "status": "PASSED",
-      "durationMs": 31774
+      "durationMs": 40653
     },
     {
       "title": "4. End-to-End Autonomous Renewal & Merkle Chain Proof",
       "status": "PASSED",
-      "durationMs": 3591
+      "durationMs": 3554
     }
   ]
 }

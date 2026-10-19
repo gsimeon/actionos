@@ -9,10 +9,13 @@ import {
   Search,
   Zap,
   CornerDownLeft,
+  Phone,
 } from "lucide-react";
+import { UssdSimulator } from "./ussd-simulator-modal";
 
 export function DashboardHeader() {
   const [searchQuery, setSearchQuery] = useState("");
+  const [isUssdOpen, setIsUssdOpen] = useState(false);
   const router = useRouter();
 
   const handleSearch = (e: React.FormEvent) => {
@@ -72,6 +75,17 @@ export function DashboardHeader() {
 
         {/* Status badges and user */}
         <div className="flex items-center gap-3">
+          {/* USSD Feature Phone Simulator Trigger */}
+          <button
+            onClick={() => setIsUssdOpen(true)}
+            className="flex items-center gap-1.5 bg-slate-900 hover:bg-slate-800 text-emerald-400 border border-slate-700 px-2.5 py-1.5 rounded-xl text-xs font-mono font-bold shadow-xs cursor-pointer transition-colors"
+            title="Open USSD *384*2026# Feature Phone Terminal"
+          >
+            <Phone className="w-3.5 h-3.5 text-emerald-400" />
+            <span className="hidden sm:inline">USSD</span>
+            <span className="text-[10px] text-slate-300 font-normal">*384*2026#</span>
+          </button>
+
           {/* N-ATLAS Badge */}
           <div className="flex items-center gap-1.5 bg-emerald-50 text-emerald-800 border border-emerald-200 px-2.5 py-1.5 rounded-xl text-xs shadow-xs">
             <Radio className="w-3.5 h-3.5 text-emerald-600 animate-pulse" />
@@ -95,6 +109,8 @@ export function DashboardHeader() {
           </div>
         </div>
       </div>
+
+      <UssdSimulator isOpen={isUssdOpen} onClose={() => setIsUssdOpen(false)} />
     </header>
   );
 }
