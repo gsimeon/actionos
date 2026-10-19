@@ -18,7 +18,8 @@
     "db:verify:offline": "node scripts/verify-supabase-staging.mjs --mode=offline",
     "db:verify:staging": "node scripts/verify-supabase-staging.mjs --mode=staging-required",
     "deps:verify": "node scripts/verify-dependency-integrity.mjs",
-    "demo:renew": "tsx scripts/demo-renewal-flow.ts"
+    "demo:renew": "tsx scripts/demo-renewal-flow.ts",
+    "benchmark": "node scripts/run-competition-benchmark.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",

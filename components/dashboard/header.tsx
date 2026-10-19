@@ -1,15 +1,27 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   ShieldAlert,
   Radio,
   Search,
   Zap,
+  CornerDownLeft,
 } from "lucide-react";
 
 export function DashboardHeader() {
+  const [searchQuery, setSearchQuery] = useState("");
+  const router = useRouter();
+
+  const handleSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    const query = searchQuery.trim();
+    if (!query) return;
+    router.push(`/verify?id=${encodeURIComponent(query)}`);
+  };
+
   return (
     <header className="border-b border-slate-200/90 bg-white/80 backdrop-blur-xl sticky top-0 z-40 px-4 sm:px-8 py-3 shadow-xs">
       {/* Simulation mode alert banner matching Section 12 & 41 */}
@@ -29,14 +41,26 @@ export function DashboardHeader() {
       <div className="flex items-center justify-between gap-4">
         {/* Breadcrumb or search */}
         <div className="flex items-center gap-3 flex-1 max-w-md">
-          <div className="relative w-full hidden sm:block">
+          <form onSubmit={handleSearch} className="relative w-full hidden sm:block">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
             <input
               type="text"
-              placeholder="Search policies, plates (ABC-123-XY), customers..."
-              className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-xs text-slate-800 placeholder-slate-400 outline-none focus:border-emerald-500 focus:bg-white transition-all shadow-xs"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Verify plate (ABC-123-XY), HMO, or certificate..."
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-14 py-2 text-xs text-slate-800 placeholder-slate-400 outline-none focus:border-emerald-500 focus:bg-white transition-all shadow-xs"
             />
-          </div>
+            {searchQuery.trim() && (
+              <button
+                type="submit"
+                className="absolute right-2 top-2 px-1.5 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-mono font-bold flex items-center gap-0.5 shadow-2xs hover:bg-emerald-700 cursor-pointer"
+                title="Verify Record"
+              >
+                <span>Verify</span>
+                <CornerDownLeft className="w-2.5 h-2.5" />
+              </button>
+            )}
+          </form>
           <Link
             href="/actions"
             className="sm:hidden flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-bold shadow-sm"

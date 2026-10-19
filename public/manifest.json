@@ -1,0 +1,25 @@
+{
+  "name": "ActionOS | Sovereign Action Orchestration Platform",
+  "short_name": "ActionOS",
+  "description": "Sovereign Nigerian Autonomous Action Platform for Statutory Registries & Public Verification",
+  "start_url": "/verify",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#059669",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
