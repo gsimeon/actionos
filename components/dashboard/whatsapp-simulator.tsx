@@ -97,19 +97,25 @@ export function WhatsAppSimulator() {
     const userMsgId = `usr-${messageIdRef.current++}`;
 
     // Append user message
+    const userBubbleText = isVoice
+      ? "🎤 Voice Note (0:04)"
+      : buttonPayload
+      ? `🔘 ${text}`
+      : text;
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: userMsgId,
+        sender: "user",
+        text: userBubbleText,
+        timestamp: timeStr,
+        isVoice,
+        voiceDuration: isVoice ? "0:04" : undefined,
+        status: "delivered",
+      },
+    ]);
     if (!buttonPayload) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: userMsgId,
-          sender: "user",
-          text: isVoice ? "🎤 Voice Note (0:04)" : text,
-          timestamp: timeStr,
-          isVoice,
-          voiceDuration: isVoice ? "0:04" : undefined,
-          status: "delivered",
-        },
-      ]);
       setInputVal("");
     }
 
@@ -330,7 +336,7 @@ export function WhatsAppSimulator() {
                           key={btn.id}
                           type="button"
                           disabled={loading}
-                          onClick={() => sendMessage(`Clicked: ${btn.title}`, btn.id)}
+                          onClick={() => sendMessage(btn.title, btn.id)}
                           className={`w-full py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-xs cursor-pointer ${
                             btn.id.includes("cancel")
                               ? "bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200"

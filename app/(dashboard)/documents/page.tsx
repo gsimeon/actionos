@@ -476,14 +476,14 @@ export default function DocumentsPage() {
                       <span>View Vector QR</span>
                     </button>
 
-                    <button
-                      type="button"
-                      onClick={() => setSelectedDoc(doc)}
+                    <a
+                      href={`/api/documents/${doc.id}/download`}
+                      download={doc.file_name}
                       className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 transition-all shadow-md shadow-emerald-600/20 cursor-pointer"
                     >
                       <Download className="w-3.5 h-3.5" />
-                      <span>Print / PDF</span>
-                    </button>
+                      <span>Download PDF</span>
+                    </a>
                   </div>
                 </div>
               );

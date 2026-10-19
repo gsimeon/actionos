@@ -21,7 +21,7 @@ import {
 import { WhatsAppSimulator } from "./whatsapp-simulator";
 
 type SimulatorTab = "regulatory" | "webhooks" | "scenarios" | "whatsapp";
-type RegulatorySubAgency = "frsc" | "lacvis" | "niid";
+type RegulatorySubAgency = "frsc" | "lacvis" | "niid" | "nhia" | "dl";
 type PaymentProvider = "paystack" | "flutterwave";
 
 interface ProbeResult {
@@ -49,7 +49,7 @@ export function RegulatoryWebhookSimulator() {
 
   // Regulatory State
   const [agency, setAgency] = useState<RegulatorySubAgency>("frsc");
-  const [plateInput, setPlateInput] = useState("ABC-123-XY");
+  const [probeInput, setProbeInput] = useState("ABC-123-XY");
   const [regLoading, setRegLoading] = useState(false);
   const [regResult, setRegResult] = useState<ProbeResult | null>(null);
 
@@ -67,32 +67,74 @@ export function RegulatoryWebhookSimulator() {
   const [scenarioResult, setScenarioResult] = useState<ProbeResult | null>(null);
   const [copiedPayload, setCopiedPayload] = useState(false);
 
-  // Quick Plate Presets
-  const PLATE_PRESETS = [
-    { plate: "ABC-123-XY", label: "Clean Benchmark", desc: "Toyota Camry &bull; Passing" },
-    { plate: "STOLEN-999-XX", label: "Stolen Vehicle", desc: "FRSC Active Theft Flag" },
-    { plate: "FAIL-123-XX", label: "Brake Failure", desc: "LACVIS Retest Required" },
-    { plate: "ACTIVE-999-OK", label: "Active Conflict", desc: "240 Days Valid on NIID" },
-    { plate: "NOT-404-NF", label: "Unregistered", desc: "Not Found in Registry" },
+  // Quick Fixture Presets by Registry Domain
+  const AUTO_PLATE_PRESETS = [
+    { value: "ABC-123-XY", label: "Clean Benchmark", desc: "Toyota Camry &bull; Passing" },
+    { value: "STOLEN-999-XX", label: "Stolen Vehicle", desc: "FRSC Active Theft Flag" },
+    { value: "FAIL-123-XX", label: "Brake Failure", desc: "LACVIS Retest Required" },
+    { value: "ACTIVE-999-OK", label: "Active Conflict", desc: "240 Days Valid on NIID" },
+    { value: "NOT-404-NF", label: "Unregistered", desc: "Not Found in Registry" },
   ];
 
+  const NHIA_PRESETS = [
+    { value: "NHIA-2026-00812", label: "Silver Enrollee", desc: "Emeka Adebayo &bull; Expiring Soon" },
+    { value: "NHIA-2026-GOLD", label: "Gold Plan", desc: "Lagoon Hospital Ikoyi" },
+    { value: "NHIA-2026-SUSPENDED", label: "Admin Lock", desc: "Suspended by NHIA" },
+    { value: "NOT-FOUND-HMO", label: "Unregistered", desc: "Not Found in NHIA Portal" },
+  ];
+
+  const DL_PRESETS = [
+    { value: "ABC12345678", label: "Clean Benchmark", desc: "Demo Customer &bull; Class E Valid" },
+    { value: "REV12345678", label: "Revoked License", desc: "FRSC Disqualified Driver" },
+    { value: "EXP12345678", label: "Expiring License", desc: "Due for Biometrics" },
+  ];
+
+  const currentPresets = agency === "nhia" ? NHIA_PRESETS : agency === "dl" ? DL_PRESETS : AUTO_PLATE_PRESETS;
+
+  const handleSelectAgency = (nextAgency: RegulatorySubAgency) => {
+    setAgency(nextAgency);
+    setRegResult(null);
+    if (nextAgency === "nhia") {
+      setProbeInput("NHIA-2026-00812");
+    } else if (nextAgency === "dl") {
+      setProbeInput("ABC12345678");
+    } else {
+      setProbeInput("ABC-123-XY");
+    }
+  };
+
   // Handler for Regulatory Probe
-  const handleProbeRegulatory = async (overridePlate?: string, overrideAgency?: RegulatorySubAgency) => {
-    const targetPlate = overridePlate || plateInput;
+  const handleProbeRegulatory = async (overrideValue?: string, overrideAgency?: RegulatorySubAgency) => {
     const targetAgency = overrideAgency || agency;
+    const targetValue = (overrideValue || probeInput).trim();
     setRegLoading(true);
     setRegResult(null);
 
-    const action = targetAgency === "frsc" ? "probe_frsc" : targetAgency === "lacvis" ? "probe_lacvis" : "probe_niid";
+    let action = "probe_frsc";
+    let body: Record<string, unknown> = {};
+
+    if (targetAgency === "frsc") {
+      action = "probe_frsc";
+      body = { action, plate: targetValue };
+    } else if (targetAgency === "lacvis") {
+      action = "probe_lacvis";
+      body = { action, plate: targetValue };
+    } else if (targetAgency === "niid") {
+      action = "probe_niid";
+      body = { action, plate: targetValue };
+    } else if (targetAgency === "nhia") {
+      action = "probe_nhia";
+      body = { action, nhiaNumber: targetValue };
+    } else if (targetAgency === "dl") {
+      action = "probe_dl";
+      body = { action, dlNumber: targetValue };
+    }
 
     try {
       const res = await fetch("/api/simulator", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action,
-          plate: targetPlate,
-        }),
+        body: JSON.stringify(body),
       });
       const json = await res.json();
       setRegResult(json);
@@ -208,7 +250,7 @@ export function RegulatoryWebhookSimulator() {
               tab === "regulatory" ? "bg-white text-emerald-800 shadow-xs" : "text-slate-600 hover:text-slate-900"
             }`}
           >
-            Statutory Trifecta
+            Statutory Registries
           </button>
           <button
             type="button"
@@ -245,10 +287,10 @@ export function RegulatoryWebhookSimulator() {
       {tab === "regulatory" && (
         <div className="space-y-6 animate-in fade-in duration-150">
           {/* Agency Selector */}
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
             <button
               type="button"
-              onClick={() => setAgency("frsc")}
+              onClick={() => handleSelectAgency("frsc")}
               className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
                 agency === "frsc"
                   ? "bg-emerald-50/70 border-emerald-300 ring-2 ring-emerald-400/20"
@@ -261,12 +303,12 @@ export function RegulatoryWebhookSimulator() {
                 </span>
                 <span className="text-xs font-bold text-slate-800">1. FRSC NVIS</span>
               </div>
-              <p className="text-[10px] text-slate-500 mt-1">Stolen Flag &amp; License Plate</p>
+              <p className="text-[10px] text-slate-500 mt-1">Stolen Flag &amp; Plate</p>
             </button>
 
             <button
               type="button"
-              onClick={() => setAgency("lacvis")}
+              onClick={() => handleSelectAgency("lacvis")}
               className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
                 agency === "lacvis"
                   ? "bg-emerald-50/70 border-emerald-300 ring-2 ring-emerald-400/20"
@@ -277,14 +319,14 @@ export function RegulatoryWebhookSimulator() {
                 <span className="text-[10px] font-mono font-bold text-blue-800 bg-blue-100 px-1.5 py-0.5 rounded">
                   INSPECTION
                 </span>
-                <span className="text-xs font-bold text-slate-800">2. LACVIS Roadworthy</span>
+                <span className="text-xs font-bold text-slate-800">2. LACVIS</span>
               </div>
-              <p className="text-[10px] text-slate-500 mt-1">Brake Efficiency &amp; Emissions</p>
+              <p className="text-[10px] text-slate-500 mt-1">Brake &amp; Emissions</p>
             </button>
 
             <button
               type="button"
-              onClick={() => setAgency("niid")}
+              onClick={() => handleSelectAgency("niid")}
               className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
                 agency === "niid"
                   ? "bg-emerald-50/70 border-emerald-300 ring-2 ring-emerald-400/20"
@@ -295,33 +337,69 @@ export function RegulatoryWebhookSimulator() {
                 <span className="text-[10px] font-mono font-bold text-purple-800 bg-purple-100 px-1.5 py-0.5 rounded">
                   INSURANCE
                 </span>
-                <span className="text-xs font-bold text-slate-800">3. NIID / NAICOM</span>
+                <span className="text-xs font-bold text-slate-800">3. NIID</span>
               </div>
-              <p className="text-[10px] text-slate-500 mt-1">E-Sticker &amp; Policy Registry</p>
+              <p className="text-[10px] text-slate-500 mt-1">E-Sticker Registry</p>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleSelectAgency("nhia")}
+              className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                agency === "nhia"
+                  ? "bg-emerald-50/70 border-emerald-300 ring-2 ring-emerald-400/20"
+                  : "bg-slate-50 hover:bg-slate-100 border-slate-200"
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-mono font-bold text-rose-800 bg-rose-100 px-1.5 py-0.5 rounded">
+                  HEALTH HMO
+                </span>
+                <span className="text-xs font-bold text-slate-800">4. NHIA Health</span>
+              </div>
+              <p className="text-[10px] text-slate-500 mt-1">Enrollee &amp; HMO</p>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleSelectAgency("dl")}
+              className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between col-span-2 sm:col-span-1 ${
+                agency === "dl"
+                  ? "bg-emerald-50/70 border-emerald-300 ring-2 ring-emerald-400/20"
+                  : "bg-slate-50 hover:bg-slate-100 border-slate-200"
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-mono font-bold text-indigo-800 bg-indigo-100 px-1.5 py-0.5 rounded">
+                  DRIVER DL
+                </span>
+                <span className="text-xs font-bold text-slate-800">5. FRSC DL</span>
+              </div>
+              <p className="text-[10px] text-slate-500 mt-1">Driver License</p>
             </button>
           </div>
 
           {/* Quick Presets */}
           <div className="space-y-2">
             <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 block">
-              Quick Test Fixtures
+              Quick Test Fixtures ({agency.toUpperCase()})
             </span>
             <div className="flex flex-wrap gap-2">
-              {PLATE_PRESETS.map((p) => (
+              {currentPresets.map((p) => (
                 <button
-                  key={p.plate}
+                  key={p.value}
                   type="button"
                   onClick={() => {
-                    setPlateInput(p.plate);
-                    handleProbeRegulatory(p.plate);
+                    setProbeInput(p.value);
+                    handleProbeRegulatory(p.value);
                   }}
                   className={`px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
-                    plateInput === p.plate
+                    probeInput === p.value
                       ? "bg-slate-900 text-white border-slate-900 shadow-xs"
                       : "bg-slate-50 text-slate-700 hover:bg-slate-100 border-slate-200"
                   }`}
                 >
-                  <span className="font-mono font-bold">{p.plate}</span>
+                  <span className="font-mono font-bold">{p.value}</span>
                   <span className="text-[10px] opacity-75 font-normal">({p.label})</span>
                 </button>
               ))}
@@ -333,20 +411,26 @@ export function RegulatoryWebhookSimulator() {
             <div className="relative flex-1">
               <input
                 type="text"
-                value={plateInput}
-                onChange={(e) => setPlateInput(e.target.value.toUpperCase())}
-                placeholder="Enter Nigerian Plate (e.g. ABC-123-XY)"
+                value={probeInput}
+                onChange={(e) => setProbeInput(e.target.value.toUpperCase())}
+                placeholder={
+                  agency === "nhia"
+                    ? "Enter NHIA Number (e.g. NHIA-2026-00812)"
+                    : agency === "dl"
+                    ? "Enter Driver's License Number (e.g. ABC12345678)"
+                    : "Enter Nigerian Plate (e.g. ABC-123-XY)"
+                }
                 className="w-full px-4 py-2.5 rounded-2xl border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-mono text-sm uppercase text-slate-900 font-bold placeholder:text-slate-400 placeholder:normal-case placeholder:font-normal"
               />
             </div>
             <button
               type="button"
-              disabled={regLoading || !plateInput.trim()}
+              disabled={regLoading || !probeInput.trim()}
               onClick={() => handleProbeRegulatory()}
               className="px-6 py-2.5 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-all shadow-xs disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
             >
               {regLoading ? <RotateCw className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4 text-emerald-400" />}
-              <span>Probe {agency.toUpperCase()}</span>
+              <span>Probe {agency === "dl" ? "FRSC DL" : agency.toUpperCase()}</span>
             </button>
           </div>
 
@@ -515,6 +599,136 @@ export function RegulatoryWebhookSimulator() {
                         {String(regResult.data.preclearanceToken || "NIID-TOKEN-N/A")}
                       </span>
                     </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Agency-Specific: NHIA Health Insurance */}
+              {agency === "nhia" && regResult.data && (
+                <div className="space-y-3">
+                  <div className="p-3.5 rounded-xl bg-white border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 rounded-xl bg-rose-50 border border-rose-100 text-rose-600">
+                        <HeartPulse className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-bold text-slate-900 flex items-center gap-2">
+                          <span>{String(regResult.data.enrolleeName || "Enrollee Verified")}</span>
+                          <span className="text-[10px] font-mono font-bold uppercase px-1.5 py-0.5 rounded bg-rose-100 text-rose-800">
+                            {String(regResult.data.tier || "Silver")} Tier
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          {String(regResult.data.hmoProviderName || "NHIA Health HMO")} &bull; Hospital:{" "}
+                          <span className="font-semibold text-slate-700">{String(regResult.data.primaryHcpName || "Accredited HCP")}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <span
+                      className={`px-2.5 py-1 rounded-full text-[10px] font-bold font-mono self-start sm:self-auto ${
+                        Boolean(regResult.data.eligibleForRenewal)
+                          ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                          : "bg-slate-100 text-slate-700 border border-slate-200"
+                      }`}
+                    >
+                      {Boolean(regResult.data.eligibleForRenewal) ? "ELIGIBLE FOR RENEWAL" : "COVERAGE ACTIVE"}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                    <div className="p-2.5 rounded-xl bg-white border border-slate-200">
+                      <span className="text-[10px] text-slate-500 block font-semibold">NHIA Enrollee ID</span>
+                      <span className="font-mono font-bold text-slate-800 truncate block">
+                        {String(regResult.data.nhiaNumber || "N/A")}
+                      </span>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-white border border-slate-200">
+                      <span className="text-[10px] text-slate-500 block font-semibold">Coverage Status</span>
+                      <span className="font-bold text-emerald-700 capitalize">
+                        {String(regResult.data.activeStatus || "Active")} ({String(regResult.data.daysUntilExpiry ?? 0)}d left)
+                      </span>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-white border border-slate-200">
+                      <span className="text-[10px] text-slate-500 block font-semibold">Dependents / Blood</span>
+                      <span className="font-bold text-slate-800">
+                        {String(regResult.data.dependentsCount ?? 0)} dep &bull; {String(regResult.data.bloodGroup || "O+")} ({String(regResult.data.genotype || "AA")})
+                      </span>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-white border border-slate-200">
+                      <span className="text-[10px] text-slate-500 block font-semibold">Statutory Authority</span>
+                      <span className="text-[10px] text-slate-700 truncate block font-mono">
+                        NHIA Act 2022
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Agency-Specific: FRSC Driver's License */}
+              {agency === "dl" && regResult.data && (
+                <div className="space-y-3">
+                  <div className="p-3.5 rounded-xl bg-white border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 rounded-xl bg-indigo-50 border border-indigo-100 text-indigo-600">
+                        <CreditCard className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-bold text-slate-900 flex items-center gap-2">
+                          <span>{String(regResult.data.holderName || "License Holder")}</span>
+                          <span className="text-[10px] font-mono font-bold uppercase px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-800">
+                            {String(regResult.data.classOfVehicle || "Class E")}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-500 font-mono">
+                          License: {String(regResult.data.dlNumber || "N/A")} &bull; State: {String(regResult.data.stateOfIssue || "Lagos")}
+                        </div>
+                      </div>
+                    </div>
+                    <span
+                      className={`px-2.5 py-1 rounded-full text-[10px] font-bold font-mono self-start sm:self-auto ${
+                        Boolean(regResult.data.valid)
+                          ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                          : "bg-rose-100 text-rose-800 border border-rose-200"
+                      }`}
+                    >
+                      {Boolean(regResult.data.valid) ? "VALIDATED IN REGISTRY" : "REVOKED / DISQUALIFIED"}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
+                    <div className="p-2.5 rounded-xl bg-white border border-slate-200">
+                      <span className="text-[10px] text-slate-500 block font-semibold">Date of Birth</span>
+                      <span className="font-mono font-bold text-slate-800 block">
+                        {String(regResult.data.dateOfBirth || "1988-06-15")}
+                      </span>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-white border border-slate-200">
+                      <span className="text-[10px] text-slate-500 block font-semibold">Expiration Date</span>
+                      <span className="font-mono font-bold text-slate-800 block">
+                        {String(regResult.data.expiryDate || "2028-06-15")}
+                      </span>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-white border border-slate-200">
+                      <span className="text-[10px] text-slate-500 block font-semibold">Biometric Status</span>
+                      <span className="font-bold text-indigo-700">
+                        Capture Center Eligible
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Error Alert Banner when probe fails */}
+              {!regResult.success && regResult.error && (
+                <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 flex items-start gap-3">
+                  <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="text-xs font-bold text-rose-900 font-mono">
+                      {regResult.error.code}
+                    </div>
+                    <p className="text-xs text-rose-700 mt-0.5 font-sans">
+                      {regResult.error.message}
+                    </p>
                   </div>
                 </div>
               )}
@@ -893,6 +1107,66 @@ export function RegulatoryWebhookSimulator() {
                   <Play className="w-3.5 h-3.5 fill-current" />
                 )}
                 <span>Launch Webhook Replay Scenario</span>
+              </button>
+            </div>
+
+            {/* Scenario 8: NHIA Administrative Lock & Suspension Guard */}
+            <div className="p-4 rounded-2xl border border-rose-200 bg-rose-50/40 hover:bg-rose-50/70 transition-all flex flex-col justify-between space-y-3">
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="px-2 py-0.5 rounded-md bg-rose-200 text-rose-900 text-[10px] font-bold font-mono">
+                    STATUTORY LOCK
+                  </span>
+                  <HeartPulse className="w-4 h-4 text-rose-600" />
+                </div>
+                <h3 className="text-sm font-bold text-slate-900">NHIA Enrollee Suspension Guard</h3>
+                <p className="text-xs text-slate-600 mt-1">
+                  Probes central NHIA health registry for <code className="text-slate-800 font-bold">NHIA-2026-SUSPENDED</code>. Proves administrative lock triggers immediate statutory rejection.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                disabled={Boolean(scenarioLoading)}
+                onClick={() => handleRunScenario("nhia_suspended_lock")}
+                className="w-full py-2 px-3 rounded-xl bg-rose-700 hover:bg-rose-800 text-white text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2"
+              >
+                {scenarioLoading === "nhia_suspended_lock" ? (
+                  <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                )}
+                <span>Launch NHIA Lock Scenario</span>
+              </button>
+            </div>
+
+            {/* Scenario 9: FRSC Disqualified Driver Rejection */}
+            <div className="p-4 rounded-2xl border border-rose-200 bg-rose-50/40 hover:bg-rose-50/70 transition-all flex flex-col justify-between space-y-3">
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="px-2 py-0.5 rounded-md bg-rose-200 text-rose-900 text-[10px] font-bold font-mono">
+                    DISQUALIFIED DRIVER
+                  </span>
+                  <CreditCard className="w-4 h-4 text-rose-600" />
+                </div>
+                <h3 className="text-sm font-bold text-slate-900">FRSC Disqualified Driver Rejection</h3>
+                <p className="text-xs text-slate-600 mt-1">
+                  Probes national DL registry for <code className="text-slate-800 font-bold">REVOKED1234</code>. Proves disqualified / revoked status strictly prevents licensing renewal.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                disabled={Boolean(scenarioLoading)}
+                onClick={() => handleRunScenario("driver_license_revoked")}
+                className="w-full py-2 px-3 rounded-xl bg-rose-700 hover:bg-rose-800 text-white text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2"
+              >
+                {scenarioLoading === "driver_license_revoked" ? (
+                  <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                )}
+                <span>Launch Disqualified Driver Scenario</span>
               </button>
             </div>
           </div>

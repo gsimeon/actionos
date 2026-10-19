@@ -5,6 +5,7 @@ import {
   ShieldCheck,
   CheckCircle2,
   Printer,
+  Download,
   X,
   AlertTriangle,
 } from "lucide-react";
@@ -81,13 +82,21 @@ export function StatutoryDocumentViewer({ document: doc, onClose }: StatutoryDoc
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <a
+            href={`/api/documents/${doc.id}/download`}
+            download={doc.file_name}
+            className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold flex items-center gap-1.5 transition-all shadow-md shadow-slate-900/10 cursor-pointer"
+          >
+            <Download className="w-4 h-4 text-emerald-400" />
+            <span>Download Official PDF</span>
+          </a>
           <button
             type="button"
             onClick={handlePrint}
             className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 transition-all shadow-md shadow-emerald-600/20 cursor-pointer"
           >
             <Printer className="w-4 h-4" />
-            <span>Print / Save as PDF</span>
+            <span>Print View</span>
           </button>
           {onClose && (
             <button

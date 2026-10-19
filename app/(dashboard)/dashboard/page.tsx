@@ -11,9 +11,6 @@ import {
   Activity,
   ArrowRight,
   ShieldAlert,
-  CheckCircle2,
-  Clock,
-  Cpu,
   Sparkles,
 } from "lucide-react";
 import { StatCard } from "@/components/dashboard/stat-card";

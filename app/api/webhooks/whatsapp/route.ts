@@ -90,6 +90,33 @@ export async function POST(request: Request) {
       const sessionId = buttonPayload.replace("auth_approve_", "");
       const execResult = await orchestrator.authorizeAndExecute(sessionId, true, callerContext);
 
+      const isCompleted = execResult.status === "completed";
+      const replyText = isCompleted
+        ? `✅ *Renewal Completed Successfully!*\n${execResult.message}\n\nView or download your digital certificate: /documents\n\n_ActionOS Trust Core_`
+        : `⚠️ *Status: ${execResult.status.toUpperCase()}*\n${execResult.message}\n\n_ActionOS Trust Core_`;
+
+      return NextResponse.json({
+        success: isCompleted,
+        channel: "whatsapp",
+        type: "interactive_reply",
+        response: {
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to: sender,
+          type: "text",
+          text: {
+            body: replyText,
+          },
+        },
+        result: execResult,
+      });
+    }
+
+    // If customer clicked [Cancel] on WhatsApp interactive message
+    if (isButtonReply && buttonPayload.startsWith("auth_cancel_")) {
+      const sessionId = buttonPayload.replace("auth_cancel_", "");
+      const execResult = await orchestrator.authorizeAndExecute(sessionId, false, callerContext);
+
       return NextResponse.json({
         success: true,
         channel: "whatsapp",
@@ -100,7 +127,7 @@ export async function POST(request: Request) {
           to: sender,
           type: "text",
           text: {
-            body: `✅ *Policy Renewed Successfully!*\nYour policy has been renewed to October 14, 2027. Your certified NAICOM certificate has been generated: http://localhost:3000/documents\n\n_ActionOS Trust Core_`,
+            body: `❌ *Renewal Cancelled*\nThe action was cancelled and no funds were debited. You can request a renewal whenever you're ready.\n\n_ActionOS Trust Core_`,
           },
         },
         result: execResult,
@@ -116,6 +143,18 @@ export async function POST(request: Request) {
     });
 
     if (result.authorizationRequired && result.authorizationDetails) {
+      const auth = result.authorizationDetails;
+      const isPlate =
+        auth.assetIdentifier?.includes("-") &&
+        /^[A-Z]{2,3}-\d{2,3}-[A-Z]{2}$/i.test(auth.assetIdentifier.trim());
+      const assetLabel = isPlate
+        ? "Vehicle"
+        : auth.policyNumber?.includes("HMO") || auth.policyNumber?.includes("NHIA")
+        ? "Enrollee Cover"
+        : auth.policyNumber?.includes("FRSC") || auth.policyNumber?.includes("DL-")
+        ? "Driver's License"
+        : "Subject / Asset";
+
       return NextResponse.json({
         success: true,
         channel: "whatsapp",
@@ -132,7 +171,7 @@ export async function POST(request: Request) {
               text: "🛡️ ActionOS Renew Authorization",
             },
             body: {
-              text: `${result.message}\n\n*Amount:* ₦${result.amount?.toLocaleString()}\n*Vehicle:* ${result.authorizationDetails.assetName} (${result.authorizationDetails.assetIdentifier})`,
+              text: `${result.message}\n\n*Amount:* ₦${result.amount?.toLocaleString()}\n*${assetLabel}:* ${auth.assetName} (${auth.assetIdentifier})`,
             },
             action: {
               buttons: [

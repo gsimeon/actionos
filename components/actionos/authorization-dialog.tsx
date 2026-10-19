@@ -47,6 +47,33 @@ export function AuthorizationCard({
   const activeUnderwriter = selectedQuote ? selectedQuote.underwriter : details.providerName;
   const targetQuoteId = selectedQuote?.id || details.quoteId;
 
+  const isVehicle =
+    details.assetIdentifier?.includes("-") &&
+    /^[A-Z]{2,3}-\d{2,3}-[A-Z]{2}$/i.test(details.assetIdentifier.trim());
+  const isHealthHmo =
+    details.policyNumber?.includes("HMO") ||
+    details.policyNumber?.includes("NHIA") ||
+    details.assetName?.toLowerCase().includes("hmo") ||
+    details.assetName?.toLowerCase().includes("health");
+  const isDriverLicense =
+    details.policyNumber?.includes("FRSC") ||
+    details.policyNumber?.includes("DL-") ||
+    details.assetName?.toLowerCase().includes("driver");
+
+  const assetCategoryLabel = isHealthHmo
+    ? "Enrollee Cover / Subject"
+    : isDriverLicense
+    ? "Driver & License Holder"
+    : isVehicle
+    ? "Registered Vehicle"
+    : "Registered Asset / Subject";
+
+  const consentSubjectLabel = isHealthHmo
+    ? `health cover for ${details.assetIdentifier}`
+    : isDriverLicense
+    ? `driver's license for ${details.assetIdentifier}`
+    : `asset ${details.assetIdentifier}`;
+
   const handleConfirm = () => {
     if (authMethod === "biometric_webauthn") {
       setBiometricScanning(true);
@@ -190,7 +217,7 @@ export function AuthorizationCard({
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 my-5">
         <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/90 shadow-2xs">
           <span className="text-[11px] uppercase tracking-wider text-slate-500 font-bold block mb-1">
-            Registered Vehicle
+            {assetCategoryLabel}
           </span>
           <div className="text-sm font-bold text-slate-900">
             {details.assetName}
@@ -304,7 +331,7 @@ export function AuthorizationCard({
           className="h-4 w-4 rounded border-slate-300 bg-white text-emerald-600 focus:ring-emerald-500 cursor-pointer"
         />
         <label htmlFor="confirm-consent" className="text-xs text-slate-700 cursor-pointer select-none font-medium">
-          I confirm and authorize this transaction for vehicle <strong>{details.assetIdentifier}</strong>
+          I confirm and authorize this transaction for <strong>{consentSubjectLabel}</strong>
         </label>
       </div>
 

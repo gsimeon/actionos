@@ -2,20 +2,8 @@
 
 import React, { useState } from "react";
 import {
-  ShieldCheck,
-  CheckCircle2,
-  Clock,
-  AlertTriangle,
-  Lock,
-  ExternalLink,
   ChevronDown,
   ChevronUp,
-  Radio,
-  FileCheck2,
-  CreditCard,
-  Database,
-  Building,
-  Key,
 } from "lucide-react";
 
 interface IntegrationItem {

@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { frscGateway, FrscGatewayError } from "@/lib/integrations/frsc";
 import { lacvisGateway, LacvisGatewayError } from "@/lib/integrations/lacvis";
 import { niidGateway, NiidGatewayError } from "@/lib/integrations/niid";
-import { nhiaGateway } from "@/lib/integrations/nhia";
+import { nhiaGateway, NhiaGatewayError } from "@/lib/integrations/nhia";
 import { POST as paymentWebhookHandler, resetProcessedWebhookMemoryCache } from "@/app/api/webhooks/payment/route";
 import { resolveExecutionContext, DEMO_CONTEXT } from "@/lib/security/auth-context";
 import type { AuthenticatedExecutionContext } from "@/types/actionos";
@@ -319,6 +319,60 @@ export async function POST(req: Request) {
         });
       }
 
+      if (scenarioId === "nhia_suspended_lock") {
+        const hmoTool = new QueryHmoPlanTool();
+        const wfContext = createWorkflowExecutionContext(context, {
+          sessionId: `sim_scen_nhia_susp_${Date.now()}`,
+          planId: "plan_sim_nhia_susp",
+          channel: "web",
+          language: "en-NG",
+          isSimulated: true,
+        });
+
+        const toolRes = await hmoTool.execute({ nhiaNumber: "NHIA-2026-SUSPENDED" }, wfContext);
+        return NextResponse.json({
+          success: true,
+          action,
+          scenarioId,
+          title: "NHIA Enrollee Administrative Suspension Guard",
+          description: "Enrollee NHIA-2026-SUSPENDED has an administrative lock on the central health registry; renewal strictly halted.",
+          latencyMs: Math.round(performance.now() - start),
+          outcome: !toolRes.success ? "STATUTORY_LOCK_HALTED" : "UNEXPECTED_PASS",
+          details: {
+            success: toolRes.success,
+            error: toolRes.error,
+            statutoryGuardrailEnforced: !toolRes.success,
+          },
+        });
+      }
+
+      if (scenarioId === "driver_license_revoked") {
+        const dlTool = new VerifyDriverLicenseTool();
+        const wfContext = createWorkflowExecutionContext(context, {
+          sessionId: `sim_scen_dl_rev_${Date.now()}`,
+          planId: "plan_sim_dl_rev",
+          channel: "web",
+          language: "en-NG",
+          isSimulated: true,
+        });
+
+        const toolRes = await dlTool.execute({ dlNumber: "REVOKED1234" }, wfContext);
+        return NextResponse.json({
+          success: true,
+          action,
+          scenarioId,
+          title: "FRSC Driver's License Revocation / Suspension Guard",
+          description: "Driver's license REVOKED1234 flagged disqualified on national FRSC registry; license renewal strictly rejected.",
+          latencyMs: Math.round(performance.now() - start),
+          outcome: !toolRes.success ? "DISQUALIFIED_DRIVER_HALTED" : "UNEXPECTED_PASS",
+          details: {
+            success: toolRes.success,
+            error: toolRes.error,
+            statutoryGuardrailEnforced: !toolRes.success,
+          },
+        });
+      }
+
       if (scenarioId === "declined_payment") {
         const repos = getRepositoryContainer();
         const startWf = await orchestrator.startWorkflow({
@@ -474,6 +528,8 @@ export async function POST(req: Request) {
         : err instanceof LacvisGatewayError
         ? err.code
         : err instanceof NiidGatewayError
+        ? err.code
+        : err instanceof NhiaGatewayError
         ? err.code
         : "SIMULATOR_INTERNAL_ERROR";
 

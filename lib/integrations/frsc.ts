@@ -401,7 +401,7 @@ export class FrscGatewayClient {
     }
 
     // Demo / Sandbox Mode
-    const isRevoked = cleanDl.includes("REVOKED") || cleanDl.includes("INVALID");
+    const isRevoked = cleanDl.includes("REVOKED") || cleanDl.includes("INVALID") || cleanDl.startsWith("REV");
 
     return {
       dlNumber: rawTrimmed,
